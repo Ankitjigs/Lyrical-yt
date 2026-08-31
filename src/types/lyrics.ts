@@ -3,6 +3,8 @@ export type LyricsSourceId =
   | "better_lyrics"
   | "musixmatch"
   | "musixmatch-richsync"
+  | "youlyplus-richsynced"
+  | "youlyplus-synced"
   | "captions"
   | "lrclib"
   | string;

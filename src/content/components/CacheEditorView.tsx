@@ -84,6 +84,8 @@ const SOURCE_LABELS = {
   lyrical: "Lyrical",
   "test-lyrical": "Test Lyrical",
   better_lyrics: "Better Lyrics",
+  "youlyplus-richsynced": "YouLy+",
+  "youlyplus-synced": "YouLy+",
   musixmatch: "Musixmatch",
   "musixmatch-richsync": "Musixmatch RichSync",
   lrclib: "LRCLib",

@@ -1,5 +1,4 @@
-import YouTubeTranscriptApi from "youtube-captions-api";
-const youtubeCaptionApi = new YouTubeTranscriptApi();
+export {};
 
 // Background service worker
 // Handles Google Translate API requests for lyrics translation
@@ -80,12 +79,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.type === "FETCH_UNISON_LYRICS") {
-    fetchUnisonLyrics(request.songInfo)
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err.message }));
-    return true;
-  }
+    if (request.type === "FETCH_UNISON_LYRICS") {
+      fetchUnisonLyrics(request.songInfo)
+        .then(sendResponse)
+        .catch((err) => sendResponse({ error: err.message }));
+      return true;
+    }
+
+    if (request.type === "FETCH_YOULYPLUS_LYRICS") {
+      fetchYouLyPlusLyrics(request.songInfo)
+        .then(sendResponse)
+        .catch((err) => sendResponse({ error: err.message }));
+      return true;
+    }
 
   // --- Boidu Proxy Handler ---
   // Fixes CORS issues by fetching from Background context
@@ -101,41 +107,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     fetchCaptions(request.url).catch((err) =>
       sendResponse({ error: err.message }),
     );
-    return true;
-  }
-
-  // --- NEW: YouTube Caption Extractor Library Handler ---
-  if (request.type === "FETCH_YOUTUBE_SUBTITLES") {
-    console.log(
-      "[Lyrical BG] Handling FETCH_YOUTUBE_SUBTITLES for",
-      request.videoId,
-    );
-    youtubeCaptionApi
-      .fetch(request.videoId, { languages: [request.lang || "en"] })
-      .then((transcript) => {
-        console.log(
-          "[Lyrical BG] Library returned subtitles:",
-          transcript?.snippets?.length,
-        );
-        sendResponse({ success: true, data: transcript.snippets });
-      })
-      .catch((err) => {
-        const message = err?.message || String(err);
-        const isExpected403 =
-          message.includes("Player API failed: 403") ||
-          message.includes("failed: 403") ||
-          message.includes("403");
-        if (isExpected403) {
-          console.warn(
-            "[Lyrical BG] Library fallback blocked (403), relying on direct caption track fetch",
-          );
-          sendResponse({ success: false, error: message, status: 403 });
-          return;
-        }
-
-        console.error("[Lyrical BG] Library error:", err);
-        sendResponse({ success: false, error: message });
-      });
     return true;
   }
 });
@@ -304,6 +275,31 @@ async function fetchUnisonLyrics(songInfo) {
 
   const json = await res.json();
   return { success: true, status: 200, data: json?.data || null };
+}
+
+async function fetchYouLyPlusLyrics(songInfo) {
+  const title = songInfo?.title || "";
+  const artist = songInfo?.artist || "";
+  const duration = songInfo?.duration
+    ? Math.round(Number(songInfo.duration))
+    : 0;
+  const album = songInfo?.album || "";
+
+  const url = new URL("https://lyricsplus.prjktla.my.id/v2/lyrics/get");
+  if (title) url.searchParams.set("title", title);
+  if (artist) url.searchParams.set("artist", artist);
+  if (duration) url.searchParams.set("duration", String(duration));
+  if (album) url.searchParams.set("album", album);
+
+  try {
+    const res = await fetchJsonWithTimeout(url.toString(), {}, 8000);
+    if (!res.ok) return { success: false, status: res.status };
+    const data = await res.json();
+    return { success: true, status: 200, data };
+  } catch (err) {
+    console.warn("[Lyrical BG] YouLyPlus fetch error:", err?.message || err);
+    return { success: false, status: 408, error: err?.message || "timeout" };
+  }
 }
 
 async function fetchBoidu(url, headers) {
@@ -488,6 +484,92 @@ async function translateLine(text, targetLang) {
 }
 
 /**
+ * Extract true transliteration / romanization from Google Translate API response
+ */
+function extractRomanizationFromGoogleData(data: any, originalText: string): string {
+  if (!data || !Array.isArray(data[0])) return "";
+
+  let fullRomanized = "";
+
+  // 1. Check if the last item in data[0] is the summary romanization [null, null, "Romaji", ...]
+  for (let i = data[0].length - 1; i >= 0; i--) {
+    const item = data[0][i];
+    if (Array.isArray(item) && (item[0] === null || item[0] === undefined)) {
+      if (typeof item[2] === "string" && item[2].trim()) {
+        fullRomanized = item[2].trim();
+        break;
+      }
+      if (typeof item[3] === "string" && item[3].trim()) {
+        fullRomanized = item[3].trim();
+        break;
+      }
+    }
+  }
+
+  // 2. If not found in summary item, iterate over all sentence segments and collect seg[3] or seg[2]
+  if (!fullRomanized) {
+    const parts: string[] = [];
+    for (const seg of data[0]) {
+      if (!Array.isArray(seg)) continue;
+      // Skip summary items (where seg[0] is null)
+      if (seg[0] === null || seg[0] === undefined) continue;
+
+      // In Google Translate, seg[0] is translated text (e.g. English), seg[1] is original text
+      // seg[2] or seg[3] is transliteration / romanization
+      if (
+        typeof seg[3] === "string" &&
+        seg[3].trim() &&
+        seg[3] !== seg[0] &&
+        seg[3] !== seg[1]
+      ) {
+        parts.push(seg[3].trim());
+      } else if (
+        typeof seg[2] === "string" &&
+        seg[2].trim() &&
+        seg[2] !== seg[0] &&
+        seg[2] !== seg[1]
+      ) {
+        parts.push(seg[2].trim());
+      }
+    }
+    if (parts.length > 0) {
+      fullRomanized = parts.join(" ");
+    }
+  }
+
+  // 3. Fallback: inspect any extra string properties in segment items (excluding seg[0] and seg[1])
+  if (!fullRomanized && Array.isArray(data[0])) {
+    for (const seg of data[0]) {
+      if (Array.isArray(seg)) {
+        for (let idx = 2; idx < seg.length; idx++) {
+          if (
+            typeof seg[idx] === "string" &&
+            seg[idx].trim() &&
+            seg[idx] !== seg[0] &&
+            seg[idx] !== seg[1]
+          ) {
+            fullRomanized = seg[idx].trim();
+            break;
+          }
+        }
+        if (fullRomanized) break;
+      }
+    }
+  }
+
+  // Ensure we never return the original text as romanization
+  if (
+    fullRomanized &&
+    originalText &&
+    fullRomanized.trim().toLowerCase() === originalText.trim().toLowerCase()
+  ) {
+    return "";
+  }
+
+  return fullRomanized;
+}
+
+/**
  * Romanize a block of multiple lines in a single HTTP request using newline separators
  */
 async function romanizeBlock(lines, sourceLang) {
@@ -504,51 +586,9 @@ async function romanizeBlock(lines, sourceLang) {
     }
 
     const data = await response.json();
-    let fullRomanized = "";
+    const fullRomanized = extractRomanizationFromGoogleData(data, joinedText);
 
-    if (Array.isArray(data[0])) {
-      const lastItem = data[0][data[0].length - 1];
-      if (
-        Array.isArray(lastItem) &&
-        (lastItem[0] === null || lastItem[0] === undefined) &&
-        typeof lastItem[2] === "string" &&
-        lastItem[2].trim()
-      ) {
-        fullRomanized = lastItem[2].trim();
-      } else if (
-        Array.isArray(lastItem) &&
-        (lastItem[0] === null || lastItem[0] === undefined) &&
-        typeof lastItem[3] === "string" &&
-        lastItem[3].trim()
-      ) {
-        fullRomanized = lastItem[3].trim();
-      }
-
-      if (!fullRomanized) {
-        const parts = [];
-        for (const seg of data[0]) {
-          if (!Array.isArray(seg)) continue;
-          if (typeof seg[3] === "string" && seg[3].trim()) {
-            parts.push(seg[3].trim());
-          } else if (
-            typeof seg[2] === "string" &&
-            seg[2].trim() &&
-            seg[2] !== seg[1] &&
-            seg[2] !== seg[0]
-          ) {
-            parts.push(seg[2].trim());
-          }
-        }
-        if (parts.length > 0) fullRomanized = parts.join(" ");
-      }
-    }
-
-    if (!fullRomanized && data[0] && data[0][1]) {
-      fullRomanized = data[0][1][3] || data[0][1][2] || "";
-    }
-    if (!fullRomanized && data[0] && data[0][0]) {
-      fullRomanized = data[0][0][3] || data[0][0][2] || "";
-    }
+    if (!fullRomanized) return null;
 
     const romanizedParts = fullRomanized.split("\n").map((s) => s.trim());
 
@@ -561,7 +601,7 @@ async function romanizeBlock(lines, sourceLang) {
           original,
           skipped: isSame,
         };
-        romanizationCache.set(`rom_${sourceLang}_${original}`, res);
+        romanizationCache.set(`rom_${sourceLang}_${original.trim()}`, res);
         return res;
       });
     }
@@ -586,14 +626,13 @@ async function romanizeLine(text, sourceLang) {
     return { romanized: "", original: text, skipped: true };
   }
 
-  const cacheKey = `rom_${sourceLang}_${text}`;
+  const cacheKey = `rom_${sourceLang}_${text.trim()}`;
   if (romanizationCache.has(cacheKey)) {
     return romanizationCache.get(cacheKey);
   }
 
   try {
     const url = getRomanizeUrl(sourceLang, text);
-    console.log(`[Lyrical BG] romanizeLine: "${text.substring(0, 40)}" lang=${sourceLang}, URL: ${url.substring(0, 120)}`);
     const response = await fetchJsonWithTimeout(url, { cache: "force-cache" });
 
     if (!response.ok) {
@@ -602,34 +641,18 @@ async function romanizeLine(text, sourceLang) {
     }
 
     const data = await response.json();
-    console.log(`[Lyrical BG] romanizeLine RAW:`, JSON.stringify(data).substring(0, 500));
+    const romanizedText = extractRomanizationFromGoogleData(data, text);
 
-    // Extract romanized text from response
-    // The romanization is in data[0][1][3] or data[0][1][2]
-    let romanizedText = "";
-    if (data[0] && data[0][1]) {
-      romanizedText = data[0][1][3] || data[0][1][2] || "";
-    }
-
-    // Fallback: try to get from first part
-    if (!romanizedText && data[0] && data[0][0]) {
-      romanizedText = data[0][0][0] || "";
-    }
-
-    console.log(`[Lyrical BG] romanizeLine EXTRACTED: "${romanizedText?.substring(0, 60)}"`);
-
-    // Skip if romanization is same as original
-    if (text.trim().toLowerCase() === romanizedText.trim().toLowerCase()) {
-      console.log(`[Lyrical BG] romanizeLine SKIPPED: same as original`);
-      return { romanized: "", original: text, skipped: true };
-    }
+    const isSame =
+      !romanizedText ||
+      text.trim().toLowerCase() === romanizedText.trim().toLowerCase();
 
     const result = {
-      romanized: romanizedText,
+      romanized: isSame ? "" : romanizedText,
       original: text,
+      skipped: isSame,
     };
 
-    console.log(`[Lyrical BG] romanizeLine RESULT: "${romanizedText?.substring(0, 60)}"`);
     romanizationCache.set(cacheKey, result);
     return result;
   } catch (err) {

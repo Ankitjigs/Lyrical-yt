@@ -372,7 +372,10 @@ function alignSecondaryLyrics(lyrics: any[] = [], sourceLines: any[] = []) {
   );
 }
 
-function hasDisplayableSecondaryText(lines: any[], key: "romanized" | "translated") {
+function hasDisplayableSecondaryText(
+  lines: any[],
+  key: "romanized" | "translated",
+) {
   return lines.some((line) => {
     const value = line?.[key];
     return typeof value === "string" && value.trim().length > 0;
@@ -463,7 +466,9 @@ const LyricsPanel = () => {
     () =>
       alignSecondaryLyrics(
         lyrics || [],
-        (Array.isArray(rawTranslatedLyrics) ? rawTranslatedLyrics : []) as any[],
+        (Array.isArray(rawTranslatedLyrics)
+          ? rawTranslatedLyrics
+          : []) as any[],
       ).translatedLyrics,
     [lyrics, rawTranslatedLyrics],
   );
@@ -631,7 +636,8 @@ const LyricsPanel = () => {
     lyricsSource === "lyrical" ||
     lyricsSource === "unison-richsynced" ||
     lyricsSource === "binimum-richsynced" ||
-    lyricsSource === "portato-richsynced";
+    lyricsSource === "portato-richsynced" ||
+    lyricsSource === "youlyplus-richsynced";
 
   let strategyName = "line";
   if (shouldUseAnimationEngine) {
@@ -643,7 +649,8 @@ const LyricsPanel = () => {
     } else if (
       lyricsSource === "lyrical" ||
       lyricsSource === "unison-richsynced" ||
-      lyricsSource === "binimum-richsynced"
+      lyricsSource === "binimum-richsynced" ||
+      lyricsSource === "youlyplus-richsynced"
     ) {
       strategyName = "syllable";
     } else if (lyricsSource === "portato-richsynced") {
@@ -825,12 +832,7 @@ const LyricsPanel = () => {
       cancelAnimationFrame(rafId);
       window.clearTimeout(timeoutId);
     };
-  }, [
-    shouldUseAnimationEngine,
-    strategy,
-    romanizedLyrics,
-    translatedLyrics,
-  ]);
+  }, [shouldUseAnimationEngine, strategy, romanizedLyrics, translatedLyrics]);
 
   // Invalidate scroll layout when compact mode toggles
   // The container height changes, so cached line positions become stale

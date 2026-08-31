@@ -28,6 +28,12 @@ export const DEFAULT_SOURCE_PREFERENCES: SourcePreference[] = [
     tags: ["SYLLABLE"],
   },
   {
+    id: "youlyplus-richsynced",
+    label: "YouLy+",
+    enabled: true,
+    tags: ["SYLLABLE"],
+  },
+  {
     id: "better_lyrics",
     label: "Better Lyrics",
     enabled: true,
@@ -40,6 +46,12 @@ export const DEFAULT_SOURCE_PREFERENCES: SourcePreference[] = [
     tags: ["WORD"],
   },
   { id: "musixmatch", label: "Musixmatch", enabled: true, tags: ["WORD"] },
+  {
+    id: "youlyplus-synced",
+    label: "YouLy+",
+    enabled: true,
+    tags: ["LINE"],
+  },
   {
     id: "bLyrics-synced",
     label: "Better Lyrics",

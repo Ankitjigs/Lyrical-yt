@@ -9,13 +9,12 @@ import {
   fetchUnifiedSourceLyrics,
   fetchUnisonSourceLyrics,
 } from "../modules/sources/unified";
+import { fetchYouLyPlusSourceLyrics } from "../modules/sources/youlyplus";
 import panelStyles from "./styles.css?inline";
 import lyricsEffectsStyles from "./lyricsEffects.css?inline";
 import shinyTextStyles from "./components/ShinyText.css?inline";
 import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
-
-// DEBUG: Banner removed for production
 
 const SHADOW_HOST_STYLES = `
   :host {
@@ -602,7 +601,6 @@ function cleanCaptionText(value: any): string {
  * This is the same approach better-lyrics uses - their main script runs in ISOLATED world
  */
 async function fetchCaptionsFromContentScript(url) {
-
   const readAttr = (attrs, key) => {
     const match = attrs.match(
       new RegExp(`${key}\\s*=\\s*["']([^"']+)["']`, "i"),
@@ -1564,6 +1562,10 @@ function getCacheLookupIdsForSource(sourceId: string): string[] {
       return ["musixmatch", "musixmatch-richsync"];
     case "musixmatch-synced":
       return ["musixmatch-synced"];
+    case "youlyplus-richsynced":
+      return ["youlyplus-richsynced"];
+    case "youlyplus-synced":
+      return ["youlyplus-synced"];
     case "unison-richsynced":
       return ["unison-richsynced"];
     case "unison-synced":
@@ -1593,6 +1595,9 @@ function getCacheLabelForSource(sourceId, fallbackLabel = "") {
       return "Better Lyrics";
     case "bLyrics-synced":
       return "Better Lyrics";
+    case "youlyplus-richsynced":
+    case "youlyplus-synced":
+      return "YouLy+";
     case "unison-richsynced":
     case "unison-synced":
     case "unison-plain":
@@ -1622,6 +1627,8 @@ const PARAGRAPH_AWARE_CACHE_SOURCES = new Set([
   "lyrical",
   "better_lyrics",
   "bLyrics-synced",
+  "youlyplus-richsynced",
+  "youlyplus-synced",
   "unison-richsynced",
   "unison-synced",
   "unison-plain",
@@ -2050,6 +2057,19 @@ async function tryFetchUnisonSource(songInfo, sourceId) {
   });
 }
 
+async function tryFetchYouLyPlusSource(songInfo, sourceId) {
+  const data = await fetchYouLyPlusSourceLyrics(songInfo, sourceId);
+  if (!data) return false;
+
+  return setFetchedSourceLyrics({
+    sourceId: data.sourceId,
+    label: data.label,
+    lyrics: data.lyrics,
+    language: data.language,
+    synced: true,
+  });
+}
+
 /**
  * Display pre-fetched caption lyrics (directly from captions-extractor.js)
  */
@@ -2115,55 +2135,6 @@ async function sendMessageWithTimeout(payload, timeoutMs = 120000) {
       ),
     ),
   ]);
-}
-
-/**
- * Fetch and parse caption lyrics via BACKGROUND SCRIPT
- * This bypasses CORS and uses the extension's host permissions
- */
-
-/**
- * Fetch captions using youtube-caption-extractor via BACKGROUND SCRIPT
- * This bypasses CORS and uses the new library for robust fetching
- * SECONDARY / FALLBACK METHOD
- */
-async function fetchCaptionsViaLib(_videoId = null) {
-  // baseUrl arg is ignored, we extract videoId from page
-  const videoId = new URLSearchParams(window.location.search).get("v");
-  if (!videoId) return null;
-
-  try {
-    log("Fetching captions via library for:", videoId);
-
-    // Request background script to fetch
-    const response = await chrome.runtime.sendMessage({
-      type: "FETCH_YOUTUBE_SUBTITLES",
-      videoId: videoId,
-      lang: "en",
-    });
-
-    if (!response || !response.success || !response.data) {
-      log("Library fetch failed:", response?.error || "No data");
-      return null;
-    }
-
-    const rawSubtitles = response.data; // [{start, dur, text}, ...]
-    log("Library returned subtitles:", rawSubtitles.length);
-
-    // Convert to Lyrical format
-    const lyrics = rawSubtitles
-      .map((item) => ({
-        time: parseFloat(item.start),
-        duration: parseFloat(item.duration || item.dur),
-        text: cleanCaptionText(item.text),
-      }))
-      .filter((l) => l.text && l.text.trim());
-
-    return lyrics;
-  } catch (err) {
-    console.error("[Lyrical] Fetch caption error:", err);
-    return null;
-  }
 }
 
 function normalizeCaptionTiming(lyrics) {
@@ -2294,16 +2265,6 @@ async function tryDisplayCaptions() {
           languageCode = getCaptionTrackLang(selectedTrack) || languageCode;
         }
       }
-    }
-  }
-
-  // --- METHOD 2: Library Fallback (youtube-caption-extractor) ---
-  if (!lyrics) {
-    log("Direct fetch failed or no tracks. Trying Library Fallback...");
-    lyrics = await fetchCaptionsViaLib(videoId);
-    if (lyrics) {
-      methodUsed = "library";
-      languageCode = languageCode || "auto";
     }
   }
 
@@ -2721,6 +2682,11 @@ async function backgroundPreScanAllSources(
         )
       ) {
         fetchedData = await fetchUnisonSourceLyrics(songInfo, source.id);
+      } else if (
+        source.id === "youlyplus-richsynced" ||
+        source.id === "youlyplus-synced"
+      ) {
+        fetchedData = await fetchYouLyPlusSourceLyrics(songInfo, source.id);
       } else if (source.id === "lyrical" || source.id === "test-lyrical") {
         const boiduRes = await fetchBoiduLyrics(
           songInfo,
@@ -2928,6 +2894,10 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
         case "unison-plain":
           found = await tryFetchUnisonSource(songInfo, source.id);
           break;
+        case "youlyplus-richsynced":
+        case "youlyplus-synced":
+          found = await tryFetchYouLyPlusSource(songInfo, source.id);
+          break;
         case "bLyrics-synced":
         case "binimum-richsynced":
         case "binimum-synced":
@@ -3108,6 +3078,10 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
     case "unison-synced":
     case "unison-plain":
       found = await tryFetchUnisonSource(currentSongInfo, sourceId);
+      break;
+    case "youlyplus-richsynced":
+    case "youlyplus-synced":
+      found = await tryFetchYouLyPlusSource(currentSongInfo, sourceId);
       break;
     case "bLyrics-synced":
     case "binimum-richsynced":
@@ -3728,6 +3702,3 @@ document.addEventListener("visibilitychange", () => {
     startLyricsTimer(fetchedLyrics);
   }
 });
-
-// ✅ URL polling removed - using yt-navigate-finish event instead (see above)
-// This prevents double re-initialization and saves CPU
