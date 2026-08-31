@@ -1,0 +1,860 @@
+{
+  "extensionName": {
+    "message": "Lyrical - YouTube Lyrics",
+    "description": "The extension name shown by the browser."
+  },
+  "extensionShortName": {
+    "message": "Lyrical",
+    "description": "Short extension name."
+  },
+  "extensionDescription": {
+    "message": "Get lyrics for the currently playing song on YouTube.",
+    "description": "The extension description shown by the browser."
+  },
+  "extensionActionTitle": {
+    "message": "Lyrical",
+    "description": "Browser action title."
+  },
+  "common_cancel": {
+    "message": "Cancel",
+    "description": "Generic cancel button label."
+  },
+  "common_close": {
+    "message": "Close",
+    "description": "Generic close action label."
+  },
+  "common_import": {
+    "message": "Import",
+    "description": "Generic import button label."
+  },
+  "common_export": {
+    "message": "Export",
+    "description": "Generic export button label."
+  },
+  "common_manage": {
+    "message": "Manage",
+    "description": "Generic manage button label."
+  },
+  "common_refresh": {
+    "message": "Refresh",
+    "description": "Generic refresh button label."
+  },
+  "common_loading": {
+    "message": "Loading...",
+    "description": "Generic loading status."
+  },
+  "common_active": {
+    "message": "Active",
+    "description": "Active status label."
+  },
+  "common_custom": {
+    "message": "Custom",
+    "description": "Custom theme type label."
+  },
+  "common_preset": {
+    "message": "Preset",
+    "description": "Preset theme type label."
+  },
+  "settings_tab_general": {
+    "message": "General",
+    "description": "General settings tab label."
+  },
+  "settings_tab_display": {
+    "message": "Display",
+    "description": "Display settings tab label."
+  },
+  "settings_tab_themes": {
+    "message": "Themes",
+    "description": "Themes settings tab label."
+  },
+  "settings_tab_language": {
+    "message": "Language",
+    "description": "Language settings tab label."
+  },
+  "settings_tab_sources": {
+    "message": "Sources",
+    "description": "Sources settings tab label."
+  },
+  "settings_tab_about": {
+    "message": "About",
+    "description": "About settings tab label."
+  },
+  "settings_general_title": {
+    "message": "General Settings",
+    "description": "General settings section title."
+  },
+  "settings_general_description": {
+    "message": "Configure general behavior and preferences.",
+    "description": "General settings section description."
+  },
+  "settings_showLogs_label": {
+    "message": "Show Logs",
+    "description": "Show logs setting label."
+  },
+  "settings_showLogs_desc": {
+    "message": "Enable debug logging in the console.",
+    "description": "Show logs setting description."
+  },
+  "settings_cache_label": {
+    "message": "Cache",
+    "description": "Cache setting label."
+  },
+  "settings_cache_desc": {
+    "message": "Manage locally stored lyrics",
+    "description": "Cache setting description."
+  },
+  "settings_cache_clear": {
+    "message": "Clear Cache",
+    "description": "Clear cache button label."
+  },
+  "settings_cache_openEditor": {
+    "message": "Open Cache Editor",
+    "description": "Open cache editor button label."
+  },
+  "settings_cache_storageUsed": {
+    "message": "Storage used",
+    "description": "Storage usage label."
+  },
+  "settings_cache_songCached": {
+    "message": "$COUNT$ song cached",
+    "description": "Singular cached song count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "settings_cache_songsCached": {
+    "message": "$COUNT$ songs cached",
+    "description": "Plural cached song count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "settings_cache_cleared": {
+    "message": "Cache cleared!",
+    "description": "Alert shown after clearing cache."
+  },
+  "settings_display_title": {
+    "message": "Display Settings",
+    "description": "Display settings section title."
+  },
+  "settings_display_description": {
+    "message": "Customize how the lyrics panel looks.",
+    "description": "Display settings section description."
+  },
+  "settings_compactMode_label": {
+    "message": "Compact Mode",
+    "description": "Compact mode setting label."
+  },
+  "settings_compactMode_desc": {
+    "message": "Use a smaller interface for the lyrics panel.",
+    "description": "Compact mode setting description."
+  },
+  "settings_reduceAnimations_label": {
+    "message": "Reduce Animations",
+    "description": "Reduce animations setting label."
+  },
+  "settings_reduceAnimations_desc": {
+    "message": "Tone down animated text and lyric motion in the panel.",
+    "description": "Reduce animations setting description."
+  },
+  "settings_themes_title": {
+    "message": "Theme Settings",
+    "description": "Theme settings section title."
+  },
+  "settings_themes_description": {
+    "message": "Customize the appearance of Lyrical with preset themes.",
+    "description": "Theme settings section description."
+  },
+  "settings_theme_label": {
+    "message": "Theme",
+    "description": "Theme row label."
+  },
+  "settings_theme_byAuthor": {
+    "message": "$NAME$ by $AUTHOR$",
+    "description": "Theme name and author label.",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Midnight"
+      },
+      "author": {
+        "content": "$2",
+        "example": "Lyrical"
+      }
+    }
+  },
+  "settings_theme_createCustom": {
+    "message": "Create custom style",
+    "description": "Create custom theme button label."
+  },
+  "settings_theme_choose": {
+    "message": "Choose a theme",
+    "description": "Choose theme button label."
+  },
+  "settings_theme_active": {
+    "message": "Active Theme",
+    "description": "Active theme badge."
+  },
+  "settings_theme_library": {
+    "message": "Theme Library",
+    "description": "Theme library label."
+  },
+  "settings_theme_customSaved": {
+    "message": "$COUNT$ custom saved",
+    "description": "Saved custom theme count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "settings_language_title": {
+    "message": "Language Settings",
+    "description": "Language settings section title."
+  },
+  "settings_language_description": {
+    "message": "Translation and romanization options.",
+    "description": "Language settings section description."
+  },
+  "settings_language_romanization": {
+    "message": "Romanization",
+    "description": "Romanization setting label."
+  },
+  "settings_language_romanizationDesc": {
+    "message": "Show romanized text (e.g., Japanese -> Romaji)",
+    "description": "Romanization setting description."
+  },
+  "settings_language_autoTranslate": {
+    "message": "Auto-translate",
+    "description": "Auto translate setting label."
+  },
+  "settings_language_autoTranslateDesc": {
+    "message": "Automatically translate lyrics when loaded",
+    "description": "Auto translate setting description."
+  },
+  "settings_language_translationLanguage": {
+    "message": "Translation Language",
+    "description": "Translation language field label."
+  },
+  "settings_language_exclusions": {
+    "message": "Language Exclusions",
+    "description": "Language exclusions setting label."
+  },
+  "settings_language_exclusionsDesc": {
+    "message": "Manage which languages are excluded from translation and romanization",
+    "description": "Language exclusions setting description."
+  },
+  "settings_sources_title": {
+    "message": "Sources",
+    "description": "Sources settings section title."
+  },
+  "settings_sources_description": {
+    "message": "Manage where lyrics are fetched from.",
+    "description": "Sources settings section description."
+  },
+  "settings_about_title": {
+    "message": "About Lyrical",
+    "description": "About section title."
+  },
+  "settings_about_description": {
+    "message": "The best way to enjoy lyrics on the web.\nSimple, beautiful, and synced.",
+    "description": "About section description."
+  },
+  "settings_about_version": {
+    "message": "Version 1.0.0",
+    "description": "Version label."
+  },
+  "themeChooser_sectionBuiltIn": {
+    "message": "Built-in Themes",
+    "description": "Built-in themes section label."
+  },
+  "themeChooser_sectionCustom": {
+    "message": "Custom Themes",
+    "description": "Custom themes section label."
+  },
+  "themeChooser_title": {
+    "message": "Select a Theme",
+    "description": "Theme chooser title."
+  },
+  "themeChooser_emptyCustom": {
+    "message": "Create your first custom style and it will appear here.",
+    "description": "Empty state for custom themes."
+  },
+  "themeChooser_close": {
+    "message": "Close theme chooser",
+    "description": "Theme chooser close aria label."
+  },
+  "themeChooser_edit": {
+    "message": "Edit $NAME$",
+    "description": "Custom theme edit aria label.",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Velvet Nebula"
+      }
+    }
+  },
+  "themeChooser_export": {
+    "message": "Export $NAME$",
+    "description": "Custom theme export aria label.",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Velvet Nebula"
+      }
+    }
+  },
+  "themeChooser_delete": {
+    "message": "Delete $NAME$",
+    "description": "Custom theme delete aria label.",
+    "placeholders": {
+      "name": {
+        "content": "$1",
+        "example": "Velvet Nebula"
+      }
+    }
+  },
+  "themeChooser_editTitle": {
+    "message": "Edit custom theme",
+    "description": "Custom theme edit button title."
+  },
+  "themeChooser_exportTitle": {
+    "message": "Export custom theme",
+    "description": "Custom theme export button title."
+  },
+  "themeChooser_deleteTitle": {
+    "message": "Delete custom theme",
+    "description": "Custom theme delete button title."
+  },
+  "themeChooser_byAuthor": {
+    "message": "by $AUTHOR$",
+    "description": "Theme author label.",
+    "placeholders": {
+      "author": {
+        "content": "$1",
+        "example": "Lyrical"
+      }
+    }
+  },
+  "theme_midnight_name": {
+    "message": "Midnight",
+    "description": "Midnight preset theme name."
+  },
+  "theme_midnight_description": {
+    "message": "The current deep-blue glass look, now as a reusable preset.",
+    "description": "Midnight preset theme description."
+  },
+  "theme_aurora_name": {
+    "message": "Aurora",
+    "description": "Aurora preset theme name."
+  },
+  "theme_aurora_description": {
+    "message": "Cool emerald and cyan lighting with a softer night surface.",
+    "description": "Aurora preset theme description."
+  },
+  "theme_sunset_name": {
+    "message": "Sunset Vinyl",
+    "description": "Sunset preset theme name."
+  },
+  "theme_sunset_description": {
+    "message": "Warm red-orange gradients with a record-store afterglow.",
+    "description": "Sunset preset theme description."
+  },
+  "theme_mono_name": {
+    "message": "Mono Signal",
+    "description": "Mono Signal preset theme name."
+  },
+  "theme_mono_description": {
+    "message": "A restrained graphite theme with crisp neutral contrast.",
+    "description": "Mono Signal preset theme description."
+  },
+  "customTheme_headerCreate": {
+    "message": "Custom Style",
+    "description": "Create custom theme modal eyebrow."
+  },
+  "customTheme_headerEdit": {
+    "message": "Edit Style",
+    "description": "Edit custom theme modal eyebrow."
+  },
+  "customTheme_titleCreate": {
+    "message": "Create a Theme",
+    "description": "Create custom theme modal title."
+  },
+  "customTheme_titleEdit": {
+    "message": "Edit Theme",
+    "description": "Edit custom theme modal title."
+  },
+  "customTheme_close": {
+    "message": "Close custom theme editor",
+    "description": "Custom theme editor close aria label."
+  },
+  "customTheme_nameLabel": {
+    "message": "Theme Name",
+    "description": "Custom theme name field label."
+  },
+  "customTheme_namePlaceholder": {
+    "message": "My midnight glass",
+    "description": "Custom theme name placeholder."
+  },
+  "customTheme_panelStart": {
+    "message": "Panel Gradient Start",
+    "description": "Custom theme field label."
+  },
+  "customTheme_panelEnd": {
+    "message": "Panel Gradient End",
+    "description": "Custom theme field label."
+  },
+  "customTheme_accent": {
+    "message": "Accent",
+    "description": "Custom theme field label."
+  },
+  "customTheme_cardBg": {
+    "message": "Card Background",
+    "description": "Custom theme field label."
+  },
+  "customTheme_textPrimary": {
+    "message": "Primary Text",
+    "description": "Custom theme field label."
+  },
+  "customTheme_textSecondary": {
+    "message": "Secondary Text",
+    "description": "Custom theme field label."
+  },
+  "customTheme_romanized": {
+    "message": "Romanized Lyrics",
+    "description": "Custom theme field label."
+  },
+  "customTheme_translated": {
+    "message": "Translated Lyrics",
+    "description": "Custom theme field label."
+  },
+  "customTheme_pickColor": {
+    "message": "Pick color for $LABEL$",
+    "description": "Color picker title.",
+    "placeholders": {
+      "label": {
+        "content": "$1",
+        "example": "Accent"
+      }
+    }
+  },
+  "customTheme_help": {
+    "message": "Use hex, rgb, or rgba values. Saved themes sync through chrome.storage.sync, so they follow the signed-in browser account.",
+    "description": "Custom theme editor helper text."
+  },
+  "customTheme_livePreview": {
+    "message": "Live Preview",
+    "description": "Live preview label."
+  },
+  "customTheme_previewTheme": {
+    "message": "Preview Theme",
+    "description": "Fallback preview theme name."
+  },
+  "customTheme_previewDescription": {
+    "message": "Primary, secondary, romanized, and translated colors update live.",
+    "description": "Preview card description."
+  },
+  "customTheme_footerCreate": {
+    "message": "Saved custom themes will appear in the theme list.",
+    "description": "Create mode footer hint."
+  },
+  "customTheme_footerEdit": {
+    "message": "Your changes will update the saved custom theme.",
+    "description": "Edit mode footer hint."
+  },
+  "customTheme_save": {
+    "message": "Save Theme",
+    "description": "Save theme button label."
+  },
+  "customTheme_update": {
+    "message": "Update Theme",
+    "description": "Update theme button label."
+  },
+  "customTheme_saving": {
+    "message": "Saving...",
+    "description": "Saving status label."
+  },
+  "customTheme_updating": {
+    "message": "Updating...",
+    "description": "Updating status label."
+  },
+  "customTheme_errorName": {
+    "message": "Give your theme a name so it can appear in the list.",
+    "description": "Validation error when a theme has no name."
+  },
+  "customTheme_errorColors": {
+    "message": "Use valid hex, rgb, or rgba values for every color field.",
+    "description": "Validation error for invalid theme colors."
+  },
+  "customTheme_errorSave": {
+    "message": "The theme could not be saved.",
+    "description": "Fallback save error."
+  },
+  "themeImport_title": {
+    "message": "Import Theme",
+    "description": "Theme import modal title."
+  },
+  "themeImport_close": {
+    "message": "Close theme import",
+    "description": "Theme import close aria label."
+  },
+  "themeImport_chooseJson": {
+    "message": "Choose JSON file",
+    "description": "Choose JSON file button label."
+  },
+  "themeImport_jsonLabel": {
+    "message": "Theme JSON",
+    "description": "Theme JSON field label."
+  },
+  "themeImport_jsonPlaceholder": {
+    "message": "{\"app\":\"Lyrical\",\"type\":\"custom-theme\",...}",
+    "description": "Theme import textarea placeholder."
+  },
+  "themeImport_themeReady": {
+    "message": "$COUNT$ theme ready",
+    "description": "Singular valid imported theme status.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "1"
+      }
+    }
+  },
+  "themeImport_themesReady": {
+    "message": "$COUNT$ themes ready",
+    "description": "Plural valid imported themes status.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "themeImport_importing": {
+    "message": "Importing",
+    "description": "Theme import progress label."
+  },
+  "themeImport_errorRead": {
+    "message": "Theme file could not be read.",
+    "description": "File read error."
+  },
+  "themeImport_errorInvalid": {
+    "message": "Add a valid Lyrical theme first.",
+    "description": "Invalid theme import error."
+  },
+  "themeImport_errorFailed": {
+    "message": "Theme import failed.",
+    "description": "Fallback theme import error."
+  },
+  "languageExclusions_title": {
+    "message": "Language Exclusions",
+    "description": "Language exclusions modal title."
+  },
+  "languageExclusions_close": {
+    "message": "Close language exclusions",
+    "description": "Language exclusions close aria label."
+  },
+  "languageExclusions_romanizationTab": {
+    "message": "Romanization",
+    "description": "Romanization tab label."
+  },
+  "languageExclusions_translationTab": {
+    "message": "Translation",
+    "description": "Translation tab label."
+  },
+  "languageExclusions_search": {
+    "message": "Search languages...",
+    "description": "Language search placeholder."
+  },
+  "languageExclusions_hintRomanization": {
+    "message": "Click to toggle. Excluded languages will not be romanized.",
+    "description": "Romanization exclusions hint."
+  },
+  "languageExclusions_hintTranslation": {
+    "message": "Click to toggle. Excluded languages will not be translated.",
+    "description": "Translation exclusions hint."
+  },
+  "languageExclusions_noResults": {
+    "message": "No languages found matching \"$QUERY$\"",
+    "description": "No language search results.",
+    "placeholders": {
+      "query": {
+        "content": "$1",
+        "example": "Hindi"
+      }
+    }
+  },
+  "languageExclusions_reset": {
+    "message": "Reset $TYPE$ to Default",
+    "description": "Reset language exclusions button label.",
+    "placeholders": {
+      "type": {
+        "content": "$1",
+        "example": "Romanization"
+      }
+    }
+  },
+  "sourcePreferences_title": {
+    "message": "Lyric Source Preference",
+    "description": "Source preference section title."
+  },
+  "sourcePreferences_description": {
+    "message": "Drag to reorder priority. Higher sources are tried first. Uncheck to disable.",
+    "description": "Source preference section description."
+  },
+  "sourcePreferences_active": {
+    "message": "● ACTIVE",
+    "description": "Active source badge."
+  },
+  "source_lyrical": {
+    "message": "Lyrical",
+    "description": "Lyrical source label."
+  },
+  "source_test_lyrical": {
+    "message": "Test Lyrical",
+    "description": "Test Lyrical source label."
+  },
+  "source_better_lyrics": {
+    "message": "Better Lyrics",
+    "description": "Better Lyrics source label."
+  },
+  "source_bLyrics_synced": {
+    "message": "Better Lyrics",
+    "description": "Better Lyrics line synced source label."
+  },
+  "source_unison_richsynced": {
+    "message": "Better Lyrics Unison",
+    "description": "Unison syllable synced source label."
+  },
+  "source_unison_synced": {
+    "message": "Better Lyrics Unison",
+    "description": "Unison line synced source label."
+  },
+  "source_unison_plain": {
+    "message": "Better Lyrics Unison",
+    "description": "Unison unsynced source label."
+  },
+  "source_binimum_richsynced": {
+    "message": "BiniLyrics",
+    "description": "BiniLyrics syllable synced source label."
+  },
+  "source_binimum_synced": {
+    "message": "BiniLyrics",
+    "description": "BiniLyrics line synced source label."
+  },
+  "source_portato_richsynced": {
+    "message": "Better Lyrics Portato",
+    "description": "Portato word synced source label."
+  },
+  "source_legato_synced": {
+    "message": "Better Lyrics Legato",
+    "description": "Legato line synced source label."
+  },
+  "source_musixmatch": {
+    "message": "Musixmatch",
+    "description": "Musixmatch source label."
+  },
+  "source_musixmatch_synced": {
+    "message": "Musixmatch",
+    "description": "Musixmatch line synced source label."
+  },
+  "source_musixmatch_richsync": {
+    "message": "Musixmatch RichSync",
+    "description": "Musixmatch RichSync source label."
+  },
+  "source_lrclib": {
+    "message": "LRCLib",
+    "description": "LRCLib source label."
+  },
+  "source_captions": {
+    "message": "YouTube Captions",
+    "description": "YouTube Captions source label."
+  },
+  "cacheEditor_title": {
+    "message": "Cache Editor",
+    "description": "Cache editor title."
+  },
+  "cacheEditor_description": {
+    "message": "Inspect cached songs, source entries, and saved versions.",
+    "description": "Cache editor description."
+  },
+  "cacheEditor_searchPlaceholder": {
+    "message": "Search by song, source, key, or lyric preview...",
+    "description": "Cache editor search placeholder."
+  },
+  "cacheEditor_loading": {
+    "message": "Loading cache entries...",
+    "description": "Cache editor loading state."
+  },
+  "cacheEditor_noMatches": {
+    "message": "No cache entries matched your search.",
+    "description": "Cache editor empty search state."
+  },
+  "cacheEditor_deleteSong": {
+    "message": "Delete Song",
+    "description": "Delete cached song button label."
+  },
+  "cacheEditor_entries": {
+    "message": "$COUNT$ entries",
+    "description": "Cache group entry count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "4"
+      }
+    }
+  },
+  "cacheEditor_versions": {
+    "message": "$COUNT$ versions",
+    "description": "Cache entry version count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "2"
+      }
+    }
+  },
+  "cacheEditor_lyricLines": {
+    "message": "$COUNT$ lyric lines",
+    "description": "Cache entry lyric line count.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "42"
+      }
+    }
+  },
+  "cacheEditor_savedVersions": {
+    "message": "Saved Versions",
+    "description": "Saved versions source label."
+  },
+  "cacheEditor_primaryCache": {
+    "message": "Primary Cache",
+    "description": "Primary cache source label."
+  },
+  "cacheEditor_unknownSong": {
+    "message": "Unknown song",
+    "description": "Unknown cached song label."
+  },
+  "cacheEditor_noTimestamp": {
+    "message": "No timestamp",
+    "description": "Missing timestamp label."
+  },
+  "cacheEditor_justNow": {
+    "message": "Just now",
+    "description": "Relative timestamp for now."
+  },
+  "cacheEditor_minutesAgo": {
+    "message": "$COUNT$m ago",
+    "description": "Relative timestamp in minutes.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "12"
+      }
+    }
+  },
+  "cacheEditor_hoursAgo": {
+    "message": "$COUNT$h ago",
+    "description": "Relative timestamp in hours.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "3"
+      }
+    }
+  },
+  "cacheEditor_daysAgo": {
+    "message": "$COUNT$d ago",
+    "description": "Relative timestamp in days.",
+    "placeholders": {
+      "count": {
+        "content": "$1",
+        "example": "7"
+      }
+    }
+  },
+  "cacheEditor_rawPreview": {
+    "message": "Raw Cache Preview",
+    "description": "Raw cache preview label."
+  },
+  "colorPalette_defaultTitle": {
+    "message": "Choose Color",
+    "description": "Default color palette title."
+  },
+  "colorPalette_close": {
+    "message": "Close color palette",
+    "description": "Color palette close aria label."
+  },
+  "colorPalette_loading": {
+    "message": "Loading color controls...",
+    "description": "Color picker loading state."
+  },
+  "lyricsPanel_loaded": {
+    "message": "Lyrics loaded",
+    "description": "Header fallback when lyrics are loaded."
+  },
+  "lyricsPanel_playSong": {
+    "message": "Play a song on YouTube",
+    "description": "Prompt shown when no song is playing."
+  },
+  "lyricsPanel_expand": {
+    "message": "Expand",
+    "description": "Expand panel button title."
+  },
+  "lyricsPanel_collapse": {
+    "message": "Collapse",
+    "description": "Collapse panel button title."
+  },
+  "lyricsPanel_albumArt": {
+    "message": "Album Art",
+    "description": "Album art image alt text."
+  },
+  "lyricsPanel_sync": {
+    "message": "Lyrics Sync",
+    "description": "Lyrics sync setting label."
+  },
+  "lyricsPanel_syncHelp": {
+    "message": "Positive (+): Delay (Lyrics appear later)\nNegative (-): Speed up (Lyrics appear earlier)",
+    "description": "Lyrics sync help tooltip."
+  },
+  "lyricsPanel_processing": {
+    "message": "Processing lyrics...",
+    "description": "Processing lyrics status."
+  },
+  "lyricsPanel_searching": {
+    "message": "Searching for lyrics...",
+    "description": "Searching lyrics status."
+  },
+  "lyricsPanel_noLyrics": {
+    "message": "No lyrics found",
+    "description": "No lyrics empty state."
+  },
+  "lyricsPanel_romanized": {
+    "message": "Romanized",
+    "description": "Romanized mode label."
+  },
+  "lyricsPanel_translated": {
+    "message": "Translated",
+    "description": "Translated mode label."
+  },
+  "lyricsPanel_romanizedTranslated": {
+    "message": "Romanized + Translated",
+    "description": "Combined romanized and translated mode label."
+  },
+  "lyricsPanel_syncEnabled": {
+    "message": "Sync enabled",
+    "description": "Sync enabled badge label."
+  },
+  "popup_logoAlt": {
+    "message": "Logo",
+    "description": "Extension logo alt text."
+  }
+}

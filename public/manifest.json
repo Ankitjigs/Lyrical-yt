@@ -1,0 +1,80 @@
+{
+    "manifest_version": 3,
+    "name": "__MSG_extensionName__",
+    "short_name": "__MSG_extensionShortName__",
+    "version": "1.0.0",
+    "default_locale": "en",
+    "description": "__MSG_extensionDescription__",
+    "permissions": [
+        "activeTab",
+        "scripting",
+        "storage"
+    ],
+    "host_permissions": [
+        "https://translate.googleapis.com/*",
+        "https://lyrics.api.dacubeking.com/*",
+        "https://lyrics-api.boidu.dev/*",
+        "https://unison.boidu.dev/*",
+        "*://*.youtube.com/*",
+        "https://fonts.googleapis.com/*",
+        "https://fonts.gstatic.com/*"
+    ],
+    "action": {
+        "default_title": "__MSG_extensionActionTitle__",
+        "default_popup": "src/popup/popup.html",
+        "default_icon": {
+            "16": "icon16.png",
+            "32": "icon32.png",
+            "48": "icon48.png",
+            "128": "icon128.png"
+        }
+    },
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>",
+                "*://*.youtube.com/*"
+            ],
+            "js": [
+                "content.js",
+                "cubey-provider.js",
+                "panel.js"
+            ],
+            "run_at": "document_start"
+        },
+        {
+            "matches": [
+                "*://*.youtube.com/*"
+            ],
+            "js": [
+                "captions-extractor.js"
+            ],
+            "world": "MAIN",
+            "run_at": "document_start"
+        }
+    ],
+    "icons": {
+        "16": "icon16.png",
+        "32": "icon32.png",
+        "48": "icon48.png",
+        "128": "icon128.png"
+    },
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "icon16.png",
+                "icon32.png",
+                "icon48.png",
+                "icon128.png",
+                "assets/fonts/NotoSansDevanagari-Variable.ttf",
+                "assets/fonts/NotoSansJP-Variable.ttf"
+            ],
+            "matches": [
+                "<all_urls>"
+            ]
+        }
+    ]
+}

@@ -1,0 +1,1930 @@
+import { Fragment, useState, useEffect, useCallback } from "react";
+import {
+  Settings,
+  Monitor,
+  Languages,
+  Info,
+  Layers,
+  Palette,
+  Trash2,
+  Download,
+  Upload,
+  PanelRight,
+  PictureInPicture2,
+  RotateCcw,
+  Type,
+} from "lucide-react";
+import { useAppStore } from "../store";
+import { log } from "../utils/logger";
+import SourcePreferenceList from "./SourcePreferenceList";
+import ThemeSelectionModal from "./ThemeSelectionModal";
+import CustomThemeModal from "./CustomThemeModal";
+import ThemeImportExportModal from "./ThemeImportExportModal";
+import LanguageExclusionsModal from "./LanguageExclusionsModal";
+import CacheEditorView from "./CacheEditorView";
+import { AVAILABLE_LANGUAGES } from "../utils/languages";
+import {
+  CUSTOM_THEMES_STORAGE_KEY,
+  DEFAULT_THEME_ID,
+  getThemeById,
+  getThemeCssVariables,
+} from "../../themes";
+import {
+  createStoredCustomThemeFromDraft,
+  createThemeCollectionExportPayload,
+  createThemeExportPayload,
+  resolveCustomThemes,
+  updateStoredCustomThemeFromDraft,
+} from "../../themes/customThemeUtils";
+import { t } from "../../i18n";
+
+function getCacheSongId(key) {
+  if (key.startsWith("lyrics_versions_")) {
+    return key.slice("lyrics_versions_".length);
+  }
+
+  if (key.startsWith("lyrics_")) {
+    const rest = key.slice("lyrics_".length);
+    const sourceSeparatorIndex = rest.lastIndexOf("__");
+    return sourceSeparatorIndex === -1
+      ? rest
+      : rest.slice(0, sourceSeparatorIndex);
+  }
+
+  return null;
+}
+
+const LYRICS_SIZE_PRESETS = [
+  {
+    id: "compact",
+    label: "Compact",
+    description: "Tighter lyrics for small sidebars and dense playlists",
+    activeSize: "15px",
+  },
+  {
+    id: "standard",
+    label: "Standard",
+    description: "Balanced readability with spacious breathing room",
+    activeSize: "16.5px",
+  },
+  {
+    id: "large",
+    label: "Large",
+    description: "Bigger active lines with clean sub-layer spacing",
+    activeSize: "18px",
+  },
+  {
+    id: "cinematic",
+    label: "Cinematic",
+    description: "Strong bold focus line without text collisions",
+    activeSize: "19.5px",
+  },
+];
+
+const SettingsContent = () => {
+  const [activeTab, setActiveTab] = useState("general");
+  const [isThemeModalOpen, setIsThemeModalOpen] = useState(false);
+  const [isLyricsSizeModalOpen, setIsLyricsSizeModalOpen] = useState(false);
+  const [isCustomThemeModalOpen, setIsCustomThemeModalOpen] = useState(false);
+  const [isThemeImportModalOpen, setIsThemeImportModalOpen] = useState(false);
+  const [isExclusionsModalOpen, setIsExclusionsModalOpen] = useState(false);
+  const [isCacheEditorOpen, setIsCacheEditorOpen] = useState(false);
+  const [editingCustomThemeId, setEditingCustomThemeId] = useState(null);
+  const [customThemeRecords, setCustomThemeRecords] = useState([]);
+  const [customThemes, setCustomThemes] = useState([]);
+  const [settings, setSettings] = useState({
+    showLogs: false,
+    compactMode: false,
+    lyricsSizePreset: "standard",
+    reduceAnimations: false,
+    showCollapsedArtwork: true,
+    displayMode: "sidebar",
+    floatingPositionPreset: "right",
+    floatingCustomPosition: null,
+    romanization: false,
+    autoTranslate: false,
+    translationLang: "en",
+    themeId: DEFAULT_THEME_ID,
+    romanizationExclusions: [],
+    translationExclusions: [],
+  });
+  const [cacheInfo, setCacheInfo] = useState({ bytes: 0, songCount: 0 });
+  const themeId = settings.themeId || DEFAULT_THEME_ID;
+  const currentTheme = getThemeById(themeId, customThemes);
+  const currentThemeName = currentTheme.isCustom
+    ? currentTheme.name
+    : t(`theme_${currentTheme.id}_name`, undefined, currentTheme.name);
+  const currentThemeDescription = currentTheme.isCustom
+    ? currentTheme.description
+    : t(
+        `theme_${currentTheme.id}_description`,
+        undefined,
+        currentTheme.description,
+      );
+  const currentLyricsSizePreset =
+    LYRICS_SIZE_PRESETS.find(
+      (preset) => preset.id === settings.lyricsSizePreset,
+    ) || LYRICS_SIZE_PRESETS[1];
+  const themeVars = getThemeCssVariables(themeId, customThemes);
+  const editingCustomTheme =
+    customThemes.find((theme) => theme.id === editingCustomThemeId) || null;
+  const sectionCardStyle = {
+    background: "var(--lyrical-card-bg)",
+    borderRadius: "12px",
+    padding: "16px",
+    border: "1px solid var(--lyrical-border-soft)",
+  };
+  const sectionTitleStyle = {
+    fontSize: "18px",
+    fontWeight: "700",
+    color: "var(--lyrical-text-primary)",
+    margin: 0,
+  };
+  const sectionDescriptionStyle = {
+    color: "var(--lyrical-text-muted)",
+    fontSize: "13px",
+    marginTop: "4px",
+    marginBottom: "20px",
+  };
+  const dividerStyle = {
+    height: "1px",
+    background: "var(--lyrical-border-soft)",
+    margin: "12px 0",
+  };
+  const inputStyle = {
+    width: "100%",
+    padding: "10px",
+    background: "var(--lyrical-card-bg-elevated)",
+    border: "1px solid var(--lyrical-border)",
+    borderRadius: "8px",
+    color: "var(--lyrical-text-primary)",
+    fontSize: "13px",
+    outline: "none",
+    cursor: "pointer",
+  };
+
+  const refreshCacheInfo = useCallback(() => {
+    chrome.storage.local.get(null, (items) => {
+      const lyricsKeys = Object.keys(items).filter(
+        (key) =>
+          key.startsWith("lyrics_") || key.startsWith("lyrics_versions_"),
+      );
+      const uniqueSongs = new Set(
+        lyricsKeys.map((key) => getCacheSongId(key)).filter(Boolean),
+      );
+
+      chrome.storage.local.getBytesInUse(null, (bytes) => {
+        setCacheInfo({ bytes, songCount: uniqueSongs.size });
+      });
+    });
+  }, []);
+
+  const tabs = [
+    { id: "general", label: t("settings_tab_general") },
+    { id: "display", label: t("settings_tab_display") },
+    { id: "themes", label: t("settings_tab_themes") },
+    { id: "language", label: t("settings_tab_language") },
+    { id: "sources", label: t("settings_tab_sources") },
+    { id: "about", label: t("settings_tab_about") },
+  ];
+
+  // Load settings on mount
+  useEffect(() => {
+    chrome.storage.sync.get(
+      {
+        showLogs: false,
+        compactMode: false,
+        lyricsSizePreset: "standard",
+        reduceAnimations: false,
+        showCollapsedArtwork: true,
+        displayMode: "sidebar",
+        floatingPositionPreset: "right",
+        floatingCustomPosition: null,
+        isRomanizationEnabled: false,
+        isTranslateEnabled: false,
+        translationLanguage: "en",
+        themeId: DEFAULT_THEME_ID,
+        romanizationExclusions: [],
+        translationExclusions: [],
+        [CUSTOM_THEMES_STORAGE_KEY]: [],
+        sourcePreferences: null, // Will be null if never saved
+      },
+      (items) => {
+        setSettings({
+          showLogs: items.showLogs,
+          compactMode: items.compactMode,
+          lyricsSizePreset: items.lyricsSizePreset || "standard",
+          reduceAnimations: items.reduceAnimations,
+          showCollapsedArtwork: items.showCollapsedArtwork,
+          displayMode: items.displayMode || "sidebar",
+          floatingPositionPreset: items.floatingPositionPreset || "right",
+          floatingCustomPosition: items.floatingCustomPosition || null,
+          romanization: items.isRomanizationEnabled,
+          autoTranslate: items.isTranslateEnabled,
+          translationLang: items.translationLanguage,
+          themeId: items.themeId,
+          romanizationExclusions: items.romanizationExclusions,
+          translationExclusions: items.translationExclusions,
+        });
+        const nextCustomThemeRecords = items[CUSTOM_THEMES_STORAGE_KEY] || [];
+        const nextCustomThemes = resolveCustomThemes(nextCustomThemeRecords);
+        setCustomThemeRecords(nextCustomThemeRecords);
+        setCustomThemes(nextCustomThemes);
+
+        // Sync to Store
+        useAppStore.setState({
+          isRomanizationEnabled: items.isRomanizationEnabled,
+          isTranslateEnabled: items.isTranslateEnabled,
+          translationLanguage: items.translationLanguage,
+          compactMode: items.compactMode,
+          lyricsSizePreset: items.lyricsSizePreset || "standard",
+          reduceAnimations: items.reduceAnimations,
+          showCollapsedArtwork: items.showCollapsedArtwork,
+          displayMode: items.displayMode || "sidebar",
+          floatingPositionPreset: items.floatingPositionPreset || "right",
+          floatingCustomPosition: items.floatingCustomPosition || null,
+          romanizationExclusions: items.romanizationExclusions,
+          translationExclusions: items.translationExclusions,
+          themeId: items.themeId,
+          customThemes: nextCustomThemes,
+        });
+
+        // Load source preferences if saved
+        if (items.sourcePreferences) {
+          useAppStore.getState().setSettings({
+            sourcePreferences: items.sourcePreferences,
+          });
+        }
+      },
+    );
+
+    // Load active lyrics source from local storage (for popup to show ACTIVE badge)
+    chrome.storage.local.get("activeLyricsSource", (result) => {
+      if (result.activeLyricsSource) {
+        useAppStore.setState({ lyricsSource: result.activeLyricsSource });
+      }
+    });
+
+    const handleStorageChange = (changes, namespace) => {
+      if (
+        namespace === "local" &&
+        Object.prototype.hasOwnProperty.call(changes, "activeLyricsSource")
+      ) {
+        useAppStore.setState({
+          lyricsSource: changes.activeLyricsSource.newValue || null,
+        });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "compactMode")
+      ) {
+        const nextCompactMode = Boolean(changes.compactMode.newValue);
+        setSettings((prev) => ({ ...prev, compactMode: nextCompactMode }));
+        useAppStore.getState().setCompactMode(nextCompactMode);
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "lyricsSizePreset")
+      ) {
+        const nextPreset = changes.lyricsSizePreset.newValue || "standard";
+        setSettings((prev) => ({ ...prev, lyricsSizePreset: nextPreset }));
+        useAppStore.setState({ lyricsSizePreset: nextPreset });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "reduceAnimations")
+      ) {
+        const nextReduceAnimations = Boolean(changes.reduceAnimations.newValue);
+        setSettings((prev) => ({
+          ...prev,
+          reduceAnimations: nextReduceAnimations,
+        }));
+        useAppStore.getState().setReduceAnimations(nextReduceAnimations);
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "themeId")
+      ) {
+        const nextThemeId = changes.themeId.newValue || DEFAULT_THEME_ID;
+        setSettings((prev) => ({ ...prev, themeId: nextThemeId }));
+        useAppStore.getState().setThemeId(nextThemeId);
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, CUSTOM_THEMES_STORAGE_KEY)
+      ) {
+        const nextCustomThemeRecords =
+          changes[CUSTOM_THEMES_STORAGE_KEY].newValue || [];
+        const nextCustomThemes = resolveCustomThemes(nextCustomThemeRecords);
+        setCustomThemeRecords(nextCustomThemeRecords);
+        setCustomThemes(nextCustomThemes);
+        useAppStore.getState().setCustomThemes(nextCustomThemes);
+      }
+    };
+
+    chrome.storage.onChanged.addListener(handleStorageChange);
+
+    refreshCacheInfo();
+
+    return () => {
+      chrome.storage.onChanged.removeListener(handleStorageChange);
+    };
+  }, [refreshCacheInfo]);
+
+  const updateSetting = (key, value) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
+
+    let storageUpdate: Record<string, any> = {};
+    if (key === "showLogs") storageUpdate.showLogs = value;
+    if (key === "compactMode") {
+      storageUpdate.compactMode = value; // Use new key
+    }
+    if (key === "lyricsSizePreset") {
+      storageUpdate.lyricsSizePreset = value;
+    }
+    if (key === "reduceAnimations") {
+      storageUpdate.reduceAnimations = value;
+    }
+    if (key === "showCollapsedArtwork") {
+      storageUpdate.showCollapsedArtwork = value;
+    }
+    if (key === "displayMode") {
+      storageUpdate.displayMode = value;
+    }
+    if (key === "floatingPositionPreset") {
+      storageUpdate.floatingPositionPreset = value;
+    }
+    if (key === "floatingCustomPosition") {
+      storageUpdate.floatingCustomPosition = value;
+    }
+    if (key === "romanization") storageUpdate.isRomanizationEnabled = value;
+    if (key === "autoTranslate") storageUpdate.isTranslateEnabled = value;
+    if (key === "translationLang") storageUpdate.translationLanguage = value;
+    if (key === "themeId") storageUpdate.themeId = value;
+    if (key === "romanizationExclusions")
+      storageUpdate.romanizationExclusions = value;
+    if (key === "translationExclusions")
+      storageUpdate.translationExclusions = value;
+
+    chrome.storage.sync.set(storageUpdate, () => {
+      log("Settings Updated:", storageUpdate);
+
+      // Sync to store immediately for all settings that affect UI
+      if (key === "compactMode") useAppStore.getState().setCompactMode(value);
+      if (key === "lyricsSizePreset")
+        useAppStore.setState({ lyricsSizePreset: value });
+      if (key === "reduceAnimations")
+        useAppStore.getState().setReduceAnimations(value);
+      if (key === "showCollapsedArtwork")
+        useAppStore.setState({ showCollapsedArtwork: value });
+      if (key === "displayMode")
+        useAppStore.setState({ displayMode: value });
+      if (key === "floatingPositionPreset")
+        useAppStore.setState({ floatingPositionPreset: value });
+      if (key === "floatingCustomPosition")
+        useAppStore.setState({ floatingCustomPosition: value });
+      if (key === "romanization")
+        useAppStore.setState({ isRomanizationEnabled: value });
+      if (key === "autoTranslate")
+        useAppStore.setState({ isTranslateEnabled: value });
+      if (key === "translationLang")
+        useAppStore.setState({ translationLanguage: value });
+      if (key === "themeId") {
+        useAppStore.setState({
+          customThemes: customThemes,
+          themeId: value,
+        });
+      }
+      if (key === "romanizationExclusions")
+        useAppStore.setState({ romanizationExclusions: value });
+      if (key === "translationExclusions")
+        useAppStore.setState({ translationExclusions: value });
+    });
+  };
+
+  const persistCustomThemes = (nextCustomThemeRecords) =>
+    new Promise((resolve, reject) => {
+      const safeThemeRecords = Array.isArray(nextCustomThemeRecords)
+        ? nextCustomThemeRecords
+        : [];
+
+      chrome.storage.sync.set(
+        { [CUSTOM_THEMES_STORAGE_KEY]: safeThemeRecords },
+        () => {
+          if (chrome.runtime?.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+
+          const hydratedThemes = resolveCustomThemes(safeThemeRecords);
+          setCustomThemeRecords(safeThemeRecords);
+          setCustomThemes(hydratedThemes);
+          useAppStore.getState().setCustomThemes(hydratedThemes);
+          resolve(hydratedThemes);
+        },
+      );
+    });
+
+  const saveCustomTheme = async (draft) => {
+    if (editingCustomThemeId) {
+      const existingThemeRecord = customThemeRecords.find(
+        (theme) => theme.id === editingCustomThemeId,
+      );
+
+      if (!existingThemeRecord) {
+        throw new Error("The theme you are editing could not be found.");
+      }
+
+      const updatedThemeRecord = updateStoredCustomThemeFromDraft(
+        existingThemeRecord,
+        draft,
+      );
+      const nextThemeRecords = customThemeRecords.map((theme) =>
+        theme.id === editingCustomThemeId ? updatedThemeRecord : theme,
+      );
+      await persistCustomThemes(nextThemeRecords);
+      updateSetting("themeId", updatedThemeRecord.id);
+      setEditingCustomThemeId(null);
+      return;
+    }
+
+    const storedTheme = createStoredCustomThemeFromDraft(draft);
+    const nextThemeRecords = [...customThemeRecords, storedTheme];
+    await persistCustomThemes(nextThemeRecords);
+    updateSetting("themeId", storedTheme.id);
+  };
+
+  const deleteCustomTheme = (themeIdToDelete) => {
+    const nextThemeRecords = customThemeRecords.filter(
+      (theme) => theme.id !== themeIdToDelete,
+    );
+    persistCustomThemes(nextThemeRecords);
+
+    if (themeId === themeIdToDelete) {
+      updateSetting("themeId", DEFAULT_THEME_ID);
+    }
+  };
+
+  const downloadJson = (fileName, payload) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const getThemeFileName = (theme, suffix = "theme") => {
+    const slug = String(theme?.name || "lyrical-theme")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48);
+    return `${slug || "lyrical"}-${suffix}.json`;
+  };
+
+  const exportCustomTheme = (themeIdToExport) => {
+    const theme = customThemes.find((item) => item.id === themeIdToExport);
+    if (!theme) return;
+
+    downloadJson(getThemeFileName(theme), createThemeExportPayload(theme));
+  };
+
+  const exportAllCustomThemes = () => {
+    if (customThemes.length === 0) return;
+    downloadJson(
+      "lyrical-custom-themes.json",
+      createThemeCollectionExportPayload(customThemes),
+    );
+  };
+
+  const importCustomThemes = async (themeRecords) => {
+    const importedRecords = Array.isArray(themeRecords) ? themeRecords : [];
+    if (importedRecords.length === 0) return;
+
+    const nextThemeRecords = [...customThemeRecords, ...importedRecords];
+    await persistCustomThemes(nextThemeRecords);
+    updateSetting("themeId", importedRecords[0].id);
+  };
+
+  const openCreateCustomThemeModal = () => {
+    setEditingCustomThemeId(null);
+    setIsCustomThemeModalOpen(true);
+  };
+
+  const openEditCustomThemeModal = (themeIdToEdit) => {
+    setEditingCustomThemeId(themeIdToEdit);
+    setIsThemeModalOpen(false);
+    setIsCustomThemeModalOpen(true);
+  };
+
+  return (
+    <div
+      style={{
+        ...themeVars,
+        flex: 1,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        position: "relative",
+        color: "var(--lyrical-text-primary)",
+      }}
+    >
+      {/* Tabs */}
+      <div
+        style={{
+          paddingTop: "12px",
+          flexShrink: 0,
+        }}
+      >
+        <div
+          className="settings-tabs-row"
+          style={{
+            display: "flex",
+            padding: "0 24px 16px",
+            gap: "8px",
+            overflowX: "auto",
+            overflowY: "hidden",
+            flexShrink: 0,
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+          }}
+        >
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  background: isActive
+                    ? "var(--lyrical-card-bg-elevated)"
+                    : "transparent",
+                  border: "none",
+                  padding: "8px 16px",
+                  color: isActive
+                    ? "var(--lyrical-text-primary)"
+                    : "var(--lyrical-text-muted)",
+                  fontWeight: isActive ? "600" : "500",
+                  fontSize: "14px",
+                  borderRadius: "20px",
+                  cursor: "pointer",
+                  transition: "color 0.2s, font-weight 0.2s, background 0.2s",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Content Area */}
+      <div
+        style={{
+          flex: 1,
+          background: "var(--lyrical-page-bg)",
+          padding: "24px",
+          overflowY: "auto",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: "540px",
+            margin: "0 auto",
+          }}
+        >
+          {/* General Tab */}
+          {activeTab === "general" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Settings size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>
+                  {t("settings_general_title")}
+                </h2>
+              </div>
+              <p style={sectionDescriptionStyle}>
+                {t("settings_general_description")}
+              </p>
+
+              <div style={sectionCardStyle}>
+                <ToggleItem
+                  label={t("settings_showLogs_label")}
+                  checked={settings.showLogs}
+                  onChange={(v) => updateSetting("showLogs", v)}
+                  desc={t("settings_showLogs_desc")}
+                />
+                <div style={dividerStyle} />
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: "14px", fontWeight: "500" }}>
+                        {t("settings_cache_label")}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "var(--lyrical-text-muted)",
+                        }}
+                      >
+                        {t("settings_cache_desc")}
+                      </div>
+                    </div>
+                    <button
+                      style={{
+                        background: "var(--lyrical-danger)",
+                        color: "var(--lyrical-text-primary)",
+                        border: "none",
+                        padding: "6px 12px",
+                        borderRadius: "6px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                      }}
+                      onClick={() => {
+                        chrome.storage.local.clear(() => {
+                          refreshCacheInfo();
+                          alert(t("settings_cache_cleared"));
+                        });
+                      }}
+                    >
+                      <Trash2 size={14} />
+                      {t("settings_cache_clear")}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsCacheEditorOpen(true)}
+                    style={{
+                      background: "var(--lyrical-card-bg-elevated)",
+                      color: "var(--lyrical-text-primary)",
+                      border: "1px solid var(--lyrical-border)",
+                      padding: "10px 14px",
+                      borderRadius: "10px",
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      alignSelf: "flex-start",
+                    }}
+                  >
+                    {t("settings_cache_openEditor")}
+                  </button>
+                  {/* Cache Info Display */}
+                  <div
+                    style={{
+                      background: "var(--lyrical-accent-soft)",
+                      padding: "10px 12px",
+                      borderRadius: "8px",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-secondary)",
+                      }}
+                    >
+                      {t("settings_cache_storageUsed")}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-accent)",
+                        fontWeight: "600",
+                      }}
+                    >
+                      {cacheInfo.bytes >= 1024 * 1024
+                        ? `${(cacheInfo.bytes / (1024 * 1024)).toFixed(2)} MB`
+                        : cacheInfo.bytes >= 1024
+                          ? `${(cacheInfo.bytes / 1024).toFixed(1)} KB`
+                          : `${cacheInfo.bytes} bytes`}
+                      {" - "}
+                      {cacheInfo.songCount === 1
+                        ? t("settings_cache_songCached", [
+                            String(cacheInfo.songCount),
+                          ])
+                        : t("settings_cache_songsCached", [
+                            String(cacheInfo.songCount),
+                          ])}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Display Tab */}
+          {activeTab === "display" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Monitor size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>
+                  {t("settings_display_title")}
+                </h2>
+              </div>
+              <p style={sectionDescriptionStyle}>
+                {t("settings_display_description")}
+              </p>
+
+              <div style={sectionCardStyle}>
+                <button
+                  type="button"
+                  onClick={() => setIsLyricsSizeModalOpen(true)}
+                  style={{
+                    width: "100%",
+                    padding: "0",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "14px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "34px",
+                        height: "34px",
+                        borderRadius: "10px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--lyrical-accent)",
+                        background: "var(--lyrical-accent-soft)",
+                        border: "1px solid var(--lyrical-border-soft)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Type size={18} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          color: "var(--lyrical-text-primary)",
+                          fontSize: "14px",
+                          fontWeight: "600",
+                          marginBottom: "3px",
+                        }}
+                      >
+                        Lyrics Typography
+                      </div>
+                      <div
+                        style={{
+                          color: "var(--lyrical-text-muted)",
+                          fontSize: "12px",
+                          lineHeight: 1.35,
+                        }}
+                      >
+                        Scale lyrics in compact and expanded panel views
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--lyrical-text-primary)",
+                        background: "var(--lyrical-card-bg-elevated)",
+                        border: "1px solid var(--lyrical-border)",
+                        borderRadius: "999px",
+                        padding: "5px 10px",
+                        fontSize: "12px",
+                        fontWeight: "700",
+                      }}
+                    >
+                      {currentLyricsSizePreset.label}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        color: "var(--lyrical-text-muted)",
+                        fontSize: "18px",
+                        lineHeight: 1,
+                      }}
+                    >
+                      ›
+                    </span>
+                  </div>
+                </button>
+                <div style={dividerStyle} />
+                <ToggleItem
+                  label={t("settings_compactMode_label")}
+                  checked={settings.compactMode}
+                  onChange={(v) => updateSetting("compactMode", v)}
+                  desc={t("settings_compactMode_desc")}
+                />
+                <div style={dividerStyle} />
+                <ToggleItem
+                  label={t("settings_reduceAnimations_label")}
+                  checked={settings.reduceAnimations}
+                  onChange={(v) => updateSetting("reduceAnimations", v)}
+                  desc={t("settings_reduceAnimations_desc")}
+                />
+                <div style={dividerStyle} />
+                <ToggleItem
+                  label={t(
+                    "settings_showCollapsedArtwork_label",
+                    undefined,
+                    "Collapsed Album Cover",
+                  )}
+                  checked={settings.showCollapsedArtwork ?? true}
+                  onChange={(v) => updateSetting("showCollapsedArtwork", v)}
+                  desc={t(
+                    "settings_showCollapsedArtwork_desc",
+                    undefined,
+                    "Show faded album cover watermark on the right side in collapsed view",
+                  )}
+                />
+
+                <div style={dividerStyle} />
+
+                {/* Panel Placement Section */}
+                <div style={{ padding: "4px 0" }}>
+                  <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--lyrical-text-primary)", marginBottom: "4px" }}>
+                    Panel Placement
+                  </div>
+                  <div style={{ fontSize: "12px", color: "var(--lyrical-text-muted)", marginBottom: "12px" }}>
+                    Choose whether the lyrics panel sits in the page sidebar or floats above content
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "10px",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => updateSetting("displayMode", "sidebar")}
+                      style={{
+                        padding: "14px 12px",
+                        borderRadius: "12px",
+                        border: settings.displayMode === "sidebar"
+                          ? "2px solid var(--lyrical-accent)"
+                          : "1px solid var(--lyrical-border)",
+                        background: settings.displayMode === "sidebar"
+                          ? "var(--lyrical-accent-soft)"
+                          : "var(--lyrical-card-bg-elevated)",
+                        color: "var(--lyrical-text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "6px",
+                        transition: "all 0.18s ease",
+                      }}
+                    >
+                      <PanelRight
+                        size={22}
+                        color={
+                          settings.displayMode === "sidebar"
+                            ? "var(--lyrical-accent)"
+                            : "var(--lyrical-text-secondary)"
+                        }
+                      />
+                      <span style={{ fontSize: "13px", fontWeight: "600" }}>Sidebar</span>
+                      <span style={{ fontSize: "11px", color: "var(--lyrical-text-muted)" }}>In-page column</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => updateSetting("displayMode", "floating")}
+                      style={{
+                        padding: "14px 12px",
+                        borderRadius: "12px",
+                        border: settings.displayMode === "floating"
+                          ? "2px solid var(--lyrical-accent)"
+                          : "1px solid var(--lyrical-border)",
+                        background: settings.displayMode === "floating"
+                          ? "var(--lyrical-accent-soft)"
+                          : "var(--lyrical-card-bg-elevated)",
+                        color: "var(--lyrical-text-primary)",
+                        cursor: "pointer",
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "6px",
+                        transition: "all 0.18s ease",
+                      }}
+                    >
+                      <PictureInPicture2
+                        size={22}
+                        color={
+                          settings.displayMode === "floating"
+                            ? "var(--lyrical-accent)"
+                            : "var(--lyrical-text-secondary)"
+                        }
+                      />
+                      <span style={{ fontSize: "13px", fontWeight: "600" }}>Floating Panel</span>
+                      <span style={{ fontSize: "11px", color: "var(--lyrical-text-muted)" }}>Screen overlay</span>
+                    </button>
+                  </div>
+
+                  {settings.displayMode === "floating" && (
+                    <div
+                      style={{
+                        background: "var(--lyrical-panel-surface-soft)",
+                        border: "1px solid var(--lyrical-border-soft)",
+                        borderRadius: "14px",
+                        padding: "16px",
+                        marginTop: "14px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "12px",
+                      }}
+                    >
+                      <div style={{ fontSize: "13px", fontWeight: "600", color: "var(--lyrical-text-primary)" }}>
+                        Floating Position
+                      </div>
+                      
+                      {/* Preset position options (matching user modal screenshot) */}
+                      <div style={{ display: "flex", gap: "8px" }}>
+                        {[
+                          { id: "left", label: "Left" },
+                          { id: "center", label: "Center" },
+                          { id: "right", label: "Right" },
+                        ].map((pos) => {
+                          const isActive =
+                            settings.floatingPositionPreset === pos.id &&
+                            !settings.floatingCustomPosition;
+                          return (
+                            <button
+                              key={pos.id}
+                              type="button"
+                              onClick={() => {
+                                updateSetting("floatingCustomPosition", null);
+                                updateSetting("floatingPositionPreset", pos.id);
+                              }}
+                              style={{
+                                flex: 1,
+                                padding: "8px 12px",
+                                borderRadius: "10px",
+                                border: isActive
+                                  ? "1px solid var(--lyrical-accent)"
+                                  : "1px solid var(--lyrical-border)",
+                                background: isActive
+                                  ? "var(--lyrical-accent-soft)"
+                                  : "var(--lyrical-card-bg-elevated)",
+                                color: isActive
+                                  ? "var(--lyrical-accent)"
+                                  : "var(--lyrical-text-primary)",
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {pos.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "4px" }}>
+                        <span style={{ fontSize: "11px", color: "var(--lyrical-text-muted)" }}>
+                          {settings.floatingCustomPosition
+                            ? "Custom dragged position active"
+                            : `Preset: ${settings.floatingPositionPreset}`}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateSetting("floatingCustomPosition", null);
+                            updateSetting("floatingPositionPreset", "right");
+                          }}
+                          className="lyrical-hover-btn"
+                          style={{
+                            background: "var(--lyrical-card-bg-elevated)",
+                            color: "var(--lyrical-text-primary)",
+                            border: "1px solid var(--lyrical-border)",
+                            padding: "6px 14px",
+                            borderRadius: "8px",
+                            fontSize: "12px",
+                            fontWeight: "600",
+                            cursor: "pointer",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                            transition: "all 0.18s ease",
+                          }}
+                        >
+                          <RotateCcw size={13} />
+                          Reset Position
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === "themes" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Palette size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>
+                  {t("settings_themes_title")}
+                </h2>
+              </div>
+              <p style={sectionDescriptionStyle}>
+                {t("settings_themes_description")}
+              </p>
+
+              <div style={sectionCardStyle}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "16px",
+                    marginBottom: "18px",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: "1 1 auto",
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        color: "var(--lyrical-text-primary)",
+                        marginBottom: "6px",
+                      }}
+                    >
+                      {t("settings_theme_label")}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted)",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {t("settings_theme_byAuthor", [
+                        currentThemeName,
+                        currentTheme.author,
+                      ])}
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "10px",
+                      flex: "0 0 auto",
+                      alignItems: "stretch",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={openCreateCustomThemeModal}
+                      style={{
+                        padding: "10px 16px",
+                        borderRadius: "12px",
+                        border: "1px solid var(--lyrical-border)",
+                        background: "var(--lyrical-panel-surface-soft)",
+                        color: "var(--lyrical-text-primary)",
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {t("settings_theme_createCustom")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsThemeModalOpen(true)}
+                      style={{
+                        padding: "10px 16px",
+                        borderRadius: "12px",
+                        border: "1px solid var(--lyrical-border)",
+                        background: "var(--lyrical-card-bg-elevated)",
+                        color: "var(--lyrical-text-primary)",
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {t("settings_theme_choose")}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    borderRadius: "16px",
+                    overflow: "hidden",
+                    border: "1px solid var(--lyrical-border)",
+                    background: "var(--lyrical-panel-surface-soft)",
+                  }}
+                >
+                  <div
+                    style={{
+                      height: "116px",
+                      background: currentTheme.tokens["--lyrical-panel-bg"],
+                      position: "relative",
+                    }}
+                  >
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: "18px",
+                        bottom: "18px",
+                        padding: "6px 12px",
+                        borderRadius: "999px",
+                        background:
+                          currentTheme.tokens["--lyrical-panel-surface-soft"],
+                        color: currentTheme.tokens["--lyrical-text-primary"],
+                        border: `1px solid ${currentTheme.tokens["--lyrical-border"]}`,
+                        fontSize: "12px",
+                        fontWeight: "700",
+                        letterSpacing: "0.06em",
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {t("settings_theme_active")}
+                    </div>
+                  </div>
+                  <div style={{ padding: "16px" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "16px",
+                        marginBottom: "8px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: "18px",
+                          fontWeight: "700",
+                          color: "var(--lyrical-text-primary)",
+                        }}
+                      >
+                        {currentThemeName}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "12px",
+                          color: "var(--lyrical-accent)",
+                          fontWeight: "700",
+                          letterSpacing: "0.08em",
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {currentTheme.isCustom
+                          ? t("common_custom")
+                          : t("common_preset")}
+                      </div>
+                    </div>
+                    <p
+                      style={{
+                        margin: 0,
+                        fontSize: "13px",
+                        lineHeight: "1.6",
+                        color: "var(--lyrical-text-muted)",
+                      }}
+                    >
+                      {currentThemeDescription}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: "14px",
+                    padding: "12px",
+                    borderRadius: "14px",
+                    border: "1px solid var(--lyrical-border-soft)",
+                    background:
+                      "var(--lyrical-panel-surface-soft, rgba(255,255,255,0.05))",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "12px",
+                    flexWrap: "nowrap",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex: "1 1 auto",
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        color: "var(--lyrical-text-primary)",
+                        marginBottom: "3px",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {t("settings_theme_library")}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted)",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {t("settings_theme_customSaved", [
+                        String(customThemes.length),
+                      ])}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "8px",
+                      flex: "0 0 auto",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setIsThemeImportModalOpen(true)}
+                      style={{
+                        minHeight: "36px",
+                        padding: "8px 12px",
+                        borderRadius: "10px",
+                        border: "1px solid var(--lyrical-border)",
+                        background: "var(--lyrical-card-bg-elevated)",
+                        color: "var(--lyrical-text-primary)",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <Upload size={14} />
+                      {t("common_import")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={exportAllCustomThemes}
+                      disabled={customThemes.length === 0}
+                      style={{
+                        minHeight: "36px",
+                        padding: "8px 12px",
+                        borderRadius: "10px",
+                        border: "1px solid var(--lyrical-border)",
+                        background: "var(--lyrical-panel-surface-soft)",
+                        color:
+                          customThemes.length === 0
+                            ? "var(--lyrical-text-subtle)"
+                            : "var(--lyrical-text-primary)",
+                        fontSize: "13px",
+                        fontWeight: 700,
+                        cursor:
+                          customThemes.length === 0 ? "not-allowed" : "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "8px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <Download size={14} />
+                      {t("common_export")}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Language Tab */}
+          {activeTab === "language" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Languages size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>
+                  {t("settings_language_title")}
+                </h2>
+              </div>
+              <p style={sectionDescriptionStyle}>
+                {t("settings_language_description")}
+              </p>
+
+              <div style={sectionCardStyle}>
+                <ToggleItem
+                  label={t("settings_language_romanization")}
+                  checked={settings.romanization}
+                  onChange={(v) => updateSetting("romanization", v)}
+                  desc={t("settings_language_romanizationDesc")}
+                />
+                <div style={dividerStyle} />
+                <ToggleItem
+                  label={t("settings_language_autoTranslate")}
+                  checked={settings.autoTranslate}
+                  onChange={(v) => updateSetting("autoTranslate", v)}
+                  desc={t("settings_language_autoTranslateDesc")}
+                />
+                <div style={{ marginTop: "16px" }}>
+                  <label
+                    style={{
+                      display: "block",
+                      fontSize: "13px",
+                      color: "var(--lyrical-text-primary)",
+                      marginBottom: "8px",
+                      fontWeight: "500",
+                    }}
+                  >
+                    {t("settings_language_translationLanguage")}
+                  </label>
+                  <select
+                    value={settings.translationLang}
+                    onChange={(e) =>
+                      updateSetting("translationLang", e.target.value)
+                    }
+                    style={inputStyle}
+                  >
+                    {AVAILABLE_LANGUAGES.map((lang) => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div style={dividerStyle} />
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginTop: "16px",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        color: "var(--lyrical-text-primary)",
+                      }}
+                    >
+                      {t("settings_language_exclusions")}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted)",
+                        marginTop: "4px",
+                      }}
+                    >
+                      {t("settings_language_exclusionsDesc")}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsExclusionsModalOpen(true)}
+                    style={{
+                      background: "var(--lyrical-card-bg-elevated)",
+                      color: "var(--lyrical-text-primary)",
+                      border: "1px solid var(--lyrical-border)",
+                      padding: "8px 14px",
+                      borderRadius: "10px",
+                      fontSize: "13px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      transition: "all 0.2s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background =
+                        "var(--lyrical-panel-surface, rgba(255,255,255,0.1))";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background =
+                        "var(--lyrical-card-bg-elevated, #27272a)";
+                    }}
+                  >
+                    {t("common_manage")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sources Tab */}
+          {activeTab === "sources" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Layers size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>
+                  {t("settings_sources_title")}
+                </h2>
+              </div>
+              <p style={sectionDescriptionStyle}>
+                {t("settings_sources_description")}
+              </p>
+
+              <div
+                style={{
+                  ...sectionCardStyle,
+                  padding: "0 16px",
+                }}
+              >
+                <SourcePreferenceList />
+              </div>
+            </div>
+          )}
+
+          {/* About Tab */}
+          {activeTab === "about" && (
+            <div className="animate-fade-in">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "12px",
+                  marginBottom: "8px",
+                }}
+              >
+                <Info size={20} color="var(--lyrical-text-primary)" />
+                <h2 style={sectionTitleStyle}>{t("settings_about_title")}</h2>
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  textAlign: "center",
+                  paddingTop: "40px",
+                }}
+              >
+                <img
+                  src={chrome.runtime.getURL("icon128.png")}
+                  alt={t("popup_logoAlt")}
+                  style={{
+                    width: "80px",
+                    height: "80px",
+                    marginBottom: "16px",
+                    borderRadius: "50%",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
+                  }}
+                />
+                <h3
+                  style={{
+                    margin: "0 0 8px 0",
+                    color: "var(--lyrical-text-primary)",
+                    fontSize: "24px",
+                    fontWeight: "700",
+                  }}
+                >
+                  Lyrical
+                </h3>
+                <p
+                  style={{
+                    margin: "0 0 24px 0",
+                    color: "var(--lyrical-text-secondary)",
+                    fontSize: "14px",
+                    lineHeight: "1.5",
+                  }}
+                >
+                  {t("settings_about_description")
+                    .split("\n")
+                    .map((line, index) => (
+                      <Fragment key={line}>
+                        {index > 0 && <br />}
+                        {line}
+                      </Fragment>
+                    ))}
+                </p>
+                <div
+                  style={{
+                    display: "inline-block",
+                    padding: "4px 12px",
+                    background: "var(--lyrical-card-bg-elevated)",
+                    borderRadius: "20px",
+                    fontSize: "12px",
+                    color: "var(--lyrical-text-primary)",
+                  }}
+                >
+                  {t("settings_about_version")}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+      {isLyricsSizeModalOpen && (
+        <div
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setIsLyricsSizeModalOpen(false);
+            }
+          }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "24px",
+            background: "rgba(0, 0, 0, 0.42)",
+            backdropFilter: "blur(10px)",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Lyrics typography presets"
+            style={{
+              width: "min(100%, 460px)",
+              maxHeight: "100%",
+              overflowY: "auto",
+              background: "var(--lyrical-panel-bg)",
+              border: "1px solid var(--lyrical-border)",
+              borderRadius: "18px",
+              boxShadow: "0 24px 80px rgba(0, 0, 0, 0.48)",
+              padding: "18px",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                justifyContent: "space-between",
+                gap: "16px",
+                marginBottom: "16px",
+              }}
+            >
+              <div>
+                <h3
+                  style={{
+                    margin: 0,
+                    color: "var(--lyrical-text-primary)",
+                    fontSize: "18px",
+                    fontWeight: "750",
+                  }}
+                >
+                  Lyrics Typography
+                </h3>
+                <p
+                  style={{
+                    margin: "5px 0 0",
+                    color: "var(--lyrical-text-muted)",
+                    fontSize: "13px",
+                    lineHeight: 1.45,
+                  }}
+                >
+                  Choose how strongly the current lyric line should stand out.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLyricsSizeModalOpen(false)}
+                style={{
+                  width: "32px",
+                  height: "32px",
+                  borderRadius: "10px",
+                  border: "1px solid var(--lyrical-border-soft)",
+                  background: "var(--lyrical-card-bg-elevated)",
+                  color: "var(--lyrical-text-primary)",
+                  cursor: "pointer",
+                  fontSize: "18px",
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: "10px",
+              }}
+            >
+              {LYRICS_SIZE_PRESETS.map((preset) => {
+                const isActive = settings.lyricsSizePreset === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => updateSetting("lyricsSizePreset", preset.id)}
+                    style={{
+                      padding: "14px",
+                      borderRadius: "14px",
+                      border: isActive
+                        ? "1px solid var(--lyrical-accent)"
+                        : "1px solid var(--lyrical-border-soft)",
+                      background: isActive
+                        ? "var(--lyrical-accent-soft)"
+                        : "var(--lyrical-card-bg)",
+                      color: "var(--lyrical-text-primary)",
+                      cursor: "pointer",
+                      display: "grid",
+                      gridTemplateColumns: "1fr auto",
+                      gap: "12px",
+                      textAlign: "left",
+                      boxShadow: isActive
+                        ? "inset 0 1px 0 rgba(255, 255, 255, 0.08)"
+                        : "none",
+                      transition:
+                        "border-color 0.18s ease, background 0.18s ease, transform 0.18s ease",
+                    }}
+                  >
+                    <span style={{ minWidth: 0 }}>
+                      <span
+                        style={{
+                          display: "block",
+                          fontSize: "14px",
+                          fontWeight: "700",
+                          marginBottom: "4px",
+                        }}
+                      >
+                        {preset.label}
+                      </span>
+                      <span
+                        style={{
+                          display: "block",
+                          color: "var(--lyrical-text-muted)",
+                          fontSize: "12px",
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        {preset.description}
+                      </span>
+                    </span>
+                    <span
+                      style={{
+                        alignSelf: "start",
+                        borderRadius: "999px",
+                        padding: "4px 9px",
+                        fontSize: "12px",
+                        fontWeight: "700",
+                        color: isActive
+                          ? "var(--lyrical-accent)"
+                          : "var(--lyrical-text-secondary)",
+                        background: "var(--lyrical-panel-surface-soft)",
+                        border: "1px solid var(--lyrical-border-soft)",
+                      }}
+                    >
+                      {preset.activeSize}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              style={{
+                marginTop: "14px",
+                padding: "14px",
+                borderRadius: "14px",
+                background: "var(--lyrical-panel-surface)",
+                border: "1px solid var(--lyrical-border-soft)",
+                textAlign: "center",
+              }}
+            >
+              <div
+                style={{
+                  color: "var(--lyrical-text-primary)",
+                  fontSize: currentLyricsSizePreset.activeSize,
+                  fontWeight: "800",
+                  lineHeight: 1.25,
+                  transition: "font-size 0.18s ease",
+                }}
+              >
+                乗り越えて進め
+              </div>
+              <div
+                style={{
+                  display: "inline-block",
+                  marginTop: "8px",
+                  padding: "4px 10px",
+                  borderRadius: "999px",
+                  color: "var(--lyrical-romanized)",
+                  background:
+                    "color-mix(in srgb, var(--lyrical-romanized) 16%, transparent)",
+                  border:
+                    "1px solid color-mix(in srgb, var(--lyrical-romanized) 22%, transparent)",
+                  fontSize: "13px",
+                  fontWeight: "700",
+                }}
+              >
+                norikoete susume
+              </div>
+              <div
+                style={{
+                  marginTop: "8px",
+                  color: "var(--lyrical-translated)",
+                  fontSize: "13px",
+                  fontWeight: "650",
+                  lineHeight: 1.35,
+                }}
+              >
+                Cross over it and move forward
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      <ThemeSelectionModal
+        isOpen={isThemeModalOpen}
+        onClose={() => setIsThemeModalOpen(false)}
+        selectedThemeId={themeId}
+        onSelectTheme={(nextThemeId) => updateSetting("themeId", nextThemeId)}
+        customThemes={customThemes}
+        onEditCustomTheme={openEditCustomThemeModal}
+        onDeleteCustomTheme={deleteCustomTheme}
+        onExportCustomTheme={exportCustomTheme}
+      />
+      <CustomThemeModal
+        isOpen={isCustomThemeModalOpen}
+        onClose={() => {
+          setIsCustomThemeModalOpen(false);
+          setEditingCustomThemeId(null);
+        }}
+        onSaveTheme={saveCustomTheme}
+        seedTheme={editingCustomTheme || currentTheme}
+        mode={editingCustomTheme ? "edit" : "create"}
+      />
+      <ThemeImportExportModal
+        isOpen={isThemeImportModalOpen}
+        onClose={() => setIsThemeImportModalOpen(false)}
+        onImportThemes={importCustomThemes}
+        existingThemes={customThemeRecords}
+      />
+      <CacheEditorView
+        isOpen={isCacheEditorOpen}
+        onClose={() => setIsCacheEditorOpen(false)}
+        onCacheChange={refreshCacheInfo}
+      />
+      <LanguageExclusionsModal
+        isOpen={isExclusionsModalOpen}
+        onClose={() => setIsExclusionsModalOpen(false)}
+        romanizationExclusions={settings.romanizationExclusions}
+        translationExclusions={settings.translationExclusions}
+        onUpdateExclusions={(newExclusions) => {
+          updateSetting("romanizationExclusions", newExclusions.romanization);
+          updateSetting("translationExclusions", newExclusions.translation);
+        }}
+      />
+    </div>
+  );
+};
+
+// Helper Component (Same as before)
+const ToggleItem = ({ label, checked, onChange, desc }) => (
+  <div style={{ marginBottom: "0" }}>
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        marginBottom: "4px",
+      }}
+    >
+      <span
+        style={{
+          fontSize: "14px",
+          fontWeight: "500",
+          color: "var(--lyrical-text-primary, #fff)",
+        }}
+      >
+        {label}
+      </span>
+      <div
+        onClick={() => onChange(!checked)}
+        style={{
+          width: "44px",
+          height: "24px",
+          background: checked
+            ? "var(--lyrical-accent, #3ea6ff)"
+            : "var(--lyrical-card-bg-elevated, #3f3f46)",
+          borderRadius: "12px",
+          position: "relative",
+          cursor: "pointer",
+          transition: "background 0.2s",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: "2px",
+            left: checked ? "22px" : "2px",
+            width: "20px",
+            height: "20px",
+            background: "var(--lyrical-text-primary, white)",
+            borderRadius: "50%",
+            transition: "left 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+            boxShadow: "0 2px 4px rgba(0,0,0,0.2)",
+          }}
+        />
+      </div>
+    </div>
+    {desc && (
+      <p
+        style={{
+          margin: 0,
+          fontSize: "12px",
+          color: "var(--lyrical-text-muted, #71717a)",
+        }}
+      >
+        {desc}
+      </p>
+    )}
+  </div>
+);
+
+export default SettingsContent;

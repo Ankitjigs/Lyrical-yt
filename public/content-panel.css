@@ -1,0 +1,203 @@
+/* Styles for in-page lyrics panel - matching popup design */
+
+.lyrical-panel {
+    width: 350px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 16px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    margin-bottom: 16px;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Arial', sans-serif;
+    color: #fff;
+}
+
+/* Header */
+.lyrical-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    user-select: none;
+}
+
+.lyrical-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.lyrical-icon {
+    color: #3ea6ff;
+}
+
+.lyrical-controls {
+    display: flex;
+    gap: 8px;
+}
+
+.lyrical-toggle,
+.lyrical-close {
+    background: transparent;
+    border: none;
+    color: #aaa;
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.lyrical-toggle:hover,
+.lyrical-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.lyrical-toggle {
+    transition: transform 0.3s;
+}
+
+/* Body */
+.lyrical-body {
+    padding: 20px;
+}
+
+/* Album Art */
+.lyrical-album-art {
+    width: 180px;
+    height: 180px;
+    margin: 0 auto 16px;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.lyrical-album-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+/* Song Info */
+.lyrical-song-info {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.lyrical-song-info h3 {
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    margin: 0 0 6px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lyrical-song-info p {
+    font-size: 14px;
+    color: #aaa;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Content */
+.lyrical-content {
+    max-height: 300px;
+    overflow-y: auto;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 12px;
+    box-shadow: inset 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.lyrical-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.lyrical-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 3px;
+}
+
+.lyrical-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 3px;
+}
+
+.lyrical-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Loading state */
+.lyrical-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 32px;
+    color: #888;
+}
+
+.lyrical-spinner {
+    width: 24px;
+    height: 24px;
+    border: 3px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #3ea6ff;
+    border-radius: 50%;
+    animation: lyrical-spin 0.8s linear infinite;
+}
+
+@keyframes lyrical-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Lyrics */
+.lyrical-lyrics {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.lyrical-line {
+    font-size: 13px;
+    line-height: 1.6;
+    color: rgba(255, 255, 255, 0.5);
+    opacity: 0.6;
+    transition: all 0.3s ease;
+    padding: 6px 10px;
+    border-radius: 6px;
+    text-align: center;
+}
+
+.lyrical-line-active {
+    font-size: 16px;
+    font-weight: 700;
+    color: #3ea6ff;
+    opacity: 1;
+    transform: scale(1.05);
+    background: linear-gradient(90deg,
+            rgba(62, 166, 255, 0.1),
+            rgba(62, 166, 255, 0.2),
+            rgba(62, 166, 255, 0.1));
+    box-shadow: 0 2px 8px rgba(62, 166, 255, 0.2);
+}
+
+.lyrical-empty {
+    text-align: center;
+    padding: 32px;
+    color: #666;
+    font-size: 13px;
+}
