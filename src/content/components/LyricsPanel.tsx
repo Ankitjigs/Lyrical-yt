@@ -1972,11 +1972,8 @@ const LyricsPanel = () => {
                         (nextLine
                           ? Math.max(nextLine.time - line.time, 0.8)
                           : 2);
-                      const isLongLine = lyricText.length > 34;
-                      const paragraphAlign =
-                        isInstrumental || !isLongLine ? "center" : "left";
-                      const secondaryAlign =
-                        paragraphAlign === "left" ? "flex-start" : "center";
+                      const paragraphAlign = "center";
+                      const secondaryAlign = "center";
                       const canSeek = typeof line.time === "number";
 
                       return (
@@ -2003,8 +2000,7 @@ const LyricsPanel = () => {
                             textAlign: paragraphAlign,
                             display: "flex",
                             flexDirection: "column",
-                            alignItems:
-                              paragraphAlign === "left" ? "stretch" : "center",
+                            alignItems: "center",
                             gap: lyricsTypography.lineGap,
                             borderRadius: "0",
                             minHeight: isInstrumental
@@ -2129,7 +2125,8 @@ const LyricsPanel = () => {
                                 order: 1,
                                 overflowWrap: "break-word",
                                 textShadow: "none",
-                                textWrap: isLongLine ? "pretty" : "balance",
+                                textAlign: "center",
+                                textWrap: "pretty",
                                 whiteSpace: "pre-wrap",
                               }}
                             >

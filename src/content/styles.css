@@ -80,6 +80,11 @@
   transform: scale(1);
 }
 
+.lyric-original {
+  text-align: center;
+  width: 100%;
+}
+
 /* ─── Compact & Standard Mode Line Spacing ─── */
 .blyrics--line,
 .lyric-line {
