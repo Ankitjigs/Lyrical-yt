@@ -14,6 +14,7 @@ import {
   Languages,
   Type,
   ListMusic,
+  Check,
 } from "lucide-react";
 import { t } from "../../i18n";
 
@@ -179,6 +180,42 @@ function buildPreview(value, type) {
     .join(" / ");
 }
 
+function formatTrackDisplayName(track: any): string {
+  if (!track) return "Track";
+  const rawLabel = track.label || "";
+  const lang = track.language || "";
+  const isAsr =
+    track.isAsr ||
+    rawLabel.toLowerCase().includes("auto") ||
+    String(track.trackId || "").includes("asr");
+
+  if (
+    rawLabel &&
+    !rawLabel.toLowerCase().startsWith("captions") &&
+    rawLabel.toLowerCase() !== "youtube captions"
+  ) {
+    return isAsr && !rawLabel.toLowerCase().includes("auto")
+      ? `${rawLabel} (auto)`
+      : rawLabel;
+  }
+
+  const langMatch = rawLabel.match(/Captions\s*\(([^)]+)\)/i);
+  const code = lang || (langMatch ? langMatch[1] : "");
+
+  if (code && code !== "default" && code !== "auto") {
+    try {
+      const cleanCode = code.split("-")[0].toLowerCase();
+      const intlName = new Intl.DisplayNames(["en"], { type: "language" }).of(cleanCode);
+      if (intlName) {
+        return isAsr ? `${intlName} (auto)` : intlName;
+      }
+    } catch {}
+    return isAsr ? `${code.toUpperCase()} (auto)` : code.toUpperCase();
+  }
+
+  return isAsr ? "English (auto)" : "English";
+}
+
 function normalizeCacheGroups(items) {
   const grouped = new Map();
 
@@ -274,6 +311,8 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const [viewTabs, setViewTabs] = useState<Record<string, "formatted" | "raw">>({});
+  const [selectedEntryTracks, setSelectedEntryTracks] = useState<Record<string, string>>({});
+  const [openTrackDropdownKey, setOpenTrackDropdownKey] = useState<string | null>(null);
 
   const refreshCache = async () => {
     setLoading(true);
@@ -290,6 +329,30 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
     if (!isOpen) return;
     refreshCache();
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!openTrackDropdownKey) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!target.closest(`[data-track-dropdown="${openTrackDropdownKey}"]`)) {
+        setOpenTrackDropdownKey(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpenTrackDropdownKey(null);
+      }
+    };
+
+    window.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [openTrackDropdownKey]);
 
   const filteredGroups = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();
@@ -641,6 +704,76 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                   >
                     {group.entries.map((entry) => {
                       const isExpanded = expandedKeys.has(entry.key);
+
+                      const rawTracks =
+                        entry.value?.tracks &&
+                        typeof entry.value.tracks === "object"
+                          ? Object.values(entry.value.tracks)
+                          : [];
+
+                      const trackDedupMap = new Map<string, any>();
+                      for (const t of rawTracks as any[]) {
+                        if (!t) continue;
+                        const displayName = formatTrackDisplayName(t);
+                        const isAsr = Boolean(
+                          t.isAsr ||
+                            String(t.trackId || "").includes("asr") ||
+                            String(t.label || "").toLowerCase().includes("auto"),
+                        );
+                        const dedupKey = `${displayName.toLowerCase()}_${isAsr ? "asr" : "manual"}`;
+                        const existing = trackDedupMap.get(dedupKey);
+                        if (
+                          !existing ||
+                          (t.lyrics?.length && !existing.lyrics?.length) ||
+                          (t.translatedLyrics?.length || 0) >
+                            (existing.translatedLyrics?.length || 0) ||
+                          (t.romanizedLyrics?.length || 0) >
+                            (existing.romanizedLyrics?.length || 0)
+                        ) {
+                          trackDedupMap.set(dedupKey, t);
+                        }
+                      }
+                      const availableTracks = Array.from(trackDedupMap.values());
+
+                      const activeTrackId =
+                        selectedEntryTracks[entry.key] ||
+                        entry.value?.activeTrackId ||
+                        (availableTracks[0] as any)?.trackId ||
+                        (availableTracks[0] as any)?.language ||
+                        null;
+
+                      const activeTrackData: any =
+                        availableTracks.length > 0
+                          ? (entry.value?.tracks?.[activeTrackId] ||
+                            availableTracks[0])
+                          : null;
+
+                      const currentLyrics =
+                        activeTrackData?.lyrics ||
+                        entry.value?.lyrics ||
+                        [];
+                      const currentRomanized =
+                        activeTrackData?.romanizedLyrics ||
+                        entry.romanizedLyrics ||
+                        [];
+                      const currentTranslated =
+                        activeTrackData?.translatedLyrics ||
+                        entry.translatedLyrics ||
+                        [];
+                      const currentLineCount = currentLyrics.length;
+                      const currentRomanizedCount =
+                        currentRomanized.filter((l: any) =>
+                          Boolean(l?.romanized || l?.romanization),
+                        ).length;
+                      const currentTranslatedCount =
+                        currentTranslated.filter((l: any) =>
+                          Boolean(l?.translated || l?.translation),
+                        ).length;
+                      const currentPreview =
+                        activeTrackData?.lyrics?.length
+                          ? buildPreview(activeTrackData, entry.type)
+                          : entry.preview;
+
                       return (
                         <div
                           key={entry.key}
@@ -648,7 +781,9 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                             borderRadius: "14px",
                             border: "1px solid var(--lyrical-border-soft)",
                             background: "var(--lyrical-card-bg-elevated)",
-                            overflow: "hidden",
+                            position: "relative",
+                            zIndex: openTrackDropdownKey === entry.key ? 50 : 1,
+                            overflow: "visible",
                           }}
                         >
                           <div
@@ -783,12 +918,143 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                               ) : (
                                 <span>
                                   {t("cacheEditor_lyricLines", [
-                                    String(entry.lineCount),
+                                    String(currentLineCount),
                                   ])}
                                 </span>
                               )}
 
-                              {entry.romanizedCount > 0 ? (
+                              {availableTracks.length > 1 && (
+                                <div
+                                  data-track-dropdown={entry.key}
+                                  style={{
+                                    position: "relative",
+                                    display: "inline-block",
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setOpenTrackDropdownKey(
+                                        openTrackDropdownKey === entry.key
+                                          ? null
+                                          : entry.key,
+                                      );
+                                    }}
+                                    style={{
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "5px",
+                                      padding: "3px 9px",
+                                      borderRadius: "999px",
+                                      background: "rgba(56, 189, 248, 0.12)",
+                                      color: "#7dd3fc",
+                                      border: "1px solid rgba(56, 189, 248, 0.28)",
+                                      fontSize: "11px",
+                                      fontWeight: "600",
+                                      cursor: "pointer",
+                                      transition: "all 0.16s ease",
+                                    }}
+                                  >
+                                    <Languages size={11} style={{ opacity: 0.85 }} />
+                                    <span>
+                                      {formatTrackDisplayName(activeTrackData)}
+                                    </span>
+                                    <ChevronDown
+                                      size={11}
+                                      style={{ opacity: 0.7 }}
+                                    />
+                                  </button>
+                                  {openTrackDropdownKey === entry.key && (
+                                    <div
+                                      style={{
+                                        position: "absolute",
+                                        top: "calc(100% + 5px)",
+                                        left: 0,
+                                        zIndex: 1000,
+                                        minWidth: "150px",
+                                        padding: "4px",
+                                        borderRadius: "9px",
+                                        background:
+                                          "color-mix(in srgb, var(--lyrical-panel-surface-strong, #13131d) 94%, #000000 6%)",
+                                        border:
+                                          "1px solid rgba(255, 255, 255, 0.14)",
+                                        boxShadow:
+                                          "0 12px 30px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1)",
+                                        backdropFilter: "blur(24px)",
+                                        WebkitBackdropFilter: "blur(24px)",
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: "2px",
+                                        boxSizing: "border-box",
+                                      }}
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      {availableTracks.map((t: any) => {
+                                        const trackKey =
+                                          t.trackId || t.language;
+                                        const isCurrent =
+                                          trackKey ===
+                                          (activeTrackData?.trackId ||
+                                            activeTrackData?.language);
+                                        const trackName = formatTrackDisplayName(t);
+                                        return (
+                                          <button
+                                            key={trackKey}
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedEntryTracks(
+                                                (prev) => ({
+                                                  ...prev,
+                                                  [entry.key]: trackKey,
+                                                }),
+                                              );
+                                              setOpenTrackDropdownKey(null);
+                                            }}
+                                            style={{
+                                              display: "flex",
+                                              alignItems: "center",
+                                              justifyContent:
+                                                "space-between",
+                                              padding: "6px 9px",
+                                              borderRadius: "6px",
+                                              border: "none",
+                                              background: isCurrent
+                                                ? "rgba(255, 255, 255, 0.12)"
+                                                : "transparent",
+                                              color: isCurrent
+                                                ? "#ffffff"
+                                                : "var(--lyrical-text-secondary)",
+                                              fontSize: "11px",
+                                              fontWeight: isCurrent
+                                                ? "650"
+                                                : "500",
+                                              cursor: "pointer",
+                                              textAlign: "left",
+                                              whiteSpace: "nowrap",
+                                              transition: "background 0.12s ease",
+                                            }}
+                                          >
+                                            <span>{trackName}</span>
+                                            {isCurrent && (
+                                              <Check
+                                                size={11}
+                                                style={{
+                                                  marginLeft: 8,
+                                                  color: "#38bdf8",
+                                                  flexShrink: 0,
+                                                }}
+                                              />
+                                            )}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {currentRomanizedCount > 0 ? (
                                 <span
                                   style={{
                                     display: "inline-flex",
@@ -798,18 +1064,21 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                     borderRadius: "999px",
                                     background: "rgba(168, 85, 247, 0.14)",
                                     color: "#c084fc",
-                                    border: "1px solid rgba(168, 85, 247, 0.25)",
+                                    border:
+                                      "1px solid rgba(168, 85, 247, 0.25)",
                                     fontSize: "11px",
                                     fontWeight: "600",
                                   }}
-                                  title={`${entry.romanizedCount} romanized lines cached`}
+                                  title={`${currentRomanizedCount} romanized lines cached`}
                                 >
                                   <Type size={11} />
-                                  <span>Romanized ({entry.romanizedCount})</span>
+                                  <span>
+                                    Romanized ({currentRomanizedCount})
+                                  </span>
                                 </span>
                               ) : null}
 
-                              {entry.translatedCount > 0 ? (
+                              {currentTranslatedCount > 0 ? (
                                 <span
                                   style={{
                                     display: "inline-flex",
@@ -819,19 +1088,22 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                     borderRadius: "999px",
                                     background: "rgba(59, 130, 246, 0.14)",
                                     color: "#60a5fa",
-                                    border: "1px solid rgba(59, 130, 246, 0.25)",
+                                    border:
+                                      "1px solid rgba(59, 130, 246, 0.25)",
                                     fontSize: "11px",
                                     fontWeight: "600",
                                   }}
-                                  title={`${entry.translatedCount} translated lines cached`}
+                                  title={`${currentTranslatedCount} translated lines cached`}
                                 >
                                   <Languages size={11} />
-                                  <span>Translated ({entry.translatedCount})</span>
+                                  <span>
+                                    Translated ({currentTranslatedCount})
+                                  </span>
                                 </span>
                               ) : null}
                             </div>
 
-                            {entry.preview ? (
+                            {currentPreview ? (
                               <div
                                 style={{
                                   fontSize: "12px",
@@ -839,7 +1111,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                   lineHeight: "1.5",
                                 }}
                               >
-                                {entry.preview}
+                                {currentPreview}
                               </div>
                             ) : null}
                           </div>
@@ -995,7 +1267,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                   </div>
                                 )}
 
-                                {entry.lineCount > 0 &&
+                                {currentLineCount > 0 &&
                                 (viewTabs[entry.key] || "formatted") ===
                                   "formatted" ? (
                                   <div
@@ -1008,17 +1280,17 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                       paddingRight: "4px",
                                     }}
                                   >
-                                    {entry.value.lyrics.map(
+                                    {currentLyrics.map(
                                       (line: any, idx: number) => {
                                         const rom =
-                                          entry.romanizedLyrics?.[idx]
+                                          currentRomanized?.[idx]
                                             ?.romanized ||
-                                          entry.romanizedLyrics?.[idx]
+                                          currentRomanized?.[idx]
                                             ?.romanization;
                                         const trans =
-                                          entry.translatedLyrics?.[idx]
+                                          currentTranslated?.[idx]
                                             ?.translated ||
-                                          entry.translatedLyrics?.[idx]
+                                          currentTranslated?.[idx]
                                             ?.translation;
 
                                         return (

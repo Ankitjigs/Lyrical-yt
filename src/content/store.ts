@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { DEFAULT_THEME_ID } from "../themes";
 import type {
+  CaptionTrackInfo,
   CustomTheme,
   LyricalLyricLine,
   LyricsSourceId,
@@ -157,6 +158,9 @@ interface LyricalAppState extends LyricalSettingsState {
   lyricsLanguage: string | null;
   translatedLyrics: LyricalLyricLine[];
   romanizedLyrics: LyricalLyricLine[];
+  availableCaptionTracks: CaptionTrackInfo[];
+  selectedCaptionTrackId: string | null;
+  captionLanguageLabel: string | null;
   activeIndex: number;
   isExpanded: boolean;
   isLoading: boolean;
@@ -171,6 +175,9 @@ interface LyricalAppState extends LyricalSettingsState {
   setAvailableLyricsSources: (sources: LyricsSourceId[]) => void;
   addAvailableLyricsSource: (source: LyricsSourceId | null | undefined) => void;
   clearAvailableLyricsSources: () => void;
+  setAvailableCaptionTracks: (tracks: CaptionTrackInfo[]) => void;
+  setSelectedCaptionTrackId: (id: string | null) => void;
+  setCaptionLanguageLabel: (label: string | null) => void;
   setTranslatedLyrics: (translated: LyricalLyricLine[]) => void;
   setRomanizedLyrics: (romanized: LyricalLyricLine[]) => void;
   setActiveIndex: (index: number) => void;
@@ -197,6 +204,9 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   lyrics: [], // Array of { time, text }
   lyricsSource: null, // 'better_lyrics', 'musixmatch', 'musixmatch-richsync', 'lyrical', 'captions', 'lrclib'
   availableLyricsSources: [],
+  availableCaptionTracks: [],
+  selectedCaptionTrackId: null,
+  captionLanguageLabel: null,
   lyricsLanguage: null, // e.g. 'hi', 'en', 'ko' — used for conditional font loading
   translatedLyrics: [], // Array of { time, text, translated }
   romanizedLyrics: [], // Array of { time, text, romanized }
@@ -265,6 +275,12 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       };
     }),
   clearAvailableLyricsSources: () => set({ availableLyricsSources: [] }),
+  setAvailableCaptionTracks: (tracks) =>
+    set({
+      availableCaptionTracks: Array.isArray(tracks) ? tracks : [],
+    }),
+  setSelectedCaptionTrackId: (id) => set({ selectedCaptionTrackId: id }),
+  setCaptionLanguageLabel: (label) => set({ captionLanguageLabel: label }),
   setTranslatedLyrics: (translated) => set({ translatedLyrics: translated }),
   setRomanizedLyrics: (romanized) => set({ romanizedLyrics: romanized }),
   setActiveIndex: (index) => set({ activeIndex: index }),
@@ -315,6 +331,9 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       lyrics: [],
       lyricsSource: null,
       availableLyricsSources: [],
+      availableCaptionTracks: [],
+      selectedCaptionTrackId: null,
+      captionLanguageLabel: null,
       translatedLyrics: [],
       romanizedLyrics: [],
       activeIndex: -1,
@@ -329,6 +348,9 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       lyrics: [],
       lyricsSource: null,
       availableLyricsSources: [],
+      availableCaptionTracks: [],
+      selectedCaptionTrackId: null,
+      captionLanguageLabel: null,
       translatedLyrics: [],
       romanizedLyrics: [],
       activeIndex: -1,

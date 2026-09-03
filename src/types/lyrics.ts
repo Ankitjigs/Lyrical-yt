@@ -9,6 +9,15 @@ export type LyricsSourceId =
   | "lrclib"
   | string;
 
+export interface CaptionTrackInfo {
+  vssId: string;
+  languageCode: string;
+  name: string;
+  kind?: string;
+  url: string;
+  isAsr?: boolean;
+}
+
 export interface SongInfo {
   title?: string;
   artist?: string;

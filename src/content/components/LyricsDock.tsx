@@ -14,7 +14,11 @@ import {
 import { useAppStore, DEFAULT_SOURCE_PREFERENCES } from "../store";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
-import type { LyricsSourceId, SourcePreference } from "../../types/lyrics";
+import type {
+  CaptionTrackInfo,
+  LyricsSourceId,
+  SourcePreference,
+} from "../../types/lyrics";
 import { useShallow } from "zustand/react/shallow";
 
 const PLATFORM_OFFSET = -0.45;
@@ -115,6 +119,9 @@ export default function LyricsDock({
     isLoading,
     reduceAnimations,
     lyrics,
+    availableCaptionTracks,
+    selectedCaptionTrackId,
+    captionLanguageLabel,
   } = useAppStore(
     useShallow((state) => ({
       sourcePreferences: state.sourcePreferences,
@@ -124,10 +131,14 @@ export default function LyricsDock({
       isLoading: state.isLoading,
       reduceAnimations: state.reduceAnimations,
       lyrics: state.lyrics,
+      availableCaptionTracks: state.availableCaptionTracks,
+      selectedCaptionTrackId: state.selectedCaptionTrackId,
+      captionLanguageLabel: state.captionLanguageLabel,
     })),
   );
   const [isOffsetOpen, setIsOffsetOpen] = useState(false);
   const [isSourceMenuOpen, setIsSourceMenuOpen] = useState(false);
+  const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null);
   const sourceMenuRef = useRef<HTMLDivElement>(null);
   const sourcePillRef = useRef<HTMLButtonElement>(null);
 
@@ -179,8 +190,32 @@ export default function LyricsDock({
     displayName = "Searching...";
     tooltipContent = "Searching for lyrics...";
   } else if (hasLyrics && activeOption) {
-    displayName = DOCK_SHORT_LABELS[activeOption.id] || activeOption.label;
-    tooltipContent = `Click to pick source • ${activeOption.label} (${activeIndex + 1}/${sourceOptions.length || 1})`;
+    if (activeOption.id === "captions") {
+      let shortLang = (captionLanguageLabel || "EN").trim().toUpperCase();
+      const codeMap: Record<string, string> = {
+        ENGLISH: "EN",
+        JAPANESE: "JA",
+        SPANISH: "ES",
+        FRENCH: "FR",
+        GERMAN: "DE",
+        HINDI: "HI",
+        KOREAN: "KO",
+        CHINESE: "ZH",
+        RUSSIAN: "RU",
+        ITALIAN: "IT",
+        PORTUGUESE: "PT",
+      };
+      if (codeMap[shortLang]) {
+        shortLang = codeMap[shortLang];
+      } else if (shortLang.length > 4 && !shortLang.includes(" ")) {
+        shortLang = shortLang.slice(0, 2);
+      }
+      displayName = `Captions (${shortLang})`;
+      tooltipContent = `Click to pick source • YouTube Captions (${shortLang}) (${activeIndex + 1}/${sourceOptions.length || 1})`;
+    } else {
+      displayName = DOCK_SHORT_LABELS[activeOption.id] || activeOption.label;
+      tooltipContent = `Click to pick source • ${activeOption.label} (${activeIndex + 1}/${sourceOptions.length || 1})`;
+    }
   }
 
   useEffect(() => {
@@ -198,12 +233,14 @@ export default function LyricsDock({
 
       if (!isInsideMenu && !isInsidePill) {
         setIsSourceMenuOpen(false);
+        setHoveredSourceId(null);
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsSourceMenuOpen(false);
+        setHoveredSourceId(null);
       }
     };
 
@@ -231,10 +268,21 @@ export default function LyricsDock({
 
   const selectSourceById = (sourceId: LyricsSourceId) => {
     setIsSourceMenuOpen(false);
+    setHoveredSourceId(null);
     if (sourceId === activePreferenceId) return;
     window.dispatchEvent(
       new CustomEvent("lyrical-select-source", {
         detail: { sourceId },
+      }),
+    );
+  };
+
+  const selectCaptionTrack = (track: CaptionTrackInfo) => {
+    setIsSourceMenuOpen(false);
+    setHoveredSourceId(null);
+    window.dispatchEvent(
+      new CustomEvent("lyrical-select-caption-track", {
+        detail: { track },
       }),
     );
   };
@@ -335,28 +383,114 @@ export default function LyricsDock({
                 {sourceOptions.map((source) => {
                   const isSelected = source.id === activePreferenceId;
                   const tag = (source.tags?.[0] || "LINE").toLowerCase();
+                  const isCaptions = source.id === "captions";
+                  const hasMultipleCaptionTracks =
+                    isCaptions && availableCaptionTracks.length > 1;
+
                   return (
-                    <button
+                    <div
                       key={source.id}
-                      type="button"
-                      data-sync-type={tag}
-                      className={`lyrical-dock-source-menu-item ${
-                        isSelected ? "active" : ""
-                      }`}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        selectSourceById(source.id);
+                      className="lyrical-dock-source-item-wrap"
+                      onMouseEnter={() => {
+                        if (hasMultipleCaptionTracks) {
+                          setHoveredSourceId("captions");
+                        } else {
+                          setHoveredSourceId(null);
+                        }
+                      }}
+                      onMouseLeave={() => {
+                        if (isCaptions) {
+                          setHoveredSourceId(null);
+                        }
                       }}
                     >
-                      <span className="lyrical-dock-source-menu-icon">
-                        <SyncTypeIcon type={tag} />
-                      </span>
-                      <span className="lyrical-dock-source-menu-label">
-                        {source.label}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        data-sync-type={tag}
+                        className={`lyrical-dock-source-menu-item ${
+                          isSelected ? "active" : ""
+                        }`}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          selectSourceById(source.id);
+                        }}
+                      >
+                        <span className="lyrical-dock-source-menu-icon">
+                          <SyncTypeIcon type={tag} />
+                        </span>
+                        <span className="lyrical-dock-source-menu-label">
+                          {source.label}
+                        </span>
+                        {hasMultipleCaptionTracks && (
+                          <span className="lyrical-dock-source-chevron">
+                            <ChevronRight size={13} />
+                          </span>
+                        )}
+                      </button>
+
+                      <AnimatePresence>
+                        {isCaptions &&
+                          hoveredSourceId === "captions" &&
+                          hasMultipleCaptionTracks && (
+                            <motion.div
+                              className="lyrical-dock-source-submenu"
+                              initial={{ opacity: 0, x: -6, scale: 0.96 }}
+                              animate={{ opacity: 1, x: 0, scale: 1 }}
+                              exit={{ opacity: 0, x: -6, scale: 0.96 }}
+                              transition={{ duration: 0.14, ease: "easeOut" }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
+                            >
+                              {availableCaptionTracks.map((track, idx) => {
+                                const trackLang = (track.languageCode || "").split("-")[0].toLowerCase();
+                                const selectedLang = selectedCaptionTrackId
+                                  ? selectedCaptionTrackId.replace(/^[a.]/, "").split("-")[0].toLowerCase()
+                                  : null;
+                                const activeLabelClean = (captionLanguageLabel || "")
+                                  .replace(/^CAPTIONS\s*\(/i, "")
+                                  .replace(/\)$/, "")
+                                  .trim()
+                                  .toLowerCase();
+                                const isCurrentAsr = activeLabelClean.includes("auto");
+                                const currentActiveLang = activeLabelClean.replace(/\(auto\)/i, "").trim();
+
+                                const isTrackActive =
+                                  (selectedCaptionTrackId && selectedCaptionTrackId === track.vssId) ||
+                                  (selectedCaptionTrackId && selectedLang === trackLang && Boolean(track.isAsr) === (selectedCaptionTrackId.includes("asr") || selectedCaptionTrackId.startsWith("a."))) ||
+                                  (currentActiveLang && (trackLang === currentActiveLang || track.name.toLowerCase().startsWith(currentActiveLang) || currentActiveLang.startsWith(trackLang)) && Boolean(track.isAsr) === isCurrentAsr) ||
+                                  (!selectedCaptionTrackId && !currentActiveLang && idx === 0);
+                                return (
+                                  <button
+                                    key={track.vssId || track.url}
+                                    type="button"
+                                    className={`lyrical-dock-source-submenu-item ${
+                                      isTrackActive ? "active" : ""
+                                    }`}
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onMouseDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      selectCaptionTrack(track);
+                                    }}
+                                  >
+                                    <span className="lyrical-dock-source-menu-label">
+                                      {track.name}
+                                    </span>
+                                    {isTrackActive && (
+                                      <Check
+                                        size={12}
+                                        className="lyrical-dock-submenu-check"
+                                      />
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </motion.div>
+                          )}
+                      </AnimatePresence>
+                    </div>
                   );
                 })}
               </motion.div>

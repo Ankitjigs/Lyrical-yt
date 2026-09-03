@@ -727,4 +727,75 @@ if (getVideoId()) {
   scheduleExtraction(500); // Start polling for movie_player sooner
 }
 
+window.addEventListener("message", async (event) => {
+  if (
+    event.source !== window ||
+    event.data?.type !== "LYRICAL_FETCH_TRACK_REQUEST"
+  )
+    return;
+  const { trackId, languageCode, isAsr, requestId } = event.data;
+  try {
+    const player = document.getElementById("movie_player");
+    const tracks = getTracksFromPlayer(player);
+    if (!tracks || tracks.length === 0) {
+      window.postMessage(
+        { type: "LYRICAL_FETCH_TRACK_RESPONSE", requestId, success: false },
+        "*",
+      );
+      return;
+    }
+    const cleanTarget = (languageCode || "").split("-")[0].toLowerCase();
+    const match =
+      tracks.find((t) => t.vssId && t.vssId === trackId) ||
+      tracks.find((t) => {
+        const lang = (getTrackLang(t) || "").split("-")[0].toLowerCase();
+        const atIsAsr =
+          t.kind === "asr" || String(t.vssId || "").startsWith("a.");
+        return lang === cleanTarget && atIsAsr === Boolean(isAsr);
+      }) ||
+      tracks.find(
+        (t) => (getTrackLang(t) || "").split("-")[0].toLowerCase() === cleanTarget,
+      );
+
+    if (!match) {
+      window.postMessage(
+        { type: "LYRICAL_FETCH_TRACK_RESPONSE", requestId, success: false },
+        "*",
+      );
+      return;
+    }
+
+    const lyrics = await fetchCaptionDataForTrack(match);
+    if (lyrics && lyrics.length > 0) {
+      window.postMessage(
+        {
+          type: "LYRICAL_FETCH_TRACK_RESPONSE",
+          requestId,
+          success: true,
+          lyrics,
+          trackId: match.vssId || trackId,
+          languageCode: getTrackLang(match) || languageCode,
+          isAsr: match.kind === "asr" || Boolean(isAsr),
+        },
+        "*",
+      );
+    } else {
+      window.postMessage(
+        { type: "LYRICAL_FETCH_TRACK_RESPONSE", requestId, success: false },
+        "*",
+      );
+    }
+  } catch (err) {
+    window.postMessage(
+      {
+        type: "LYRICAL_FETCH_TRACK_RESPONSE",
+        requestId,
+        success: false,
+        error: String(err),
+      },
+      "*",
+    );
+  }
+});
+
 console.log("[Lyrical Extractor] Loaded");

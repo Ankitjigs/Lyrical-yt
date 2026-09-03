@@ -15,6 +15,7 @@ import lyricsEffectsStyles from "./lyricsEffects.css?inline";
 import shinyTextStyles from "./components/ShinyText.css?inline";
 import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
+import type { CaptionTrackInfo } from "../types/lyrics";
 
 const SHADOW_HOST_STYLES = `
   :host {
@@ -413,6 +414,7 @@ let captionUrlFromMainWorld = null;
 let captionUrlRawFromMainWorld = null;
 let pendingMainWorldCaptionLyrics = null;
 let pendingMainWorldCaptionLanguage = null;
+let pendingMainWorldCaptionTrack: any = null;
 let pendingMainWorldCaptionVideoId = null;
 let pendingMainWorldCaptionFailed = false;
 let mainWorldCaptionTracksVideoId = null;
@@ -505,6 +507,9 @@ window.addEventListener("message", (event) => {
     availableCaptions = tracks;
     mainWorldCaptionTracksVideoId = currentVideoId || eventVideoId || null;
 
+    // Normalize caption tracks and store them for the dock picker
+    syncAvailableCaptionTracks(tracks);
+
     // Queue MAIN-world prefetched lyrics. They should only be consumed when
     // source order reaches "captions" (after earlier sources fail).
     if (phase === "failed") {
@@ -518,11 +523,14 @@ window.addEventListener("message", (event) => {
       pendingMainWorldCaptionLanguage = getCaptionTrackLang(
         event.data.selectedTrack,
       );
+      pendingMainWorldCaptionTrack = event.data.selectedTrack;
       pendingMainWorldCaptionVideoId = currentVideoId || eventVideoId || null;
       log(
         "Queued pre-fetched captions from main world:",
         lyrics.length,
         "lines",
+        "lang:",
+        pendingMainWorldCaptionLanguage,
       );
 
       // Recovery hook: when lyrics arrive late from MAIN world, run a delayed
@@ -1645,20 +1653,177 @@ function shouldRefreshParagraphAwareCache(entry, sourceId) {
   return (entry?.cacheSchemaVersion || 0) < LYRICS_CACHE_SCHEMA_VERSION;
 }
 
-async function persistLyricsCache(songInfo, sourceId, lyrics, extra = {}) {
+function formatCaptionLanguageLabel(
+  language?: string | null,
+  isAsr = false,
+  fallbackLabel = "",
+): string {
+  const isCode =
+    !fallbackLabel ||
+    fallbackLabel.length <= 3 ||
+    /^[a-z]{2,3}(-[a-z0-9]+)?$/i.test(fallbackLabel.trim());
+
+  if (
+    !isCode &&
+    !fallbackLabel.toLowerCase().startsWith("captions") &&
+    fallbackLabel.toLowerCase() !== "youtube captions"
+  ) {
+    return isAsr && !fallbackLabel.toLowerCase().includes("auto")
+      ? `${fallbackLabel} (auto)`
+      : fallbackLabel;
+  }
+
+  const rawCode = language || fallbackLabel || "en";
+  const cleanCode = rawCode.split("-")[0].toLowerCase();
+
+  if (cleanCode && cleanCode !== "default" && cleanCode !== "auto") {
+    try {
+      const name = new Intl.DisplayNames(["en"], { type: "language" }).of(
+        cleanCode,
+      );
+      if (name) {
+        return isAsr ? `${name} (auto)` : name;
+      }
+    } catch {}
+    return isAsr
+      ? `${cleanCode.toUpperCase()} (auto)`
+      : cleanCode.toUpperCase();
+  }
+
+  return isAsr ? "English (auto)" : "English";
+}
+
+function isValidCachedTrackLyrics(cachedTrack: any, expectedLang: string): boolean {
+  if (!cachedTrack?.lyrics || !Array.isArray(cachedTrack.lyrics) || cachedTrack.lyrics.length === 0) {
+    return false;
+  }
+  if (!expectedLang || expectedLang === "auto") return true;
+  const cleanLang = expectedLang.split("-")[0].toLowerCase();
+
+  const sample = cachedTrack.lyrics
+    .slice(0, 25)
+    .map((l: any) => l?.text || "")
+    .join(" ");
+
+  // If expected language is Japanese, it MUST contain Japanese characters (Hiragana/Katakana/CJK)
+  if (cleanLang === "ja") {
+    return /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]/.test(sample);
+  }
+  // If expected language is Hindi, must contain Devanagari
+  if (cleanLang === "hi") {
+    return /[\u0900-\u097F]/.test(sample);
+  }
+  // If expected language is Korean, must contain Hangul
+  if (cleanLang === "ko") {
+    return /[\uAC00-\uD7AF\u1100-\u11FF]/.test(sample);
+  }
+  // If expected language is Russian, must contain Cyrillic
+  if (cleanLang === "ru") {
+    return /[\u0400-\u04FF]/.test(sample);
+  }
+  // If expected language is Arabic, must contain Arabic
+  if (cleanLang === "ar") {
+    return /[\u0600-\u06FF]/.test(sample);
+  }
+
+  return true;
+}
+
+async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
   if (!Array.isArray(lyrics) || lyrics.length === 0 || !sourceId) return;
 
   const genericKey = getLyricsCacheKey(songInfo);
   const sourceKey = getLyricsCacheKey(songInfo, sourceId);
   if (!genericKey || !sourceKey) return;
 
-  const entry = {
+  let tracksMap: Record<string, any> | undefined = undefined;
+  let activeTrackId: string | undefined = undefined;
+
+  if (sourceId === "captions") {
+    try {
+      if (hasLocalStorageApi() && chrome?.storage?.local?.get) {
+        const existing = await chrome.storage.local.get([sourceKey]);
+        const prevEntry = existing?.[sourceKey] || {};
+        const prevTracks = prevEntry.tracks || {};
+        const rawLang =
+          extra.language || useAppStore.getState().lyricsLanguage || "auto";
+        const lang = rawLang.split("-")[0].toLowerCase();
+        const isAsr =
+          extra.isAsr ??
+          (String(extra.trackId || "").includes("asr") ||
+            String(extra.label || "").toLowerCase().includes("auto"));
+        const trackLabel = formatCaptionLanguageLabel(
+          lang,
+          isAsr,
+          extra.label || "",
+        );
+        const trackId =
+          extra.trackId ||
+          `${lang}-${isAsr ? "asr" : "manual"}`;
+
+        activeTrackId = trackId;
+
+        const updatedTracks: Record<string, any> = {};
+        for (const [key, oldTrack] of Object.entries(prevTracks) as [
+          string,
+          any,
+        ][]) {
+          const oldLang = (oldTrack.language || "").split("-")[0].toLowerCase();
+          const oldIsAsr =
+            Boolean(oldTrack.isAsr) ||
+            String(key).includes("asr") ||
+            String(oldTrack.label || "").toLowerCase().includes("auto");
+
+          // Clean up any historical corrupted entries where key is ja/japanese but language was saved as en
+          if (
+            (key.toLowerCase().includes("ja") || key.toLowerCase().includes("japanese")) &&
+            oldLang === "en"
+          ) {
+            continue;
+          }
+
+          if (oldLang === lang && oldIsAsr === isAsr) {
+            continue; // replace old key with current unique trackId
+          }
+          updatedTracks[key] = oldTrack;
+        }
+
+        updatedTracks[trackId] = {
+          trackId,
+          language: lang,
+          label: trackLabel,
+          isAsr,
+          lyrics,
+          romanizedLyrics:
+            extra.romanizedLyrics ||
+            prevTracks[trackId]?.romanizedLyrics ||
+            [],
+          translatedLyrics:
+            extra.translatedLyrics ||
+            prevTracks[trackId]?.translatedLyrics ||
+            [],
+          timestamp: Date.now(),
+        };
+
+        tracksMap = updatedTracks;
+      }
+    } catch (e) {
+      console.warn("[Lyrical Panel] Error preparing captions track cache:", e);
+    }
+  }
+
+  const entry: any = {
     lyrics,
     source: sourceId,
     cacheSchemaVersion: LYRICS_CACHE_SCHEMA_VERSION,
     timestamp: Date.now(),
     ...extra,
   };
+
+  if (tracksMap) {
+    entry.tracks = tracksMap;
+    entry.activeTrackId = activeTrackId;
+  }
 
   try {
     if (!hasLocalStorageApi() || !chrome?.storage?.local?.set) {
@@ -1682,14 +1847,42 @@ function restoreLyricsFromCacheEntry(
   if (!entry?.lyrics || entry.lyrics.length === 0) return false;
   if (shouldRefreshParagraphAwareCache(entry, fallbackSourceId)) return false;
 
-  fetchedLyrics = entry.lyrics;
+  const currentSource = entry.source || fallbackSourceId || "unknown";
+  let activeLyrics = entry.lyrics;
+  let activeLang = entry.language || "auto";
+  let activeRomanized = entry.romanizedLyrics || [];
+  let activeTranslated = entry.translatedLyrics || [];
+  let activeTrackId = entry.activeTrackId || null;
+
+  if (currentSource === "captions" || fallbackSourceId === "captions") {
+    if (entry.tracks && typeof entry.tracks === "object") {
+      const activeTrack = activeTrackId
+        ? entry.tracks[activeTrackId]
+        : Object.values(entry.tracks)[0];
+      if (
+        activeTrack?.lyrics?.length > 0 &&
+        isValidCachedTrackLyrics(
+          activeTrack,
+          activeTrack.language || activeLang,
+        )
+      ) {
+        activeLyrics = activeTrack.lyrics;
+        activeLang = activeTrack.language || activeLang;
+        activeRomanized = activeTrack.romanizedLyrics || activeRomanized;
+        activeTranslated = activeTrack.translatedLyrics || activeTranslated;
+        activeTrackId = activeTrack.trackId || activeTrackId;
+      }
+    }
+  }
+
+  fetchedLyrics = activeLyrics;
   lyricsByVersion.default = {
     id: `${fallbackSourceId || entry.source || "cached"}-cache`,
     label:
       entry.label ||
       getCacheLabelForSource(entry.source || fallbackSourceId, fallbackLabel),
     synced: true,
-    lyrics: entry.lyrics,
+    lyrics: activeLyrics,
   };
 
   lyricsJustLoaded = true;
@@ -1699,20 +1892,77 @@ function restoreLyricsFromCacheEntry(
   useAppStore
     .getState()
     .setLyrics(
-      entry.lyrics,
-      entry.source || fallbackSourceId || "unknown",
-      detectLyricsLanguage(entry.lyrics, entry.language),
+      activeLyrics,
+      currentSource,
+      detectLyricsLanguage(activeLyrics, activeLang),
     );
 
-  if (entry.romanizedLyrics?.length || entry.translatedLyrics?.length) {
-    updateSecondaryLyricsState({
-      romanizedLyrics: entry.romanizedLyrics || [],
-      translatedLyrics: entry.translatedLyrics || [],
+  if (currentSource === "captions" || fallbackSourceId === "captions") {
+    const shortLang = (activeLang || "auto").split("-")[0].toUpperCase();
+    useAppStore.setState({
+      captionLanguageLabel: shortLang,
+      selectedCaptionTrackId: activeTrackId,
     });
+
+    if (availableCaptions && availableCaptions.length > 0) {
+      syncAvailableCaptionTracks(availableCaptions);
+    } else if (entry.tracks && typeof entry.tracks === "object") {
+      const cachedTrackList = Object.values(entry.tracks);
+      if (cachedTrackList.length > 0) {
+        const dedupMap = new Map<string, CaptionTrackInfo>();
+        cachedTrackList.forEach((t: any, idx: number) => {
+          const rawLang = t.language || "auto";
+          const lang = rawLang.split("-")[0].toLowerCase();
+          const vssId = t.trackId || `${lang}-${idx}`;
+          const isAsr =
+            Boolean(t.isAsr) ||
+            String(vssId).includes("asr") ||
+            String(t.label || "").toLowerCase().includes("auto");
+          const displayName = formatCaptionLanguageLabel(
+            lang,
+            isAsr,
+            t.label || "",
+          );
+          const dedupKey = `${lang}-${isAsr ? "asr" : "manual"}`;
+          if (!dedupMap.has(dedupKey) || (t.lyrics?.length && !dedupMap.get(dedupKey)?.url)) {
+            dedupMap.set(dedupKey, {
+              vssId,
+              languageCode: lang,
+              name: displayName,
+              kind: isAsr ? "asr" : "manual",
+              url: t.url || "",
+              isAsr,
+            });
+          }
+        });
+        const normalizedTracks = Array.from(dedupMap.values());
+        useAppStore.setState({
+          availableCaptionTracks: normalizedTracks,
+          selectedCaptionTrackId:
+            activeTrackId || normalizedTracks[0]?.vssId,
+          captionLanguageLabel: (
+            activeLang ||
+            normalizedTracks[0]?.languageCode ||
+            "auto"
+          )
+            .split("-")[0]
+            .toUpperCase(),
+        });
+      }
+    }
   }
 
-  startLyricsTimer(entry.lyrics);
-  autoProcessLyrics();
+  if (activeRomanized?.length || activeTranslated?.length) {
+    updateSecondaryLyricsState({
+      romanizedLyrics: activeRomanized,
+      translatedLyrics: activeTranslated,
+      isProcessingLyrics: false,
+    });
+  } else {
+    autoProcessLyrics();
+  }
+
+  startLyricsTimer(activeLyrics);
 
   setTimeout(() => {
     lyricsJustLoaded = false;
@@ -1812,6 +2062,7 @@ function resetLyricsState(reason = "", options: any = {}) {
     captionUrlRawFromMainWorld = null;
     pendingMainWorldCaptionLyrics = null;
     pendingMainWorldCaptionLanguage = null;
+    pendingMainWorldCaptionTrack = null;
     pendingMainWorldCaptionVideoId = null;
     pendingMainWorldCaptionFailed = false;
     mainWorldCaptionTracksVideoId = null;
@@ -2101,6 +2352,7 @@ async function displayPrefetchedCaptions(lyrics, languageCode) {
 
   lyricsJustLoaded = true;
   lyricsRendered = false;
+  syncAvailableCaptionTracks(availableCaptions);
   useAppStore
     .getState()
     .setLyrics(
@@ -2108,6 +2360,9 @@ async function displayPrefetchedCaptions(lyrics, languageCode) {
       "captions",
       detectLyricsLanguage(fetchedLyrics, languageCode),
     );
+  useAppStore.setState({
+    captionLanguageLabel: (languageCode || "auto").toUpperCase(),
+  });
   persistLyricsCache(currentSongInfo, "captions", fetchedLyrics, {
     label: `Captions (${languageCode || "auto"})`,
     language: languageCode || null,
@@ -2167,20 +2422,125 @@ function normalizeCaptionTiming(lyrics) {
   return normalized;
 }
 
-function getCaptionTrackLang(track) {
+function getCaptionTrackLang(track: any) {
   return track?.languageCode || track?.lang || null;
 }
 
-function getCaptionTrackName(track) {
-  return track?.name?.simpleText || track?.name || "";
+function getCaptionTrackName(track: any): string {
+  if (!track) return "";
+  if (track.name?.simpleText) return track.name.simpleText;
+  if (Array.isArray(track.name?.runs) && track.name.runs[0]?.text) {
+    return track.name.runs.map((r: any) => r?.text || "").join("");
+  }
+  if (typeof track.name === "string") return track.name;
+  if (track.languageName) return track.languageName;
+  return track.languageCode || track.lang || "";
 }
 
-function getCaptionTrackUrl(track) {
-  const raw = track?.baseUrl || track?.url || null;
+function getCaptionTrackUrl(track: any) {
+  const raw = track?.baseUrl || track?.url || track?.link || null;
   if (!raw) return null;
   return String(raw)
     .replace(/\\u0026/g, "&")
     .replace(/&amp;/g, "&");
+}
+
+async function syncAvailableCaptionTracks(tracks: any[]) {
+  const trackList = Array.isArray(tracks) ? tracks : [];
+  const trackDedupMap = new Map<string, CaptionTrackInfo>();
+
+  trackList.forEach((t: any, idx: number) => {
+    const rawLang = getCaptionTrackLang(t) || "auto";
+    const lang = rawLang.split("-")[0].toLowerCase();
+    const rawName = getCaptionTrackName(t) || lang;
+    const url = getCaptionTrackUrl(t) || "";
+    const isAsr =
+      t.kind === "asr" ||
+      String(t.vssId || "").startsWith("a.") ||
+      String(rawName).toLowerCase().includes("auto-generated") ||
+      String(rawName).toLowerCase().includes("auto-gen") ||
+      String(rawName).toLowerCase().includes("auto");
+    const cleanName =
+      String(rawName)
+        .replace(/\(auto-generated\)/i, "")
+        .replace(/\(auto-gen\)/i, "")
+        .replace(/\(auto\)/i, "")
+        .trim() || lang;
+    const displayName = formatCaptionLanguageLabel(lang, isAsr, cleanName);
+    const vssId = t.vssId || `${lang}-${isAsr ? "asr" : "manual"}-${idx}`;
+    const dedupKey = `${lang}-${isAsr ? "asr" : "manual"}`;
+
+    trackDedupMap.set(dedupKey, {
+      vssId,
+      languageCode: lang,
+      name: displayName,
+      kind: isAsr ? "asr" : "manual",
+      url,
+      isAsr,
+    });
+  });
+
+  if (currentSongInfo && hasLocalStorageApi() && chrome?.storage?.local?.get) {
+    try {
+      const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
+      if (sourceKey) {
+        const stored = await chrome.storage.local.get([sourceKey]);
+        const cachedTracks = stored?.[sourceKey]?.tracks;
+        if (cachedTracks && typeof cachedTracks === "object") {
+          Object.values(cachedTracks).forEach((ct: any, idx: number) => {
+            const rawLang = ct.language || "auto";
+            const lang = rawLang.split("-")[0].toLowerCase();
+            const isAsr =
+              Boolean(ct.isAsr) ||
+              String(ct.trackId || "").includes("asr") ||
+              String(ct.label || "").toLowerCase().includes("auto");
+            const dedupKey = `${lang}-${isAsr ? "asr" : "manual"}`;
+
+            if (trackDedupMap.has(dedupKey)) {
+              const existing = trackDedupMap.get(dedupKey)!;
+              if (!existing.url && ct.url) {
+                existing.url = ct.url;
+              }
+            } else {
+              const displayName = formatCaptionLanguageLabel(
+                lang,
+                isAsr,
+                ct.label || "",
+              );
+              const vssId =
+                ct.trackId || `${lang}-${isAsr ? "asr" : "manual"}-${idx}`;
+              trackDedupMap.set(dedupKey, {
+                vssId,
+                languageCode: lang,
+                name: displayName,
+                kind: isAsr ? "asr" : "manual",
+                url: ct.url || "",
+                isAsr,
+              });
+            }
+          });
+        }
+      }
+    } catch {}
+  }
+
+  const finalTracks = Array.from(trackDedupMap.values());
+  if (finalTracks.length > 0) {
+    const currentSelected = useAppStore.getState().selectedCaptionTrackId;
+    const currentLabel = (useAppStore.getState().captionLanguageLabel || "").toLowerCase();
+    let activeId = currentSelected;
+    if (!activeId || !finalTracks.some((t) => t.vssId === activeId)) {
+      const match =
+        finalTracks.find((t) => currentLabel.includes(t.languageCode.toLowerCase()) && !t.isAsr) ||
+        finalTracks.find((t) => currentLabel.includes(t.languageCode.toLowerCase())) ||
+        finalTracks[0];
+      activeId = match?.vssId || null;
+    }
+    useAppStore.setState({
+      availableCaptionTracks: finalTracks,
+      ...(activeId ? { selectedCaptionTrackId: activeId } : {}),
+    });
+  }
 }
 
 function isTranslatedEnglishTrack(track) {
@@ -2216,6 +2576,7 @@ async function tryDisplayCaptions() {
   let lyrics = null;
   let methodUsed = "none";
   let languageCode = null;
+  let selectedTrack: any = null;
 
   // METHOD 0: Consume MAIN-world prefetched captions, but only when this
   // ordered captions source is being evaluated.
@@ -2227,6 +2588,7 @@ async function tryDisplayCaptions() {
   ) {
     lyrics = pendingMainWorldCaptionLyrics;
     languageCode = pendingMainWorldCaptionLanguage || "auto";
+    selectedTrack = pendingMainWorldCaptionTrack;
     methodUsed = "main-world-prefetch";
     log("Using queued MAIN-world prefetched captions:", lyrics.length);
   }
@@ -2254,7 +2616,7 @@ async function tryDisplayCaptions() {
     );
 
     const orderedTracks = [...manualTracks, ...asrTracks];
-    const selectedTrack = orderedTracks[0];
+    selectedTrack = orderedTracks[0];
 
     if (selectedTrack) {
       const selectedTrackUrl = getCaptionTrackUrl(selectedTrack);
@@ -2319,6 +2681,7 @@ async function tryDisplayCaptions() {
 
     lyricsJustLoaded = true;
     lyricsRendered = false;
+    syncAvailableCaptionTracks(availableCaptions);
     useAppStore
       .getState()
       .setLyrics(
@@ -2326,9 +2689,21 @@ async function tryDisplayCaptions() {
         "captions",
         detectLyricsLanguage(fetchedLyrics, languageCode),
       );
+    useAppStore.setState({
+      captionLanguageLabel: (languageCode || "auto").toUpperCase(),
+      selectedCaptionTrackId: selectedTrack
+        ? selectedTrack.vssId ||
+          `${languageCode}-${selectedTrack.kind || "std"}`
+        : null,
+    });
     persistLyricsCache(currentSongInfo, "captions", fetchedLyrics, {
       label: `Captions (${languageCode || "auto"})`,
       language: languageCode || null,
+      trackId: selectedTrack
+        ? selectedTrack.vssId ||
+          `${languageCode}-${selectedTrack.kind || "std"}`
+        : null,
+      isAsr: selectedTrack?.kind === "asr",
     });
     startLyricsTimer(fetchedLyrics);
 
@@ -2349,6 +2724,7 @@ async function tryDisplayCaptions() {
     if (methodUsed === "main-world-prefetch") {
       pendingMainWorldCaptionLyrics = null;
       pendingMainWorldCaptionLanguage = null;
+      pendingMainWorldCaptionTrack = null;
       pendingMainWorldCaptionVideoId = null;
     }
 
@@ -3102,6 +3478,264 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       break;
   }
   useAppStore.setState({ isLoading: false });
+});
+
+
+function requestCaptionTrackFromMainWorld(track: CaptionTrackInfo): Promise<any[] | null> {
+  return new Promise((resolve) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      resolve(null);
+    }, 4500);
+
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window || event.data?.type !== "LYRICAL_FETCH_TRACK_RESPONSE") return;
+      if (event.data?.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", handler);
+      if (event.data.success && Array.isArray(event.data.lyrics) && event.data.lyrics.length > 0) {
+        resolve(event.data.lyrics);
+      } else {
+        resolve(null);
+      }
+    };
+
+    window.addEventListener("message", handler);
+    window.postMessage({
+      type: "LYRICAL_FETCH_TRACK_REQUEST",
+      requestId,
+      trackId: track.vssId,
+      languageCode: track.languageCode,
+      isAsr: track.isAsr,
+    }, "*");
+  });
+}
+
+window.addEventListener("lyrical-select-caption-track", async (event: any) => {
+  const track = event.detail?.track as CaptionTrackInfo;
+  if (!track || (!track.url && !track.vssId && !track.languageCode)) return;
+
+  log("[Lyrical] User manually selected caption track:", track.name, track.languageCode);
+  useAppStore.setState({
+    isLoading: true,
+    selectedCaptionTrackId: track.vssId,
+    captionLanguageLabel: track.languageCode.toUpperCase(),
+  });
+
+  try {
+    const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
+    let restoredFromCache = false;
+
+    if (sourceKey && hasLocalStorageApi() && chrome?.storage?.local?.get) {
+      try {
+        const stored = await chrome.storage.local.get([sourceKey]);
+        const entry = stored?.[sourceKey];
+        let cachedTrack =
+          entry?.tracks?.[track.vssId] ||
+          (entry?.tracks &&
+            Object.values(entry.tracks).find(
+              (ct: any) =>
+                ct.trackId === track.vssId ||
+                ((ct.language || "").split("-")[0].toLowerCase() ===
+                  track.languageCode.split("-")[0].toLowerCase() &&
+                  Boolean(ct.isAsr) === Boolean(track.isAsr)),
+            ));
+
+        // Validate cachedTrack lyrics language
+        if (cachedTrack && !isValidCachedTrackLyrics(cachedTrack, track.languageCode)) {
+          log("[Lyrical] Cached track content is mismatched/corrupted for language:", track.name, track.languageCode);
+          cachedTrack = null;
+        }
+
+        if (cachedTrack?.lyrics?.length > 0) {
+          log("[Lyrical] Restoring caption track directly from local cache:", track.name);
+          fetchedLyrics = cachedTrack.lyrics;
+          const currentVideoId = new URLSearchParams(window.location.search).get("v");
+          if (currentVideoId) {
+            lastFetchedVideoId = currentVideoId;
+          }
+          lyricsByVersion.default = {
+            id: "captions",
+            label: `Captions (${track.languageCode ? track.languageCode.toUpperCase() : "auto"})`,
+            synced: true,
+            lyrics: fetchedLyrics,
+          };
+
+          lyricsJustLoaded = true;
+          lyricsRendered = false;
+          useAppStore
+            .getState()
+            .setLyrics(
+              fetchedLyrics,
+              "captions",
+              detectLyricsLanguage(fetchedLyrics, track.languageCode),
+            );
+
+          updateSecondaryLyricsState({
+            romanizedLyrics: cachedTrack.romanizedLyrics || [],
+            translatedLyrics: cachedTrack.translatedLyrics || [],
+            isProcessingLyrics: false,
+          });
+
+          // Sync activeTrackId in storage
+          entry.activeTrackId = track.vssId;
+          entry.lyrics = fetchedLyrics;
+          entry.language = track.languageCode;
+          const genericKey = getLyricsCacheKey(currentSongInfo);
+          chrome.storage.local.set({ [sourceKey]: entry, [genericKey]: entry }).catch(() => {});
+
+          startLyricsTimer(fetchedLyrics);
+          if (window.initTranslationDropdown) window.initTranslationDropdown();
+
+          setTimeout(() => {
+            lyricsJustLoaded = false;
+          }, 2000);
+
+          restoredFromCache = true;
+        }
+      } catch (cacheErr) {
+        console.warn("[Lyrical] Caption cache check failed:", cacheErr);
+      }
+    }
+
+    if (restoredFromCache) {
+      useAppStore.setState({ isLoading: false });
+      return;
+    }
+
+    let lyrics: any[] | null = null;
+    let fetchUrl = track.url;
+    if (
+      !fetchUrl &&
+      Array.isArray(availableCaptions) &&
+      availableCaptions.length > 0
+    ) {
+      const match =
+        availableCaptions.find(
+          (at: any) => at.vssId && at.vssId === track.vssId,
+        ) ||
+        availableCaptions.find((at: any) => {
+          const atLang = (getCaptionTrackLang(at) || "")
+            .split("-")[0]
+            .toLowerCase();
+          const targetLang = (track.languageCode || "")
+            .split("-")[0]
+            .toLowerCase();
+          const atIsAsr =
+            at.kind === "asr" ||
+            String(at.vssId || "").startsWith("a.") ||
+            getCaptionTrackName(at).toLowerCase().includes("auto");
+          return atLang === targetLang && atIsAsr === Boolean(track.isAsr);
+        }) ||
+        availableCaptions.find((at: any) => {
+          const atLang = (getCaptionTrackLang(at) || "")
+            .split("-")[0]
+            .toLowerCase();
+          const targetLang = (track.languageCode || "")
+            .split("-")[0]
+            .toLowerCase();
+          return atLang === targetLang;
+        });
+      fetchUrl = getCaptionTrackUrl(match) || "";
+    }
+
+    if (fetchUrl) {
+      log("[Lyrical] Fetching captions from live URL:", fetchUrl.substring(0, 100));
+      const rawLyrics = await fetchCaptionsFromContentScript(fetchUrl);
+      if (rawLyrics && rawLyrics.length > 0) {
+        lyrics = rawLyrics;
+      }
+    }
+
+    // Secondary fallback: Request directly from Main World extractor via postMessage
+    if (!lyrics || lyrics.length === 0) {
+      log("[Lyrical] Requesting caption track directly from Main World extractor:", track.name);
+      const mainWorldLyrics = await requestCaptionTrackFromMainWorld(track);
+      if (mainWorldLyrics && mainWorldLyrics.length > 0) {
+        lyrics = mainWorldLyrics;
+      }
+    }
+
+    if (lyrics && lyrics.length > 0) {
+      let cleaned = lyrics
+        .map((line: any) => ({
+          ...line,
+          text: cleanCaptionText(line.text),
+        }))
+        .filter((line: any) => Boolean(line.text && line.text.trim()));
+
+      const allCaps = cleaned.every(
+        (line: any) => line.text && line.text.toUpperCase() === line.text,
+      );
+      if (allCaps) {
+        cleaned = cleaned.map((line: any) => ({
+          ...line,
+          text:
+            line.text.substring(0, 1).toUpperCase() +
+            line.text.substring(1).toLowerCase(),
+        }));
+      }
+
+      fetchedLyrics = normalizeCaptionTiming(cleaned);
+      const currentVideoId = new URLSearchParams(window.location.search).get("v");
+      if (currentVideoId) {
+        lastFetchedVideoId = currentVideoId;
+      }
+      lyricsByVersion.default = {
+        id: "captions",
+        label: `Captions (${track.languageCode ? track.languageCode.toUpperCase() : "auto"})`,
+        synced: true,
+        lyrics: fetchedLyrics,
+      };
+
+      lyricsJustLoaded = true;
+      lyricsRendered = false;
+      useAppStore
+        .getState()
+        .setLyrics(
+          fetchedLyrics,
+          "captions",
+          detectLyricsLanguage(fetchedLyrics, track.languageCode),
+        );
+      useAppStore.setState({
+        captionLanguageLabel: track.languageCode.toUpperCase(),
+        selectedCaptionTrackId: track.vssId,
+      });
+
+      updateSecondaryLyricsState({
+        romanizedLyrics: [],
+        translatedLyrics: [],
+        isProcessingLyrics: true,
+      });
+
+      persistLyricsCache(currentSongInfo, "captions", fetchedLyrics, {
+        label: `Captions (${track.languageCode || "auto"})`,
+        language: track.languageCode || null,
+        trackId: track.vssId,
+        isAsr: track.isAsr,
+        url: fetchUrl,
+      });
+      startLyricsTimer(fetchedLyrics);
+
+      if (window.initTranslationDropdown) window.initTranslationDropdown();
+      autoProcessLyrics();
+
+      if (!currentSongInfo?.title || !currentSongInfo?.artwork) {
+        hydrateSongInfoWithRetry(8, 300).catch(() => {});
+      }
+
+      setTimeout(() => {
+        lyricsJustLoaded = false;
+      }, 2000);
+    } else {
+      log("[Lyrical] Failed to fetch captions for selected track:", track.name);
+    }
+  } catch (err) {
+    console.error("[Lyrical] Error fetching selected caption track:", err);
+  } finally {
+    useAppStore.setState({ isLoading: false });
+  }
 });
 
 /**
