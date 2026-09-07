@@ -19,12 +19,40 @@ function getVideoId() {
   return params.get("v");
 }
 
-function getTrackLang(track) {
-  return track?.languageCode || track?.lang || null;
+function getTrackVssId(track) {
+  return track?.vssId || track?.vss_id || null;
 }
 
-function getTrackUrl(track) {
-  const raw = track?.baseUrl || track?.url || null;
+function getTrackLang(track) {
+  return track?.languageCode || track?.lang || track?.language || null;
+}
+
+function getTrackUrl(track, player = null) {
+  let raw = track?.baseUrl || track?.url || null;
+  if (!raw && player) {
+    try {
+      const response = resolvePlayerResponsePayload(
+        player?.getPlayerResponse?.() || window.ytInitialPlayerResponse,
+      );
+      const captionTracks =
+        response?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+      const exact = captionTracks.find(
+        (ct) =>
+          (getTrackVssId(ct) && getTrackVssId(ct) === getTrackVssId(track)) ||
+          (getTrackLang(ct) && getTrackLang(ct) === getTrackLang(track)),
+      );
+      if (exact?.baseUrl) {
+        raw = exact.baseUrl;
+      } else if (captionTracks.length > 0 && captionTracks[0]?.baseUrl) {
+        const base = new URL(captionTracks[0].baseUrl);
+        const targetLang = getTrackLang(track);
+        if (targetLang) {
+          base.searchParams.set("tlang", targetLang);
+          raw = base.toString();
+        }
+      }
+    } catch {}
+  }
   if (!raw) return null;
   return String(raw)
     .replace(/\\u0026/g, "&")
@@ -226,7 +254,8 @@ function parseCaptionPayload(text) {
 }
 
 async function fetchLyricsForTrack(track) {
-  const rawTrackUrl = getTrackUrl(track);
+  const player = document.getElementById("movie_player");
+  const rawTrackUrl = getTrackUrl(track, player);
   if (!rawTrackUrl) return null;
 
   const candidateUrls = [];
@@ -388,6 +417,12 @@ function resolvePlayerResponsePayload(payload) {
 
 function getTracksFromPlayer(player) {
   let tracks = null;
+  const response = resolvePlayerResponsePayload(
+    player?.getPlayerResponse?.() || window.ytInitialPlayerResponse,
+  );
+  const responseTracks =
+    response?.captions?.playerCaptionsTracklistRenderer?.captionTracks || null;
+
   try {
     tracks = player?.getOption?.("captions", "tracklist");
   } catch {}
@@ -397,12 +432,36 @@ function getTracksFromPlayer(player) {
     } catch {}
   }
   if (!tracks || tracks.length === 0) {
-    const response = resolvePlayerResponsePayload(
-      player?.getPlayerResponse?.() || window.ytInitialPlayerResponse,
-    );
-    tracks = response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    tracks = responseTracks;
   }
-  return tracks || null;
+  if (!tracks || tracks.length === 0) return null;
+
+  const baseTimedTextUrl =
+    responseTracks?.[0]?.baseUrl ||
+    tracks.find((t) => t.baseUrl || t.url)?.baseUrl ||
+    tracks.find((t) => t.baseUrl || t.url)?.url ||
+    null;
+
+  return tracks.map((t) => {
+    const vssId = getTrackVssId(t);
+    let existingUrl = getTrackUrl(t);
+    if (!existingUrl && baseTimedTextUrl) {
+      const lang = getTrackLang(t);
+      if (lang) {
+        try {
+          const u = new URL(baseTimedTextUrl);
+          u.searchParams.set("tlang", lang);
+          existingUrl = u.toString();
+        } catch {}
+      }
+    }
+    return {
+      ...t,
+      vssId: vssId || undefined,
+      url: existingUrl || undefined,
+      baseUrl: existingUrl || t.baseUrl || undefined,
+    };
+  });
 }
 
 function postCaptionData({
@@ -747,17 +806,23 @@ window.addEventListener("message", async (event) => {
     const targetCode = (languageCode || "").toLowerCase();
     const cleanTarget = (languageCode || "").split("-")[0].toLowerCase();
     const match =
-      tracks.find((t) => t.vssId && t.vssId === trackId) ||
+      tracks.find(
+        (t) =>
+          (t.vssId && t.vssId === trackId) ||
+          (t.vss_id && t.vss_id === trackId),
+      ) ||
       tracks.find((t) => {
         const lang = (getTrackLang(t) || "").toLowerCase();
         const atIsAsr =
-          t.kind === "asr" || String(t.vssId || "").startsWith("a.");
+          t.kind === "asr" ||
+          String(t.vssId || t.vss_id || "").startsWith("a.");
         return lang === targetCode && atIsAsr === Boolean(isAsr);
       }) ||
       tracks.find((t) => {
         const lang = (getTrackLang(t) || "").split("-")[0].toLowerCase();
         const atIsAsr =
-          t.kind === "asr" || String(t.vssId || "").startsWith("a.");
+          t.kind === "asr" ||
+          String(t.vssId || t.vss_id || "").startsWith("a.");
         return lang === cleanTarget && atIsAsr === Boolean(isAsr);
       }) ||
       tracks.find(
@@ -775,7 +840,7 @@ window.addEventListener("message", async (event) => {
       return;
     }
 
-    const lyrics = await fetchCaptionDataForTrack(match);
+    const lyrics = await fetchLyricsForTrack(match);
     if (lyrics && lyrics.length > 0) {
       window.postMessage(
         {
