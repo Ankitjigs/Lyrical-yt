@@ -744,15 +744,25 @@ window.addEventListener("message", async (event) => {
       );
       return;
     }
+    const targetCode = (languageCode || "").toLowerCase();
     const cleanTarget = (languageCode || "").split("-")[0].toLowerCase();
     const match =
       tracks.find((t) => t.vssId && t.vssId === trackId) ||
+      tracks.find((t) => {
+        const lang = (getTrackLang(t) || "").toLowerCase();
+        const atIsAsr =
+          t.kind === "asr" || String(t.vssId || "").startsWith("a.");
+        return lang === targetCode && atIsAsr === Boolean(isAsr);
+      }) ||
       tracks.find((t) => {
         const lang = (getTrackLang(t) || "").split("-")[0].toLowerCase();
         const atIsAsr =
           t.kind === "asr" || String(t.vssId || "").startsWith("a.");
         return lang === cleanTarget && atIsAsr === Boolean(isAsr);
       }) ||
+      tracks.find(
+        (t) => (getTrackLang(t) || "").toLowerCase() === targetCode,
+      ) ||
       tracks.find(
         (t) => (getTrackLang(t) || "").split("-")[0].toLowerCase() === cleanTarget,
       );

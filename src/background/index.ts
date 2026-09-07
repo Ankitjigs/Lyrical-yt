@@ -44,14 +44,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === "TRANSLATE_LYRICS") {
-    translateLyrics(request.lyrics, request.targetLang)
+    translateLyrics(
+      request.lyrics,
+      request.targetLang,
+      request.sourceLang,
+      request.videoId,
+    )
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true;
   }
 
   if (request.type === "ROMANIZE_LYRICS") {
-    romanizeLyrics(request.lyrics, request.sourceLang)
+    romanizeLyrics(
+      request.lyrics,
+      request.sourceLang,
+      request.targetLang,
+      request.videoId,
+    )
       .then(sendResponse)
       .catch((err) => sendResponse({ error: err.message }));
     return true;
@@ -275,6 +285,138 @@ async function fetchUnisonLyrics(songInfo) {
 
   const json = await res.json();
   return { success: true, status: 200, data: json?.data || null };
+}
+
+// --- Unison Translation & Romanization Service ---
+interface UnisonTranslateLine {
+  translation: string | null;
+  romanization: string | null;
+  needsTranslation?: boolean;
+}
+
+const UNISON_TRANSLATE_URL = "https://unison.boidu.dev/translate";
+const UNISON_TIMEOUT_MS = 4500;
+const inFlightUnison = new Map<string, Promise<string | undefined>>();
+
+/**
+ * Coalesce concurrent translation and romanization passes so a song hits Unison /translate once.
+ */
+async function enrichViaUnison(
+  texts: string[],
+  targetLang: string,
+  sourceLang?: string,
+  videoId?: string,
+): Promise<string | undefined> {
+  if (!texts || texts.length === 0) return undefined;
+
+  const normalizedFrom =
+    !sourceLang || sourceLang === "auto" ? undefined : sourceLang;
+  const payload = {
+    lines: texts,
+    to: targetLang || "en",
+    from: normalizedFrom,
+    videoId: videoId || undefined,
+  };
+  const body = JSON.stringify(payload);
+
+  const existing = inFlightUnison.get(body);
+  if (existing) return existing;
+
+  const request = fetchUnisonTranslate(body, texts, targetLang || "en", sourceLang);
+  inFlightUnison.set(body, request);
+  return request.finally(() => inFlightUnison.delete(body));
+}
+
+async function fetchUnisonTranslate(
+  body: string,
+  texts: string[],
+  targetLang: string,
+  sourceLang?: string,
+): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), UNISON_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(UNISON_TRANSLATE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      console.warn(`[Lyrical BG] Unison translate HTTP status: ${response.status}`);
+      return undefined;
+    }
+
+    const data = (await response.json()) as {
+      lines: UnisonTranslateLine[];
+      detectedLang: string;
+    };
+
+    if (!Array.isArray(data.lines) || data.lines.length !== texts.length) {
+      console.warn(
+        "[Lyrical BG] Unison translate line length mismatch or invalid format",
+      );
+      return undefined;
+    }
+
+    const detectedLang = data.detectedLang || sourceLang || "auto";
+
+    texts.forEach((text, i) => {
+      const line = data.lines[i];
+      if (!line) return;
+      const original = text;
+      const lowerOriginal = text.toLowerCase();
+
+      // Populate translation cache if provided
+      if (
+        line.translation &&
+        line.needsTranslation !== false &&
+        line.translation.trim().toLowerCase() !== lowerOriginal
+      ) {
+        const trRes = {
+          translated: line.translation.trim(),
+          original,
+          detectedLang,
+          skipped: false,
+          sameLanguage: detectedLang === targetLang,
+        };
+        translationCache.set(`${targetLang}_${original}`, trRes);
+      }
+
+      // Populate romanization cache if provided
+      if (
+        line.romanization &&
+        line.romanization.trim().toLowerCase() !== lowerOriginal
+      ) {
+        const romRes = {
+          romanized: line.romanization.trim(),
+          original,
+          skipped: false,
+        };
+        romanizationCache.set(`rom_${sourceLang || "auto"}_${original.trim()}`, romRes);
+        romanizationCache.set(`rom_auto_${original.trim()}`, romRes);
+        if (detectedLang && detectedLang !== "auto") {
+          romanizationCache.set(`rom_${detectedLang}_${original.trim()}`, romRes);
+        }
+      }
+    });
+
+    console.log(
+      `[Lyrical BG] Unison enrichment succeeded for ${texts.length} lines (lang: ${detectedLang})`,
+    );
+    return detectedLang;
+  } catch (err: any) {
+    if (err?.name !== "AbortError") {
+      console.warn("[Lyrical BG] Unison translate request failed:", err?.message || err);
+    } else {
+      console.warn("[Lyrical BG] Unison translate timed out (falling back to Google Translate)");
+    }
+    return undefined;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function fetchYouLyPlusLyrics(songInfo) {
@@ -665,7 +807,12 @@ async function romanizeLine(text, sourceLang) {
 /**
  * Translate all lyrics lines (batch operation)
  */
-async function translateLyrics(lyrics, targetLang) {
+async function translateLyrics(
+  lyrics,
+  targetLang,
+  sourceLang = "auto",
+  videoId?: string,
+) {
   console.log(
     "[Lyrical BG] Translating",
     lyrics.length,
@@ -693,7 +840,25 @@ async function translateLyrics(lyrics, targetLang) {
     }
   }
 
-  // Chunk uncached lines into blocks of 20 (reduces 100 HTTP requests down to 5!)
+  // 1. Primary enrichment: Unison Translate API
+  if (uncachedTexts.length > 0) {
+    await enrichViaUnison(uncachedTexts, targetLang, sourceLang, videoId);
+
+    // Filter out texts successfully resolved by Unison
+    const stillUncached: string[] = [];
+    for (const text of uncachedTexts) {
+      const cacheKey = `${targetLang}_${text}`;
+      if (translationCache.has(cacheKey)) {
+        translatedLookup.set(text, translationCache.get(cacheKey));
+      } else {
+        stillUncached.push(text);
+      }
+    }
+    uncachedTexts.length = 0;
+    uncachedTexts.push(...stillUncached);
+  }
+
+  // 2. Fallback: Google Translate batch chunks for remaining uncached lines
   const blockSize = 20;
   for (let i = 0; i < uncachedTexts.length; i += blockSize) {
     const block = uncachedTexts.slice(i, i + blockSize);
@@ -745,7 +910,12 @@ async function translateLyrics(lyrics, targetLang) {
 /**
  * Romanize all lyrics lines (batch operation)
  */
-async function romanizeLyrics(lyrics, sourceLang) {
+async function romanizeLyrics(
+  lyrics,
+  sourceLang = "auto",
+  targetLang = "en",
+  videoId?: string,
+) {
   console.log("[Lyrical BG] Romanizing", lyrics.length, "lines from", sourceLang);
 
   const uniqueTexts: string[] = Array.from(
@@ -776,7 +946,25 @@ async function romanizeLyrics(lyrics, sourceLang) {
     }
   }
 
-  // Chunk uncached lines into blocks of 20 (reduces 100 HTTP requests down to 5!)
+  // 1. Primary enrichment: Unison Translate API
+  if (uncachedTexts.length > 0) {
+    await enrichViaUnison(uncachedTexts, targetLang || "en", sourceLang, videoId);
+
+    // Filter out texts successfully resolved by Unison
+    const stillUncached: string[] = [];
+    for (const text of uncachedTexts) {
+      const cacheKey = `rom_${sourceLang}_${text}`;
+      if (romanizationCache.has(cacheKey)) {
+        romanizedLookup.set(text, romanizationCache.get(cacheKey));
+      } else {
+        stillUncached.push(text);
+      }
+    }
+    uncachedTexts.length = 0;
+    uncachedTexts.push(...stillUncached);
+  }
+
+  // 2. Fallback: Google Translate batch chunks for remaining uncached lines
   const blockSize = 20;
   for (let i = 0; i < uncachedTexts.length; i += blockSize) {
     const block = uncachedTexts.slice(i, i + blockSize);

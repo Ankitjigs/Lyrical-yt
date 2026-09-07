@@ -456,11 +456,14 @@ export default function LyricsDock({
                                 const isCurrentAsr = activeLabelClean.includes("auto");
                                 const currentActiveLang = activeLabelClean.replace(/\(auto\)/i, "").trim();
 
-                                const isTrackActive =
-                                  (selectedCaptionTrackId && selectedCaptionTrackId === track.vssId) ||
-                                  (selectedCaptionTrackId && selectedLang === trackLang && Boolean(track.isAsr) === (selectedCaptionTrackId.includes("asr") || selectedCaptionTrackId.startsWith("a."))) ||
-                                  (currentActiveLang && (trackLang === currentActiveLang || track.name.toLowerCase().startsWith(currentActiveLang) || currentActiveLang.startsWith(trackLang)) && Boolean(track.isAsr) === isCurrentAsr) ||
-                                  (!selectedCaptionTrackId && !currentActiveLang && idx === 0);
+                                const hasExactIdMatch = availableCaptionTracks.some(
+                                  (t) => t.vssId === selectedCaptionTrackId,
+                                );
+                                const isTrackActive = hasExactIdMatch
+                                  ? selectedCaptionTrackId === track.vssId
+                                  : (selectedCaptionTrackId && selectedLang === trackLang && Boolean(track.isAsr) === (selectedCaptionTrackId.includes("asr") || selectedCaptionTrackId.startsWith("a."))) ||
+                                    (currentActiveLang && (trackLang === currentActiveLang || track.name.toLowerCase().startsWith(currentActiveLang) || currentActiveLang.startsWith(trackLang)) && Boolean(track.isAsr) === isCurrentAsr) ||
+                                    (!selectedCaptionTrackId && !currentActiveLang && idx === 0);
                                 return (
                                   <button
                                     key={track.vssId || track.url}
