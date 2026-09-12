@@ -1,4 +1,9 @@
-import { createInstrumentalElement } from "./createInstrumentalElement";
+import {
+  createInstrumentalElement,
+  setupInstrumentalAnimations,
+  InstrumentalAnimations,
+  INSTRUMENTAL_WAVE_CYCLE_MS,
+} from "./createInstrumentalElement";
 import { normalizeLyricPartSpacing } from "../../utils/lyricSpacing";
 
 const LYRIC_ENDING_THRESHOLD_S = 0.5;
@@ -73,6 +78,12 @@ export class ImperativeBetterStrategy {
     if (this.root) {
       this.root.innerHTML = "";
     }
+
+    this.lines.forEach((line) => {
+      if (line.instrumentalAnimations?.cancel) {
+        line.instrumentalAnimations.cancel();
+      }
+    });
 
     this.scrollContainer = null;
     this.root = null;
@@ -363,14 +374,19 @@ export class ImperativeBetterStrategy {
 
       if (line.isInstrumental) {
         lineData.isInstrumental = true;
+        const durationMs = Math.round(lineData.duration * 1000);
         const instrumentalEl = createInstrumentalElement(
-          Math.round(lineData.duration * 1000),
+          durationMs,
           lineIndex,
         );
         lineDiv.appendChild(instrumentalEl);
         // Store the instrumental container as a pseudo-part so the animation
         // engine applies classes to it (CSS targets .blyrics--instrumental.blyrics--animating)
         lineData.instrumentalElement = instrumentalEl;
+        lineData.instrumentalAnimations = setupInstrumentalAnimations(
+          instrumentalEl,
+          durationMs,
+        );
       } else {
         this.createWordSpans(wordObjects, lineDiv, lineData);
       }
@@ -576,6 +592,9 @@ export class ImperativeBetterStrategy {
 
   setLineVisualState(line) {
     line.lyricElement.classList.toggle("blyrics--active", line.isScrolled);
+    if (line.instrumentalElement) {
+      line.instrumentalElement.classList.toggle("blyrics--active", line.isScrolled);
+    }
     line.lyricElement.style.opacity = line.isScrolled ? "1" : "0.82";
     line.lyricElement.style.filter = "none";
     if (!line.isScrolled && !line.isAnimating) {
@@ -595,6 +614,24 @@ export class ImperativeBetterStrategy {
       );
       part.animationStartTimeMs = Infinity;
     });
+    if (line.instrumentalAnimations) {
+      if (line.instrumentalAnimations.fillFade) {
+        line.instrumentalAnimations.fillFade.currentTime = 0;
+        line.instrumentalAnimations.fillFade.pause();
+      }
+      if (line.instrumentalAnimations.fillTravel) {
+        line.instrumentalAnimations.fillTravel.currentTime = 0;
+        line.instrumentalAnimations.fillTravel.pause();
+      }
+      if (line.instrumentalAnimations.waveFlatten) {
+        line.instrumentalAnimations.waveFlatten.currentTime = 0;
+        line.instrumentalAnimations.waveFlatten.pause();
+      }
+      if (line.instrumentalAnimations.waveOscillation) {
+        line.instrumentalAnimations.waveOscillation.currentTime = 0;
+        line.instrumentalAnimations.waveOscillation.pause();
+      }
+    }
     line.isSelected = false;
     line.isAnimating = false;
     line.accumulatedOffsetMs = 0;
@@ -622,6 +659,9 @@ export class ImperativeBetterStrategy {
     children.forEach((part) => {
       part.lyricElement.classList.remove("blyrics--paused");
     });
+    if (line.instrumentalAnimations?.waveOscillation && line.isAnimating) {
+      line.instrumentalAnimations.waveOscillation.play();
+    }
     line.isAnimating = false;
   }
 
@@ -786,6 +826,34 @@ export class ImperativeBetterStrategy {
         mediaTime < effectiveEndTime
       ) {
         line.isSelected = true;
+
+        if (line.isInstrumental && line.instrumentalAnimations) {
+          const durationMs = Math.round(line.duration * 1000);
+          const elapsedMs = (mediaTime - line.time) * 1000;
+          const clampedElapsedMs = Math.min(Math.max(0, elapsedMs), durationMs);
+
+          if (line.instrumentalAnimations.fillFade) {
+            line.instrumentalAnimations.fillFade.currentTime =
+              elapsedMs >= 0 ? 300 : 0;
+          }
+          if (line.instrumentalAnimations.fillTravel) {
+            line.instrumentalAnimations.fillTravel.currentTime = clampedElapsedMs;
+          }
+          if (line.instrumentalAnimations.waveFlatten) {
+            line.instrumentalAnimations.waveFlatten.currentTime = clampedElapsedMs;
+          }
+          if (line.instrumentalAnimations.waveOscillation) {
+            line.instrumentalAnimations.waveOscillation.currentTime =
+              Math.max(0, elapsedMs) % INSTRUMENTAL_WAVE_CYCLE_MS;
+            if (isPlaying && elapsedMs >= 0 && elapsedMs < durationMs) {
+              if (line.instrumentalAnimations.waveOscillation.playState !== "running") {
+                line.instrumentalAnimations.waveOscillation.play();
+              }
+            } else {
+              line.instrumentalAnimations.waveOscillation.pause();
+            }
+          }
+        }
 
         const timeDelta = mediaTime - line.time;
         const animationTimingOffset =

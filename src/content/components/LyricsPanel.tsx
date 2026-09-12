@@ -13,7 +13,12 @@ import {
 } from "lucide-react";
 import ShinyText from "./ShinyText";
 import { useLyricsEngine } from "../../hooks/useLyricsEngine";
-import { createInstrumentalElement } from "../../modules/animations/createInstrumentalElement";
+import {
+  createInstrumentalElement,
+  setupInstrumentalAnimations,
+  InstrumentalAnimations,
+  INSTRUMENTAL_WAVE_CYCLE_MS,
+} from "../../modules/animations/createInstrumentalElement";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { getThemeCssVariables } from "../../themes";
 import { useShallow } from "zustand/react/shallow";
@@ -111,6 +116,161 @@ const GeniusSearchPill = ({
       <GeniusIcon size={variant === "emptyState" ? 15 : 13} />
       <span>Search on Genius</span>
     </button>
+  );
+};
+
+interface FallbackInstrumentalLineProps {
+  durationSeconds: number;
+  lineIndex: number;
+  lineTime: number;
+  isActive: boolean;
+  offset: number;
+  minHeight?: string;
+  fontSize?: string;
+}
+
+const FallbackInstrumentalLine: React.FC<FallbackInstrumentalLineProps> = ({
+  durationSeconds,
+  lineIndex,
+  lineTime,
+  isActive,
+  offset,
+  minHeight,
+  fontSize,
+}) => {
+  const mountRef = useRef<HTMLDivElement>(null);
+  const elementRef = useRef<HTMLDivElement | null>(null);
+  const animationsRef = useRef<InstrumentalAnimations | null>(null);
+
+  // Mount instrumental SVG element once per lineIndex / duration change
+  useEffect(() => {
+    const container = mountRef.current;
+    if (!container) return;
+
+    const durationMs = Math.max(Math.round(durationSeconds * 1000), 100);
+    const instrumentalEl = createInstrumentalElement(durationMs, lineIndex);
+    const animations = setupInstrumentalAnimations(instrumentalEl, durationMs);
+
+    elementRef.current = instrumentalEl;
+    animationsRef.current = animations;
+
+    container.innerHTML = "";
+    container.appendChild(instrumentalEl);
+
+    return () => {
+      animations.cancel();
+      animationsRef.current = null;
+      elementRef.current = null;
+      container.innerHTML = "";
+    };
+  }, [durationSeconds, lineIndex]);
+
+  // Frame-accurate synchronization with video playback
+  useEffect(() => {
+    const anims = animationsRef.current;
+    const el = elementRef.current;
+    if (!anims || !el) return;
+
+    const durationMs = Math.max(Math.round(durationSeconds * 1000), 100);
+
+    if (!isActive) {
+      if (anims.fillFade) {
+        anims.fillFade.currentTime = 0;
+        anims.fillFade.pause();
+      }
+      if (anims.fillTravel) {
+        anims.fillTravel.currentTime = 0;
+        anims.fillTravel.pause();
+      }
+      if (anims.waveFlatten) {
+        anims.waveFlatten.currentTime = 0;
+        anims.waveFlatten.pause();
+      }
+      if (anims.waveOscillation) {
+        anims.waveOscillation.currentTime = 0;
+        anims.waveOscillation.pause();
+      }
+      el.classList.remove(
+        "blyrics--active",
+        "blyrics--animating",
+        "blyrics--paused",
+      );
+      return;
+    }
+
+    let rafId: number;
+    const updateSync = () => {
+      const video = document.querySelector("video");
+      if (!video) return;
+
+      const isPlaying = !video.paused && !video.ended && video.readyState > 2;
+      const mediaTime = video.currentTime + offset;
+      const elapsedMs = (mediaTime - lineTime) * 1000;
+      const clampedElapsedMs = Math.min(Math.max(0, elapsedMs), durationMs);
+
+      if (anims.fillFade) {
+        anims.fillFade.currentTime = elapsedMs >= 0 ? 300 : 0;
+      }
+      if (anims.fillTravel) {
+        anims.fillTravel.currentTime = clampedElapsedMs;
+      }
+      if (anims.waveFlatten) {
+        anims.waveFlatten.currentTime = clampedElapsedMs;
+      }
+      if (anims.waveOscillation) {
+        anims.waveOscillation.currentTime =
+          Math.max(0, elapsedMs) % INSTRUMENTAL_WAVE_CYCLE_MS;
+        if (isPlaying && elapsedMs >= 0 && elapsedMs < durationMs) {
+          if (anims.waveOscillation.playState !== "running") {
+            anims.waveOscillation.play();
+          }
+        } else {
+          anims.waveOscillation.pause();
+        }
+      }
+
+      el.classList.toggle("blyrics--active", true);
+      el.classList.toggle("blyrics--animating", isPlaying);
+      el.classList.toggle("blyrics--paused", !isPlaying);
+    };
+
+    updateSync();
+
+    const tick = () => {
+      updateSync();
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+
+    const video = document.querySelector("video");
+    video?.addEventListener("play", updateSync);
+    video?.addEventListener("pause", updateSync);
+    video?.addEventListener("seeked", updateSync);
+    video?.addEventListener("timeupdate", updateSync);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      video?.removeEventListener("play", updateSync);
+      video?.removeEventListener("pause", updateSync);
+      video?.removeEventListener("seeked", updateSync);
+      video?.removeEventListener("timeupdate", updateSync);
+    };
+  }, [isActive, durationSeconds, lineTime, offset]);
+
+  return (
+    <div
+      ref={mountRef}
+      className="lyric-instrumental-wrapper"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "100%",
+        minHeight: minHeight || "36px",
+        pointerEvents: "none",
+        ...(fontSize ? { ["--blyrics-font-size" as any]: fontSize } : {}),
+      }}
+    />
   );
 };
 
@@ -1965,7 +2125,12 @@ const LyricsPanel = () => {
                       const isActive = idx === activeIndex;
                       const isPast = activeIndex >= 0 && idx < activeIndex;
                       const lyricText = line.text?.trim() ?? "";
-                      const isInstrumental = line.isInstrumental || !lyricText;
+                      const isInstrumental =
+                        line.isInstrumental ||
+                        !lyricText ||
+                        lyricText === "♪" ||
+                        lyricText === "♫" ||
+                        /^\[?instrumental\s*only\]?$/i.test(lyricText);
                       const nextLine = lyrics[idx + 1];
                       const lineDuration =
                         line.duration ??
@@ -2019,89 +2184,17 @@ const LyricsPanel = () => {
                         >
                           {/* Main Text / Instrumental Indicator */}
                           {isInstrumental ? (
-                            <div
-                              className="lyric-instrumental"
-                              style={{
-                                display: "flex",
-                                justifyContent: "center",
-                                alignItems: "center",
-                                minHeight:
-                                  lyricsTypography.instrumentalMinHeight,
-                                width: "100%",
-                                opacity: isActive ? 1 : 0.68,
-                                order: 1,
-                              }}
-                            >
-                              <div
-                                className="blyrics--instrumental lyrical-fallback-instrumental"
-                                style={
-                                  {
-                                    "--blyrics-duration": `${Math.round(lineDuration * 1000)}ms`,
-                                  } as React.CSSProperties
-                                }
-                                ref={(el) => {
-                                  if (!el) return;
-
-                                  const durationSeconds = Math.max(
-                                    lineDuration,
-                                    0.18,
-                                  );
-                                  const adjustedVideoTime =
-                                    getAdjustedVideoTime();
-                                  const elapsedSeconds =
-                                    adjustedVideoTime === null ||
-                                    typeof line.time !== "number"
-                                      ? 0
-                                      : Math.max(
-                                          0,
-                                          adjustedVideoTime - line.time,
-                                        );
-                                  const delaySeconds = isActive
-                                    ? -Math.min(elapsedSeconds, durationSeconds)
-                                    : 0;
-
-                                  el.style.setProperty(
-                                    "--blyrics-duration",
-                                    `${Math.round(durationSeconds * 1000)}ms`,
-                                  );
-                                  el.style.setProperty(
-                                    "--blyrics-anim-delay",
-                                    `${delaySeconds}s`,
-                                  );
-
-                                  if (!el.dataset.instrumentalMounted) {
-                                    el.dataset.instrumentalMounted = "true";
-                                    const instrumentalElement =
-                                      createInstrumentalElement(
-                                        Math.round(durationSeconds * 1000),
-                                        idx,
-                                      );
-                                    const svg =
-                                      instrumentalElement.querySelector("svg");
-                                    if (svg) {
-                                      el.appendChild(svg);
-                                    }
-                                  }
-
-                                  el.classList.remove(
-                                    "blyrics--animating",
-                                    "blyrics--pre-animating",
-                                    "blyrics--paused",
-                                  );
-
-                                  if (isActive) {
-                                    el.classList.add("blyrics--pre-animating");
-                                    el.getBoundingClientRect();
-                                    el.classList.add("blyrics--animating");
-                                    if (!isPlaying) {
-                                      el.classList.add("blyrics--paused");
-                                    }
-                                  } else if (!isPast) {
-                                    el.classList.add("blyrics--pre-animating");
-                                  }
-                                }}
-                              />
-                            </div>
+                            <FallbackInstrumentalLine
+                              durationSeconds={lineDuration}
+                              lineIndex={idx}
+                              lineTime={
+                                typeof line.time === "number" ? line.time : 0
+                              }
+                              isActive={isActive}
+                              offset={offset}
+                              minHeight={lyricsTypography.instrumentalMinHeight}
+                              fontSize={lyricsTypography.activeOriginal}
+                            />
                           ) : (
                             <div
                               className="lyric-original"

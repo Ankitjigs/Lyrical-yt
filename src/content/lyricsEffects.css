@@ -290,66 +290,22 @@
   opacity: 0;
 }
 
-:host .blyrics--instrumental.blyrics--animating .blyrics--instrumental-fill {
+:host .blyrics--instrumental.blyrics--animating .blyrics--instrumental-fill,
+:host .blyrics--instrumental.blyrics--paused .blyrics--instrumental-fill,
+:host .blyrics--instrumental.blyrics--active .blyrics--instrumental-fill {
   transition: none;
   opacity: 1;
 }
 
-/* Wave clip: idle state — stays at bottom */
-:host .blyrics--instrumental:not(.blyrics--pre-animating) .blyrics--wave-clip {
-  transition-property: transform;
-  transition-duration: 1000000s;
-  transition-delay: 0s;
-  transform: translateY(0%);
+/* Wave clip & path: hardware acceleration hints for WAAPI liquid animation */
+:host .blyrics--wave-clip {
+  will-change: transform;
 }
 
-/* Wave clip: pre-animating — reset to bottom before animation starts */
-:host .blyrics--instrumental.blyrics--pre-animating:not(.blyrics--animating) .blyrics--wave-clip {
-  animation: none;
-  transform: translateY(78%);
-}
-
-/* Wave clip: animating — water rises over the instrumental duration */
-:host .blyrics--instrumental.blyrics--animating .blyrics--wave-clip {
-  transition-property: transform;
-  transition-duration: calc(var(--blyrics-duration, 1ms) * 1);
-  transition-timing-function: linear;
-  transition-delay: var(--blyrics-anim-delay);
-  transform: translateY(-4%);
-}
-
-/* Wave clip: paused — freeze the water level */
-:host .blyrics--instrumental.blyrics--paused .blyrics--wave-clip {
-  transition-duration: 100000000s !important;
-  transform: translateY(100%) !important;
-  }
-
-/* Wave path: wiggle animation */
 :host .blyrics--wave-path {
   transform-box: fill-box;
   transform-origin: bottom;
-  animation: blyrics-wave 1.25s ease-in-out infinite;
-  animation-play-state: paused;
-  transform: scaleY(1.2);
-}
-
-/* Wave path: animate wiggle + flatten over duration */
-:host .blyrics--instrumental.blyrics--animating:not(.blyrics--paused) .blyrics--wave-path {
-  animation-play-state: running;
-  transform: scaleY(0);
-  transition-property: transform;
-  transition-duration: calc(var(--blyrics-duration, 1ms) * 1);
-  transition-timing-function: ease-in;
-  transition-delay: var(--blyrics-anim-delay);
-}
-
-/* Wave path: paused — freeze the wiggle */
-:host .blyrics--instrumental.blyrics--animating.blyrics--paused .blyrics--wave-path {
-  transform: scaleY(0.0001);
-  transition-duration: 10000000000s;
-  transition-property: transform;
-  transition-timing-function: ease-out;
-  transition-delay: 0s;
+  will-change: transform;
 }
 
 @keyframes blyrics-wave {

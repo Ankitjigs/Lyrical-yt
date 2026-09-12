@@ -6,7 +6,146 @@
  * @param {number} lineIndex - Line index for unique SVG element IDs
  * @returns {HTMLDivElement} Container div with animated music note SVG
  */
-export function createInstrumentalElement(durationMs, lineIndex) {
+export const INSTRUMENTAL_WAVE_PATH_HIGH =
+  'path("M -4 3 Q 1 2 5 3 Q 10 4 14 3 Q 18 2 22 3 Q 26 4 30 3 L 30 4 L -4 4 Z")';
+export const INSTRUMENTAL_WAVE_PATH_LOW =
+  'path("M -4 3 Q 1 4 5 3 Q 10 2 14 3 Q 18 4 22 3 Q 26 2 30 3 L 30 4 L -4 4 Z")';
+export const INSTRUMENTAL_WAVE_CYCLE_MS = 1250;
+
+export interface InstrumentalAnimations {
+  fillFade: Animation | null;
+  fillTravel: Animation | null;
+  waveFlatten: Animation | null;
+  waveOscillation: Animation | null;
+  cancel: () => void;
+}
+
+/**
+ * Attaches Web Animations API (WAAPI) controllers to an instrumental SVG break element.
+ * Provides frame-accurate scrubbing, liquid rising fill, surface flattening, and wave morphing.
+ */
+export function setupInstrumentalAnimations(
+  container: HTMLElement,
+  durationMs: number,
+): InstrumentalAnimations {
+  const clip = container.querySelector(".blyrics--wave-clip") as SVGClipPathElement | null;
+  const wave = container.querySelector(".blyrics--wave-path") as SVGPathElement | null;
+  const fill = container.querySelector(".blyrics--instrumental-fill") as SVGPathElement | null;
+
+  if (!clip || !wave) {
+    return {
+      fillFade: null,
+      fillTravel: null,
+      waveFlatten: null,
+      waveOscillation: null,
+      cancel: () => {},
+    };
+  }
+
+  wave.style.transformOrigin = "bottom";
+  wave.style.transformBox = "fill-box";
+  wave.style.willChange = "transform";
+  clip.style.willChange = "transform";
+
+  const prefersReducedMotion =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+
+  let fillFade: Animation | null = null;
+  let fillTravel: Animation | null = null;
+  let waveFlatten: Animation | null = null;
+  let waveOscillation: Animation | null = null;
+
+  // Active liquid fill opacity track (locks opacity: 1 forwards so it stays visible when paused)
+  try {
+    if (fill) {
+      fillFade = fill.animate(
+        [{ opacity: 0 }, { opacity: 1 }],
+        {
+          duration: 300,
+          easing: "linear",
+          fill: "forwards",
+        },
+      );
+      fillFade.pause();
+    }
+  } catch (e) {
+    console.warn("[Instrumental] WAAPI fillFade initialization error:", e);
+  }
+
+  try {
+    fillTravel = clip.animate(
+      [
+        { transform: "translateY(78%)" },
+        { transform: "translateY(-4%)" },
+      ],
+      {
+        duration: Math.max(durationMs, 1),
+        easing: "linear",
+        fill: "both",
+      },
+    );
+    fillTravel.pause();
+  } catch (e) {
+    console.warn("[Instrumental] WAAPI fillTravel initialization error:", e);
+  }
+
+  try {
+    waveFlatten = wave.animate(
+      [
+        { transform: "scaleY(1.2)" },
+        { transform: "scaleY(0.0001)" },
+      ],
+      {
+        duration: Math.max(durationMs, 1),
+        easing: "ease-in",
+        fill: "both",
+      },
+    );
+    waveFlatten.pause();
+  } catch (e) {
+    console.warn("[Instrumental] WAAPI waveFlatten initialization error:", e);
+  }
+
+  if (!prefersReducedMotion) {
+    try {
+      waveOscillation = wave.animate(
+        [
+          { d: INSTRUMENTAL_WAVE_PATH_HIGH },
+          { d: INSTRUMENTAL_WAVE_PATH_LOW, offset: 0.5 },
+          { d: INSTRUMENTAL_WAVE_PATH_HIGH },
+        ] as Keyframe[],
+        {
+          duration: INSTRUMENTAL_WAVE_CYCLE_MS,
+          iterations: Infinity,
+          easing: "ease-in-out",
+        },
+      );
+      waveOscillation.pause();
+    } catch (e) {
+      console.warn("[Instrumental] WAAPI waveOscillation initialization error:", e);
+    }
+  }
+
+  const cancel = () => {
+    try {
+      fillFade?.cancel();
+    } catch (_) {}
+    try {
+      fillTravel?.cancel();
+    } catch (_) {}
+    try {
+      waveFlatten?.cancel();
+    } catch (_) {}
+    try {
+      waveOscillation?.cancel();
+    } catch (_) {}
+  };
+
+  return { fillFade, fillTravel, waveFlatten, waveOscillation, cancel };
+}
+
+export function createInstrumentalElement(durationMs: number, lineIndex: number): HTMLDivElement {
   const container = document.createElement("div");
   container.classList.add("blyrics--instrumental");
   container.style.setProperty("--blyrics-duration", `${durationMs}ms`);
