@@ -17,6 +17,7 @@ import {
   Check,
 } from "lucide-react";
 import { t } from "../../i18n";
+import { useAppStore } from "../store";
 
 const YouTubeIcon = ({ size = 16 }: { size?: number }) => (
   <svg
@@ -216,8 +217,39 @@ function formatTrackDisplayName(track: any): string {
   return isAsr ? "English (auto)" : "English";
 }
 
-function normalizeCacheGroups(items) {
+function normalizeCacheGroups(
+  items: Record<string, any>,
+  activeContext?: { videoId?: string | null; songKey?: string | null },
+) {
   const grouped = new Map();
+
+  const extractVideoId = (val: any): string | null => {
+    if (!val) return null;
+    if (typeof val.videoId === "string" && val.videoId.trim()) {
+      return val.videoId.trim();
+    }
+    if (typeof val.tracks === "object" && val.tracks) {
+      for (const tr of Object.values(val.tracks)) {
+        if (typeof (tr as any)?.videoId === "string" && (tr as any).videoId.trim()) {
+          return (tr as any).videoId.trim();
+        }
+      }
+    }
+    if (typeof val === "object") {
+      for (const v of Object.values(val)) {
+        if (typeof (v as any)?.videoId === "string" && (v as any).videoId.trim()) {
+          return (v as any).videoId.trim();
+        }
+      }
+    }
+    return null;
+  };
+
+  const currentStoreSong = useAppStore.getState().songInfo;
+  const storeSongKey = currentStoreSong
+    ? `${currentStoreSong.artist || ""}_${currentStoreSong.title || ""}`
+    : null;
+  const storeVideoId = currentStoreSong?.videoId || null;
 
   Object.entries(items).forEach(([key, value]: [string, any]) => {
     if (value?.missing === true) return;
@@ -273,13 +305,33 @@ function normalizeCacheGroups(items) {
 
     const grp = grouped.get(parsed.songKey);
     grp.entries.push(entry);
-    if (!grp.videoId && value?.videoId) {
-      grp.videoId = value.videoId;
+
+    if (!grp.videoId) {
+      const vid = extractVideoId(value);
+      if (vid) {
+        grp.videoId = vid;
+      }
+    }
+
+    if (!grp.videoId && storeVideoId && storeSongKey) {
+      const normA = parsed.songKey.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const normB = storeSongKey.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (normA === normB || parsed.songKey === storeSongKey) {
+        grp.videoId = storeVideoId;
+      }
+    }
+
+    if (!grp.videoId && activeContext?.videoId && activeContext.songKey) {
+      const normA = parsed.songKey.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const normB = activeContext.songKey.toLowerCase().replace(/[^a-z0-9]/g, "");
+      if (normA === normB || parsed.songKey === activeContext.songKey) {
+        grp.videoId = activeContext.videoId;
+      }
     }
   });
 
   return Array.from(grouped.values())
-    .map((group) => ({
+    .map((group: any) => ({
       ...group,
       totalBytes: group.entries.reduce(
         (sum, entry) => sum + entry.sizeBytes,
@@ -317,8 +369,54 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   const refreshCache = async () => {
     setLoading(true);
     try {
+      let activeTabVideoId: string | null = null;
+      let activeTabSongKey: string | null = null;
+
+      try {
+        if (typeof chrome !== "undefined" && chrome.tabs?.query) {
+          const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+          const activeTab = tabs[0];
+          if (activeTab?.url && activeTab.url.includes("youtube.com/watch")) {
+            activeTabVideoId = new URL(activeTab.url).searchParams.get("v");
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      if (!activeTabVideoId && typeof window !== "undefined" && window.location?.search) {
+        activeTabVideoId = new URLSearchParams(window.location.search).get("v");
+      }
+
+      const currentStoreSong = useAppStore.getState().songInfo;
+      if (currentStoreSong?.title && currentStoreSong?.artist) {
+        activeTabSongKey = `${currentStoreSong.artist}_${currentStoreSong.title}`;
+      }
+
       const items = await chrome.storage.local.get(null);
-      setGroups(normalizeCacheGroups(items));
+      const normalized = normalizeCacheGroups(items, {
+        videoId: activeTabVideoId,
+        songKey: activeTabSongKey,
+      });
+
+      // Silently backfill videoId into storage for any group that resolved it
+      // so it persists permanently for subsequent opens
+      for (const grp of normalized) {
+        if (grp.videoId) {
+          for (const entry of grp.entries) {
+            if (entry.key && !entry.value?.videoId) {
+              chrome.storage.local.set({
+                [entry.key]: {
+                  ...entry.value,
+                  videoId: grp.videoId,
+                },
+              }).catch(() => {});
+            }
+          }
+        }
+      }
+
+      setGroups(normalized);
       onCacheChange?.();
     } finally {
       setLoading(false);

@@ -4,11 +4,19 @@
 window.getSongInfoFromPage = function () {
     console.log('[Content] getSongInfoFromPage called');
 
+    const videoId =
+        window.location.hostname.includes('youtube.com')
+            ? new URLSearchParams(window.location.search).get('v') || null
+            : null;
+
     // Try MediaSession first
     const mediaSessionInfo = getMediaSessionMetadata();
     if (mediaSessionInfo && mediaSessionInfo.title) {
         if (!mediaSessionInfo.artwork) {
             mediaSessionInfo.artwork = getYouTubeArtworkFromPage();
+        }
+        if (videoId && !mediaSessionInfo.videoId) {
+            mediaSessionInfo.videoId = videoId;
         }
         console.log('[Content] Using MediaSession:', mediaSessionInfo);
         return mediaSessionInfo;
@@ -19,6 +27,9 @@ window.getSongInfoFromPage = function () {
     if (scrapedInfo) {
         if (!scrapedInfo.artwork) {
             scrapedInfo.artwork = getYouTubeArtworkFromPage();
+        }
+        if (videoId && !scrapedInfo.videoId) {
+            scrapedInfo.videoId = videoId;
         }
         console.log('[Content] Using scraped info:', scrapedInfo);
         return scrapedInfo;

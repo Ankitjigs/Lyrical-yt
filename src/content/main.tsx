@@ -1289,12 +1289,22 @@ function attachEventListeners() {
         }
         const stored = await chrome.storage.local.get(songKey);
         const versions = stored[songKey] || {};
+        const currentVideoId =
+          currentSongInfo?.videoId ||
+          (typeof window !== "undefined" && window.location?.search
+            ? new URLSearchParams(window.location.search).get("v")
+            : null) ||
+          null;
         versions[versionId] = {
           label: langName,
           synced: parsed.synced,
           lyrics: parsed.lyrics,
           timestamp: Date.now(),
+          ...(currentVideoId ? { videoId: currentVideoId } : {}),
         };
+        if (currentVideoId && !versions.videoId) {
+          versions.videoId = currentVideoId;
+        }
         await chrome.storage.local.set({ [songKey]: versions });
 
         const option = document.createElement("option");
@@ -1544,6 +1554,15 @@ async function persistLyricsVersions() {
         "[Lyrical Panel] storage.local.set unavailable, skipping persistence",
       );
       return;
+    }
+    const currentVideoId =
+      currentSongInfo?.videoId ||
+      (typeof window !== "undefined" && window.location?.search
+        ? new URLSearchParams(window.location.search).get("v")
+        : null) ||
+      null;
+    if (currentVideoId && lyricsByVersion && typeof lyricsByVersion === "object") {
+      (lyricsByVersion as any).videoId = currentVideoId;
     }
     await chrome.storage.local.set({ [key]: lyricsByVersion });
     log("[Lyrical Panel] Persisted versions:", Object.keys(lyricsByVersion));
@@ -1833,11 +1852,20 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     }
   }
 
+  const currentVideoId =
+    songInfo?.videoId ||
+    (typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null) ||
+    extra?.videoId ||
+    null;
+
   const entry: any = {
     lyrics,
     source: sourceId,
     cacheSchemaVersion: LYRICS_CACHE_SCHEMA_VERSION,
     timestamp: Date.now(),
+    ...(currentVideoId ? { videoId: currentVideoId } : {}),
     ...extra,
   };
 
@@ -3214,6 +3242,10 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   // 🔥 Use videoId as source of truth (not title/artist)
   const videoId = new URLSearchParams(window.location.search).get("v");
   if (!videoId) return;
+
+  if (videoId && !songInfo.videoId) {
+    songInfo.videoId = videoId;
+  }
 
   if (
     fetchedLyrics &&
