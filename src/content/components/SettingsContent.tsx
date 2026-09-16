@@ -96,6 +96,7 @@ const SettingsContent = () => {
     showLogs: false,
     compactMode: false,
     lyricsSizePreset: "standard",
+    lyricsAnimationStyle: "better-lyrics",
     reduceAnimations: false,
     showCollapsedArtwork: true,
     displayMode: "sidebar",
@@ -195,6 +196,7 @@ const SettingsContent = () => {
         showLogs: false,
         compactMode: false,
         lyricsSizePreset: "standard",
+        lyricsAnimationStyle: "better-lyrics",
         reduceAnimations: false,
         showCollapsedArtwork: true,
         displayMode: "sidebar",
@@ -214,6 +216,7 @@ const SettingsContent = () => {
           showLogs: items.showLogs,
           compactMode: items.compactMode,
           lyricsSizePreset: items.lyricsSizePreset || "standard",
+          lyricsAnimationStyle: items.lyricsAnimationStyle || "better-lyrics",
           reduceAnimations: items.reduceAnimations,
           showCollapsedArtwork: items.showCollapsedArtwork,
           displayMode: items.displayMode || "sidebar",
@@ -238,6 +241,7 @@ const SettingsContent = () => {
           translationLanguage: items.translationLanguage,
           compactMode: items.compactMode,
           lyricsSizePreset: items.lyricsSizePreset || "standard",
+          lyricsAnimationStyle: items.lyricsAnimationStyle || "better-lyrics",
           reduceAnimations: items.reduceAnimations,
           showCollapsedArtwork: items.showCollapsedArtwork,
           displayMode: items.displayMode || "sidebar",
@@ -295,6 +299,16 @@ const SettingsContent = () => {
 
       if (
         namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "lyricsAnimationStyle")
+      ) {
+        const nextStyle =
+          changes.lyricsAnimationStyle.newValue || "better-lyrics";
+        setSettings((prev) => ({ ...prev, lyricsAnimationStyle: nextStyle }));
+        useAppStore.setState({ lyricsAnimationStyle: nextStyle });
+      }
+
+      if (
+        namespace === "sync" &&
         Object.prototype.hasOwnProperty.call(changes, "reduceAnimations")
       ) {
         const nextReduceAnimations = Boolean(changes.reduceAnimations.newValue);
@@ -347,6 +361,9 @@ const SettingsContent = () => {
     if (key === "lyricsSizePreset") {
       storageUpdate.lyricsSizePreset = value;
     }
+    if (key === "lyricsAnimationStyle") {
+      storageUpdate.lyricsAnimationStyle = value;
+    }
     if (key === "reduceAnimations") {
       storageUpdate.reduceAnimations = value;
     }
@@ -378,6 +395,8 @@ const SettingsContent = () => {
       if (key === "compactMode") useAppStore.getState().setCompactMode(value);
       if (key === "lyricsSizePreset")
         useAppStore.setState({ lyricsSizePreset: value });
+      if (key === "lyricsAnimationStyle")
+        useAppStore.setState({ lyricsAnimationStyle: value });
       if (key === "reduceAnimations")
         useAppStore.getState().setReduceAnimations(value);
       if (key === "showCollapsedArtwork")
@@ -897,6 +916,82 @@ const SettingsContent = () => {
                     "Show faded album cover watermark on the right side in collapsed view",
                   )}
                 />
+
+                <div style={dividerStyle} />
+
+                {/* Lyrics Animation Engine Style */}
+                <div style={{ padding: "4px 0" }}>
+                  <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--lyrical-text-primary)", marginBottom: "4px" }}>
+                    Lyrics Animation Engine
+                  </div>
+                  <div style={{ fontSize: "12px", color: "var(--lyrical-text-muted)", marginBottom: "12px" }}>
+                    Choose the animation style used for syllable, word, and line synchronized lyrics
+                  </div>
+
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "10px",
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => updateSetting("lyricsAnimationStyle", "better-lyrics")}
+                      style={{
+                        padding: "12px",
+                        borderRadius: "10px",
+                        border:
+                          (settings.lyricsAnimationStyle || "better-lyrics") === "better-lyrics"
+                            ? "1px solid var(--lyrical-accent)"
+                            : "1px solid var(--lyrical-border-soft)",
+                        background:
+                          (settings.lyricsAnimationStyle || "better-lyrics") === "better-lyrics"
+                            ? "var(--lyrical-accent-soft)"
+                            : "var(--lyrical-card-bg)",
+                        color: "var(--lyrical-text-primary)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        transition: "all 0.2s ease",
+                      }}
+                    >
+                      <div style={{ fontWeight: "700", fontSize: "13px", marginBottom: "4px" }}>
+                        Classic
+                      </div>
+                      <div style={{ fontSize: "11px", color: "var(--lyrical-text-muted)", lineHeight: 1.35 }}>
+                        Dynamic 3D wobble rotation and liquid fluid swipe fill
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => updateSetting("lyricsAnimationStyle", "archivetune")}
+                      style={{
+                        padding: "12px",
+                        borderRadius: "10px",
+                        border:
+                          settings.lyricsAnimationStyle === "archivetune"
+                            ? "1px solid var(--lyrical-accent)"
+                            : "1px solid var(--lyrical-border-soft)",
+                        background:
+                          settings.lyricsAnimationStyle === "archivetune"
+                            ? "var(--lyrical-accent-soft)"
+                            : "var(--lyrical-card-bg)",
+                        color: "var(--lyrical-text-primary)",
+                        cursor: "pointer",
+                        textAlign: "left",
+                        transition: "all 0.2s ease",
+                      }}
+                    >
+                      <div style={{ fontWeight: "700", fontSize: "13px", marginBottom: "4px" }}>
+                        Modern Gentle
+                      </div>
+                      <div style={{ fontSize: "11px", color: "var(--lyrical-text-muted)", lineHeight: 1.35 }}>
+                        Vertical sine float, feathered gradient mask & spring word ripple
+                      </div>
+                    </button>
+                  </div>
+                </div>
 
                 <div style={dividerStyle} />
 

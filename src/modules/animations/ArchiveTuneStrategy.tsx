@@ -14,8 +14,9 @@ const SCROLL_POS_OFFSET_RATIO = 0.5;
 const LINE_SYNC_ANIMATION_DELAY_S = 0.05;
 const WORD_BREAK_CHAR = /([\s\u200B\u00AD\p{Dash_Punctuation}])/u;
 
-export class ImperativeBetterStrategy {
+export class ArchiveTuneStrategy {
   name: string;
+  rootId: string;
   isImperative: boolean;
   scrollContainer: HTMLElement | null;
   root: HTMLElement | null;
@@ -26,7 +27,8 @@ export class ImperativeBetterStrategy {
   resizeObserver: ResizeObserver | null;
 
   constructor() {
-    this.name = "Imperative Engine (Better Lyrics Match)";
+    this.name = "ArchiveTune Engine (Spring Float & Feathered Mask)";
+    this.rootId = "archivetune-root";
     this.isImperative = true;
     this.scrollContainer = null;
     this.root = null;
@@ -58,8 +60,8 @@ export class ImperativeBetterStrategy {
   renderLyrics() {
     return (
       <div
-        key="imperative-strategy"
-        id="blyrics-root"
+        key="archivetune-strategy"
+        id="archivetune-root"
         style={{
           position: "relative",
           width: "100%",
@@ -93,37 +95,22 @@ export class ImperativeBetterStrategy {
     this.state = this.createState();
   }
 
-  /**
-   * Called when the scroll container dimensions change (e.g., compact mode toggle).
-   * Invalidates cached layout measurements and forces a clean re-measure + instant re-scroll
-   * after the CSS transition completes.
-   * @param {number} transitionDurationMs - How long the CSS transition takes
-   */
   invalidateLayout(transitionDurationMs = 450) {
-    // 1. Mark layout as invalid so update() won't use stale position data
     this.state.hasValidLayout = false;
-    // 2. Reset the first-scroll flag so the next scroll is instant (no smooth animation)
     this.state.doneFirstInstantScroll = false;
-    // 3. Clear any scroll throttle so the re-scroll happens immediately
     this.state.nextScrollAllowedTime = 0;
     this.state.queuedScroll = true;
 
-    // 4. Schedule re-measurement AFTER the CSS transition completes
-    //    We do multiple passes to catch any layout settling
     const remeasureAndScroll = () => {
       this.measureLayout();
       if (this.state.hasValidLayout) {
         this.state.queuedScroll = true;
-        // Mark as programmatic so scroll listener doesn't pause auto-scroll
         this.state.lastProgrammaticScrollTime = Date.now();
       }
     };
 
-    // First pass: at ~60% of transition (catch early)
     setTimeout(remeasureAndScroll, Math.round(transitionDurationMs * 0.6));
-    // Second pass: right after transition ends
     setTimeout(remeasureAndScroll, transitionDurationMs + 50);
-    // Third pass: safety net for any post-transition reflow
     setTimeout(remeasureAndScroll, transitionDurationMs + 200);
   }
 
@@ -135,7 +122,7 @@ export class ImperativeBetterStrategy {
     return Date.now() - this.state.lastProgrammaticScrollTime < 400;
   }
 
-  getCSSDurationInMs(element, property) {
+  getCSSDurationInMs(element: Element | null, property: string) {
     if (!element) return 0;
 
     let duration = this.cachedDurations.get(property);
@@ -158,11 +145,11 @@ export class ImperativeBetterStrategy {
     return duration;
   }
 
-  reflow(element) {
+  reflow(element: HTMLElement) {
     void element.offsetHeight;
   }
 
-  buildFallbackParts(line, nextLine) {
+  buildFallbackParts(line: any, nextLine: any) {
     const words = String(line.text || "\u266a").split(" ");
     const baseTime = Number(line.time ?? 0);
 
@@ -173,7 +160,7 @@ export class ImperativeBetterStrategy {
     }));
   }
 
-  estimateTimedRomanization(text, time, duration) {
+  estimateTimedRomanization(text: string, time: number, duration: number) {
     const rawWords = text.split(/\s+/).filter((w) => w.length > 0);
     if (rawWords.length === 0) return [];
     const totalChars = rawWords.reduce((sum, w) => sum + w.length, 0);
@@ -190,16 +177,16 @@ export class ImperativeBetterStrategy {
     });
   }
 
-  createBreakElem(lineElement, order) {
+  createBreakElem(lineElement: HTMLElement, order: number) {
     const breakEl = document.createElement("span");
-    breakEl.className = `blyrics--break blyrics--break-${order}`;
+    breakEl.className = `at-lyrics--break at-lyrics--break-${order}`;
     breakEl.style.order = String(order);
     lineElement.appendChild(breakEl);
     return breakEl;
   }
 
-  groupByWordAndInsert(lineElement, lyricElementsBuffer) {
-    let wordGroupBuffer = [];
+  groupByWordAndInsert(lineElement: HTMLElement, lyricElementsBuffer: HTMLElement[]) {
+    let wordGroupBuffer: HTMLElement[] = [];
     let isCurrentBufferBg = false;
 
     const pushWordGroupBuffer = () => {
@@ -211,7 +198,7 @@ export class ImperativeBetterStrategy {
       });
 
       if (isCurrentBufferBg) {
-        group.classList.add("blyrics--background");
+        group.classList.add("at-lyrics--background");
       }
 
       lineElement.appendChild(group);
@@ -219,7 +206,7 @@ export class ImperativeBetterStrategy {
     };
 
     lyricElementsBuffer.forEach((part) => {
-      const isBackground = part.classList.contains("blyrics--background");
+      const isBackground = part.classList.contains("at-lyrics--background");
       const isNonMatchingType = isCurrentBufferBg !== isBackground;
       const text = part.textContent || "";
       const endsAtBreak =
@@ -243,8 +230,8 @@ export class ImperativeBetterStrategy {
     pushWordGroupBuffer();
   }
 
-  createWordSpans(wordObjects, lineElement, lineData) {
-    const lyricElementsBuffer = [];
+  createWordSpans(wordObjects: any[], lineElement: HTMLElement, lineData: any) {
+    const lyricElementsBuffer: HTMLElement[] = [];
 
     normalizeLyricPartSpacing(wordObjects).forEach((wordObj) => {
       const text = wordObj.text ?? wordObj.words ?? "";
@@ -255,19 +242,19 @@ export class ImperativeBetterStrategy {
       const time = Number(wordObj.time ?? wordObj.start ?? 0);
       const span = document.createElement("span");
 
-      span.className = "blyrics--word";
+      span.className = "at-lyrics--word";
       if (wordObj.isBackground) {
-        span.classList.add("blyrics--background");
+        span.classList.add("at-lyrics--background");
       }
       if (duration === 0) {
-        span.classList.add("blyrics-zero-dur-animate");
+        span.classList.add("at-lyrics-zero-dur-animate");
       }
       span.textContent = text;
       span.dataset.time = String(time);
       span.dataset.duration = String(duration);
       span.dataset.content = text;
       span.style.setProperty(
-        "--blyrics-duration",
+        "--at-duration",
         `${Math.max(duration * 1000, 180)}ms`,
       );
 
@@ -288,10 +275,10 @@ export class ImperativeBetterStrategy {
     this.groupByWordAndInsert(lineElement, lyricElementsBuffer);
   }
 
-  mount(domContainer, lyrics, extraData: any = {}) {
+  mount(domContainer: HTMLElement, lyrics: any[], extraData: any = {}) {
     this.reset();
     this.scrollContainer = domContainer;
-    this.root = domContainer.querySelector("#blyrics-root");
+    this.root = domContainer.querySelector("#archivetune-root");
     if (!this.root) return;
 
     this.root.innerHTML = "";
@@ -300,7 +287,7 @@ export class ImperativeBetterStrategy {
     this.state = this.createState();
 
     this.container = document.createElement("div");
-    this.container.className = "blyrics-container";
+    this.container.className = "at-lyrics-container";
     this.container.style.cssText = [
       "position:relative",
       "width:100%",
@@ -310,7 +297,7 @@ export class ImperativeBetterStrategy {
     this.container.dataset.sync = lyrics.some(
       (line) =>
         Array.isArray(line.parts) &&
-        line.parts.some((part) => Number(part.duration ?? 0) > 0),
+        line.parts.some((part: any) => Number(part.duration ?? 0) > 0),
     )
       ? "richsync"
       : "synced";
@@ -325,7 +312,7 @@ export class ImperativeBetterStrategy {
 
     lyrics.forEach((line, lineIndex) => {
       const lineDiv = document.createElement("div");
-      lineDiv.className = "blyrics--line";
+      lineDiv.className = "at-lyrics--line";
       lineDiv.dataset.lineIndex = String(lineIndex);
       lineDiv.dataset.time = String(Number(line.time ?? 0));
       lineDiv.dataset.duration = String(Number(line.duration ?? 0));
@@ -338,7 +325,7 @@ export class ImperativeBetterStrategy {
         "justify-content:center",
         "transform-origin:center",
         "cursor:pointer",
-        "transition:transform 0.3s ease",
+        "transition:transform 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275)",
       ].join(";");
 
       lineDiv.onclick = () => {
@@ -374,7 +361,7 @@ export class ImperativeBetterStrategy {
           : this.buildFallbackParts(line, nextLine);
 
       lineDiv.style.setProperty(
-        "--blyrics-duration",
+        "--at-duration",
         `${Math.max(lineData.duration * 1000, 180)}ms`,
       );
 
@@ -386,8 +373,6 @@ export class ImperativeBetterStrategy {
           lineIndex,
         );
         lineDiv.appendChild(instrumentalEl);
-        // Store the instrumental container as a pseudo-part so the animation
-        // engine applies classes to it (CSS targets .blyrics--instrumental.blyrics--animating)
         lineData.instrumentalElement = instrumentalEl;
         lineData.instrumentalAnimations = setupInstrumentalAnimations(
           instrumentalEl,
@@ -402,10 +387,10 @@ export class ImperativeBetterStrategy {
       if (romanized) {
         const break4 = this.createBreakElem(lineDiv, 4);
         const romanizedEl = document.createElement("div");
-        romanizedEl.className = "blyrics--romanized";
+        romanizedEl.className = "at-lyrics--romanized";
         if (!isRomanizationEnabled) {
-          romanizedEl.classList.add("blyrics--hidden");
-          break4?.classList.add("blyrics--hidden");
+          romanizedEl.classList.add("at-lyrics--hidden");
+          break4.classList.add("at-lyrics--hidden");
         }
         romanizedEl.dataset.romanizedText = romanized;
         romanizedEl.style.cssText = [
@@ -436,10 +421,10 @@ export class ImperativeBetterStrategy {
       if (translated) {
         const break6 = this.createBreakElem(lineDiv, 6);
         const translatedEl = document.createElement("div");
-        translatedEl.className = "blyrics--translated";
+        translatedEl.className = "at-lyrics--translated";
         if (!isTranslateEnabled) {
-          translatedEl.classList.add("blyrics--hidden");
-          break6?.classList.add("blyrics--hidden");
+          translatedEl.classList.add("at-lyrics--hidden");
+          break6.classList.add("at-lyrics--hidden");
         }
         translatedEl.textContent = translated;
         translatedEl.dataset.translatedText = translated;
@@ -465,9 +450,8 @@ export class ImperativeBetterStrategy {
     if (typeof ResizeObserver !== "undefined") {
       this.resizeObserver = new ResizeObserver(() => {
         this.measureLayout();
-        // If we just got a valid layout, we should signal it
         if (this.state.hasValidLayout) {
-          this.state.queuedScroll = true; // Trigger a scroll check in next update
+          this.state.queuedScroll = true;
         }
       });
       this.resizeObserver.observe(this.root);
@@ -495,31 +479,30 @@ export class ImperativeBetterStrategy {
 
       // 1. Update Romanized
       const romanized = romanizedLyrics?.[lineIndex]?.romanized;
-      const romanizedEl = lineDiv.querySelector(".blyrics--romanized") as HTMLElement | null;
-      let break4 = (lineDiv.querySelector(".blyrics--break-4") ||
-        lineDiv.querySelector('.blyrics--break[style*="order: 4"], .blyrics--break[style*="order:4"]')) as HTMLElement | null;
+      const romanizedEl = lineDiv.querySelector(".at-lyrics--romanized") as HTMLElement | null;
+      let break4 = (lineDiv.querySelector(".at-lyrics--break-4") ||
+        lineDiv.querySelector('.at-lyrics--break[style*="order: 4"], .at-lyrics--break[style*="order:4"]')) as HTMLElement | null;
 
       if (romanized) {
         if (!break4) {
           break4 = this.createBreakElem(lineDiv, 4);
         }
 
-        // If the romanized text is the exact same, just toggle visibility without destroying DOM/transitions
         if (romanizedEl && romanizedEl.dataset.romanizedText === romanized) {
           const isHidden = !isRomanizationEnabled;
-          romanizedEl.classList.toggle("blyrics--hidden", isHidden);
-          break4?.classList.toggle("blyrics--hidden", isHidden);
+          romanizedEl.classList.toggle("at-lyrics--hidden", isHidden);
+          break4.classList.toggle("at-lyrics--hidden", isHidden);
         } else {
           let targetEl = romanizedEl;
           if (!targetEl) {
             targetEl = document.createElement("div");
-            targetEl.className = "blyrics--romanized";
+            targetEl.className = "at-lyrics--romanized";
             targetEl.style.cssText = "order:5;transition:opacity 0.3s ease;";
             lineDiv.appendChild(targetEl);
           }
-          const isHidden = !isRomanizationEnabled;
-          targetEl.classList.toggle("blyrics--hidden", isHidden);
-          break4?.classList.toggle("blyrics--hidden", isHidden);
+          targetEl.classList.toggle("at-lyrics--hidden", !isRomanizationEnabled);
+          break4.classList.toggle("at-lyrics--hidden", !isRomanizationEnabled);
+          targetEl.dataset.romanizedText = romanized;
 
           const timedRom = romanizedLyrics?.[lineIndex]?.timedRomanization;
           const finalTimedRom =
@@ -531,7 +514,6 @@ export class ImperativeBetterStrategy {
                   lineData.duration,
                 );
 
-          // Filter out any previous romanized parts from lineData.parts
           lineData.parts = lineData.parts.filter(
             (p: any) => !targetEl.contains(p.lyricElement),
           );
@@ -542,7 +524,10 @@ export class ImperativeBetterStrategy {
           } else {
             targetEl.textContent = romanized;
           }
-          targetEl.dataset.romanizedText = romanized;
+
+          if (lineData.isAnimating) {
+            this.resetLineAnimation(lineData);
+          }
         }
       } else {
         if (romanizedEl) {
@@ -558,9 +543,9 @@ export class ImperativeBetterStrategy {
 
       // 2. Update Translated
       const translated = translatedLyrics?.[lineIndex]?.translated;
-      const translatedEl = lineDiv.querySelector(".blyrics--translated") as HTMLElement | null;
-      let break6 = (lineDiv.querySelector(".blyrics--break-6") ||
-        lineDiv.querySelector('.blyrics--break[style*="order: 6"], .blyrics--break[style*="order:6"]')) as HTMLElement | null;
+      const translatedEl = lineDiv.querySelector(".at-lyrics--translated") as HTMLElement | null;
+      let break6 = (lineDiv.querySelector(".at-lyrics--break-6") ||
+        lineDiv.querySelector('.at-lyrics--break[style*="order: 6"], .at-lyrics--break[style*="order:6"]')) as HTMLElement | null;
 
       if (translated) {
         if (!break6) {
@@ -568,20 +553,18 @@ export class ImperativeBetterStrategy {
         }
 
         if (translatedEl && translatedEl.dataset.translatedText === translated) {
-          const isHidden = !isTranslateEnabled;
-          translatedEl.classList.toggle("blyrics--hidden", isHidden);
-          break6?.classList.toggle("blyrics--hidden", isHidden);
+          translatedEl.classList.toggle("at-lyrics--hidden", !isTranslateEnabled);
+          break6.classList.toggle("at-lyrics--hidden", !isTranslateEnabled);
         } else {
           let targetEl = translatedEl;
           if (!targetEl) {
             targetEl = document.createElement("div");
-            targetEl.className = "blyrics--translated";
+            targetEl.className = "at-lyrics--translated";
             targetEl.style.cssText = "order:7;transition:opacity 0.3s ease;";
             lineDiv.appendChild(targetEl);
           }
-          const isHidden = !isTranslateEnabled;
-          targetEl.classList.toggle("blyrics--hidden", isHidden);
-          break6?.classList.toggle("blyrics--hidden", isHidden);
+          targetEl.classList.toggle("at-lyrics--hidden", !isTranslateEnabled);
+          break6.classList.toggle("at-lyrics--hidden", !isTranslateEnabled);
           targetEl.textContent = translated;
           targetEl.dataset.translatedText = translated;
         }
@@ -618,7 +601,7 @@ export class ImperativeBetterStrategy {
       this.lines.length > 0 && this.lines[0].height > 0;
   }
 
-  getAnimationTargets(line) {
+  getAnimationTargets(line: any) {
     if (line.instrumentalElement) {
       return [
         {
@@ -632,27 +615,27 @@ export class ImperativeBetterStrategy {
     return [line, ...line.parts];
   }
 
-  setLineVisualState(line) {
-    line.lyricElement.classList.toggle("blyrics--active", line.isScrolled);
+  setLineVisualState(line: any) {
+    line.lyricElement.classList.toggle("at-lyrics--active", line.isScrolled);
     if (line.instrumentalElement) {
-      line.instrumentalElement.classList.toggle("blyrics--active", line.isScrolled);
+      line.instrumentalElement.classList.toggle("at-lyrics--active", line.isScrolled);
     }
-    line.lyricElement.style.opacity = line.isScrolled ? "1" : "0.82";
+    line.lyricElement.style.opacity = line.isScrolled ? "1" : "0.76";
     line.lyricElement.style.filter = "none";
     if (!line.isScrolled && !line.isAnimating) {
       line.lyricElement.style.transform = "";
     }
   }
 
-  resetLineAnimation(line) {
+  resetLineAnimation(line: any) {
     const children = this.getAnimationTargets(line);
-    children.forEach((part) => {
-      part.lyricElement.style.setProperty("--blyrics-swipe-delay", "");
-      part.lyricElement.style.setProperty("--blyrics-anim-delay", "");
+    children.forEach((part: any) => {
+      part.lyricElement.style.setProperty("--at-swipe-delay", "");
+      part.lyricElement.style.setProperty("--at-anim-delay", "");
       part.lyricElement.classList.remove(
-        "blyrics--animating",
-        "blyrics--pre-animating",
-        "blyrics--paused",
+        "at-lyrics--animating",
+        "at-lyrics--pre-animating",
+        "at-lyrics--paused",
       );
       part.animationStartTimeMs = Infinity;
     });
@@ -679,27 +662,27 @@ export class ImperativeBetterStrategy {
     line.accumulatedOffsetMs = 0;
   }
 
-  applyPausedState(line, isPlaying, now) {
+  applyPausedState(line: any, isPlaying: boolean, now: number) {
     if (isPlaying === line.isAnimationPlayStatePlaying) return;
 
     line.isAnimationPlayStatePlaying = isPlaying;
     const children = this.getAnimationTargets(line);
     if (!isPlaying) {
-      children.forEach((part) => {
+      children.forEach((part: any) => {
         if (part.animationStartTimeMs > now) {
           part.lyricElement.classList.remove(
-            "blyrics--animating",
-            "blyrics--pre-animating",
+            "at-lyrics--animating",
+            "at-lyrics--pre-animating",
           );
         } else {
-          part.lyricElement.classList.add("blyrics--paused");
+          part.lyricElement.classList.add("at-lyrics--paused");
         }
       });
       return;
     }
 
-    children.forEach((part) => {
-      part.lyricElement.classList.remove("blyrics--paused");
+    children.forEach((part: any) => {
+      part.lyricElement.classList.remove("at-lyrics--paused");
     });
     if (line.instrumentalAnimations?.waveOscillation && line.isAnimating) {
       line.instrumentalAnimations.waveOscillation.play();
@@ -707,31 +690,37 @@ export class ImperativeBetterStrategy {
     line.isAnimating = false;
   }
 
-  prepareLineAnimation(line, currentTime) {
-    this.getAnimationTargets(line).forEach((part) => {
+  prepareLineAnimation(line: any, currentTime: number) {
+    this.getAnimationTargets(line).forEach((part: any) => {
       const duration = Math.max(part.duration, 0.18);
       const timeDelta = currentTime - part.time;
-      const swipeAnimationDelay = `${-timeDelta - duration * 0.1}s`;
-      const everythingElseDelay = `${-timeDelta}s`;
+      const swipeAnimationDelay = `${-timeDelta - duration * 0.05}s`;
+      const animDelay = `${-timeDelta}s`;
 
-      part.lyricElement.classList.remove("blyrics--animating");
-      part.lyricElement.classList.remove("blyrics--paused");
       part.lyricElement.style.setProperty(
-        "--blyrics-swipe-delay",
+        "--at-swipe-delay",
         swipeAnimationDelay,
       );
       part.lyricElement.style.setProperty(
-        "--blyrics-anim-delay",
-        everythingElseDelay,
+        "--at-anim-delay",
+        animDelay,
       );
-      part.lyricElement.classList.add("blyrics--pre-animating");
+
+      // Completed words already finished their animation; leave them alone so they don't flicker.
+      // Active and future words prepare cleanly so transitions align accurately.
+      const isCompleted = currentTime >= part.time + duration;
+      if (!isCompleted || !part.lyricElement.classList.contains("at-lyrics--animating")) {
+        part.lyricElement.classList.remove("at-lyrics--paused", "at-lyrics--animating");
+        part.lyricElement.classList.add("at-lyrics--pre-animating");
+      }
     });
   }
 
-  commitLineAnimation(line, currentTime, now) {
-    this.getAnimationTargets(line).forEach((part) => {
+  commitLineAnimation(line: any, currentTime: number, now: number) {
+    this.getAnimationTargets(line).forEach((part: any) => {
       const timeDelta = currentTime - part.time;
-      part.lyricElement.classList.add("blyrics--animating");
+      part.lyricElement.classList.remove("at-lyrics--pre-animating");
+      part.lyricElement.classList.add("at-lyrics--animating");
       part.animationStartTimeMs = now - timeDelta * 1000;
     });
     line.isAnimating = true;
@@ -740,7 +729,7 @@ export class ImperativeBetterStrategy {
     line.accumulatedOffsetMs = 0;
   }
 
-  scrollToPosition(scrollPos, smoothScroll) {
+  scrollToPosition(scrollPos: number, smoothScroll: boolean) {
     if (!this.scrollContainer) return;
 
     this.state.lastProgrammaticScrollTime = Date.now();
@@ -775,20 +764,17 @@ export class ImperativeBetterStrategy {
     this.scrollContainer.scrollTop = scrollPos;
   }
 
-  update({ currentTime, offset = 0, isPlaying = true }) {
+  update({ currentTime, offset = 0, isPlaying = true }: { currentTime: number; offset?: number; isPlaying?: boolean }) {
     if (!this.scrollContainer || !this.container || this.lines.length === 0) {
       return;
     }
 
-    // Auto-measure if layout was previously invalid (likely due to race condition on mount)
-    // We check if hasValidLayout is false, OR if the first line is logically "broken" (height 0 or invalid position)
     if (
       !this.state.hasValidLayout ||
       (this.lines.length > 0 &&
         (this.lines[0].height <= 0 || this.lines[0].position < 0))
     ) {
       this.measureLayout();
-      // If still invalid, we cannot proceed with scrolling or animations
       if (!this.state.hasValidLayout) return;
     }
 
@@ -818,22 +804,12 @@ export class ImperativeBetterStrategy {
     this.state.lastPlayState = isPlaying;
     this.state.lastWallTime = now;
 
-    const timingElement = this.root || this.scrollContainer;
-    mediaTime +=
-      this.getCSSDurationInMs(
-        timingElement,
-        "--blyrics-richsync-timing-offset",
-      ) / 1000;
-    const lyricScrollTime =
-      mediaTime +
-      this.getCSSDurationInMs(timingElement, "--blyrics-scroll-timing-offset") /
-        1000;
-
+    const lyricScrollTime = mediaTime;
     const viewportHeight = this.scrollContainer.clientHeight;
     let scrollTop = this.scrollContainer.scrollTop;
 
-    const activeLines = [];
-    const linesToAnimate = [];
+    const activeLines: any[] = [];
+    const linesToAnimate: any[] = [];
     let newLyricSelected = timeJumped;
 
     this.lines.forEach((line, index) => {
@@ -857,7 +833,7 @@ export class ImperativeBetterStrategy {
         line.isScrolled = false;
       }
 
-      const setUpAnimationEarlyTime = isPlaying ? 2 : 0;
+      const setUpAnimationEarlyTime = 0.15;
       const effectiveEndTime = Math.max(
         nextTime,
         line.time + line.duration + 0.05,
@@ -943,7 +919,6 @@ export class ImperativeBetterStrategy {
       );
 
       const scrollPosOffset = viewportHeight * SCROLL_POS_OFFSET_RATIO;
-      const lastActiveLine = visibleActiveLines[visibleActiveLines.length - 1];
       const lyricPositions = visibleActiveLines
         .filter((line, index) => {
           return (
@@ -983,7 +958,6 @@ export class ImperativeBetterStrategy {
           scrollTop = targetScroll;
           this.scrollToPosition(scrollTop, smoothScroll);
         } else {
-          // Always queue the scroll if we're not allowed to scroll yet, so we don't permanently miss it
           this.state.queuedScroll = true;
         }
       }

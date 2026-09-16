@@ -12,6 +12,7 @@ import {
 import { fetchYouLyPlusSourceLyrics } from "../modules/sources/youlyplus";
 import panelStyles from "./styles.css?inline";
 import lyricsEffectsStyles from "./lyricsEffects.css?inline";
+import archivetuneEffectsStyles from "./archivetuneEffects.css?inline";
 import shinyTextStyles from "./components/ShinyText.css?inline";
 import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
@@ -38,6 +39,7 @@ const CONTENT_SHADOW_STYLES = [
   SHADOW_HOST_STYLES,
   panelStyles,
   lyricsEffectsStyles,
+  archivetuneEffectsStyles,
   shinyTextStyles,
 ].join("\n");
 
@@ -85,6 +87,7 @@ if (chrome.storage) {
       translationLanguage: "en",
       compactMode: false,
       lyricsSizePreset: "standard",
+      lyricsAnimationStyle: "better-lyrics",
       reduceAnimations: false,
       showCollapsedArtwork: true,
       displayMode: "sidebar",
@@ -114,6 +117,7 @@ if (chrome.storage) {
         translationLanguage: res.translationLanguage,
         compactMode: res.compactMode,
         lyricsSizePreset: res.lyricsSizePreset || "standard",
+        lyricsAnimationStyle: res.lyricsAnimationStyle || "better-lyrics",
         reduceAnimations: res.reduceAnimations,
         showCollapsedArtwork: res.showCollapsedArtwork ?? true,
         displayMode: res.displayMode || "sidebar",
@@ -286,7 +290,15 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
       .setReduceAnimations(Boolean(changes.reduceAnimations.newValue));
   }
 
-  // 10. Show Collapsed Artwork
+  // 10. Lyrics Animation Style
+  if (changes.lyricsAnimationStyle) {
+    useAppStore.setState({
+      lyricsAnimationStyle:
+        changes.lyricsAnimationStyle.newValue || "better-lyrics",
+    });
+  }
+
+  // 11. Show Collapsed Artwork
   if (changes.showCollapsedArtwork) {
     useAppStore.setState({
       showCollapsedArtwork: Boolean(changes.showCollapsedArtwork.newValue),
@@ -392,6 +404,17 @@ const GLOBAL_PROPERTIES = `
   initial-value: 0;
 }
 
+@property --at-transition-amount-start {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+@property --at-transition-amount-end {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
 `;
 
 function injectGlobalProperties() {
@@ -4461,6 +4484,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       useAppStore.getState().setCompactMode(Boolean(value));
     } else if (key === "lyricsSizePreset") {
       useAppStore.setState({ lyricsSizePreset: value });
+    } else if (key === "lyricsAnimationStyle") {
+      useAppStore.setState({ lyricsAnimationStyle: value });
     } else if (key === "reduceAnimations") {
       useAppStore.getState().setReduceAnimations(Boolean(value));
     } else if (key === "showCollapsedArtwork") {

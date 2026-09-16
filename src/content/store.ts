@@ -140,6 +140,7 @@ interface LyricalSettingsState {
   boiduApiKey: string;
   compactMode: boolean;
   lyricsSizePreset: "compact" | "standard" | "large" | "cinematic";
+  lyricsAnimationStyle: "better-lyrics" | "archivetune";
   reduceAnimations: boolean;
   showCollapsedArtwork: boolean;
   displayMode: "sidebar" | "floating";
@@ -188,6 +189,7 @@ interface LyricalAppState extends LyricalSettingsState {
   setOffset: (offset: number, userOffset: number) => void;
   setSettings: (settings: Partial<LyricalSettingsState>) => void;
   setCompactMode: (isCompact: boolean) => void;
+  setLyricsAnimationStyle: (style: "better-lyrics" | "archivetune") => void;
   setReduceAnimations: (reduceAnimations: boolean) => void;
   setThemeId: (themeId: string) => void;
   setCustomThemes: (customThemes: CustomTheme[]) => void;
@@ -230,6 +232,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   boiduApiKey: "", // Custom API Key for Boidu
   compactMode: false, // Added compactMode
   lyricsSizePreset: "standard",
+  lyricsAnimationStyle: "better-lyrics",
   reduceAnimations: false,
   showCollapsedArtwork: true,
   displayMode: "sidebar",
@@ -300,6 +303,10 @@ export const useAppStore = create<LyricalAppState>((set) => ({
           : state.sourcePreferences,
     })),
   setCompactMode: (isCompact) => set({ compactMode: isCompact }), // Added action
+  setLyricsAnimationStyle: (style) => {
+    set({ lyricsAnimationStyle: style });
+    chrome.storage.sync.set({ lyricsAnimationStyle: style });
+  },
   setReduceAnimations: (reduceAnimations) => set({ reduceAnimations }),
   setThemeId: (themeId) => set({ themeId }),
   setCustomThemes: (customThemes) =>

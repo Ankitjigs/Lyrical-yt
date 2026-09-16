@@ -543,10 +543,16 @@ function hasDisplayableSecondaryText(
 }
 
 const ImperativeLyricsHost = React.memo(
-  ({ resetKey }: { resetKey: string }) => {
+  ({
+    resetKey,
+    rootId = "blyrics-root",
+  }: {
+    resetKey: string;
+    rootId?: string;
+  }) => {
     return (
       <div
-        id="blyrics-root"
+        id={rootId}
         style={{
           position: "relative",
           width: "100%",
@@ -555,7 +561,7 @@ const ImperativeLyricsHost = React.memo(
       />
     );
   },
-  (prev, next) => prev.resetKey === next.resetKey,
+  (prev, next) => prev.resetKey === next.resetKey && prev.rootId === next.rootId,
 );
 
 const LyricsPanel = () => {
@@ -578,6 +584,7 @@ const LyricsPanel = () => {
     isProcessingLyrics,
     compactMode,
     lyricsSizePreset,
+    lyricsAnimationStyle,
     lyricsLanguage,
     reduceAnimations,
     showCollapsedArtwork,
@@ -604,6 +611,7 @@ const LyricsPanel = () => {
       isProcessingLyrics: state.isProcessingLyrics,
       compactMode: state.compactMode,
       lyricsSizePreset: state.lyricsSizePreset,
+      lyricsAnimationStyle: state.lyricsAnimationStyle,
       lyricsLanguage: state.lyricsLanguage,
       reduceAnimations: state.reduceAnimations,
       showCollapsedArtwork: state.showCollapsedArtwork,
@@ -646,8 +654,18 @@ const LyricsPanel = () => {
   );
   const hasLyrics = Boolean(lyrics && lyrics.length > 0);
   const engineExtraData = useMemo(
-    () => ({ romanizedLyrics, translatedLyrics }),
-    [romanizedLyrics, translatedLyrics],
+    () => ({
+      romanizedLyrics: alignedRomanizedLyrics,
+      translatedLyrics: alignedTranslatedLyrics,
+      isRomanizationEnabled,
+      isTranslateEnabled,
+    }),
+    [
+      alignedRomanizedLyrics,
+      alignedTranslatedLyrics,
+      isRomanizationEnabled,
+      isTranslateEnabled,
+    ],
   );
   const seekToLyricTime = (time: number | undefined) => {
     if (typeof time !== "number" || Number.isNaN(time) || time < 0) return;
@@ -953,13 +971,14 @@ const LyricsPanel = () => {
     const videoId = new URLSearchParams(window.location.search).get("v") || "";
     const title = songInfo?.title || "";
     const artist = songInfo?.artist || "";
-    return `${lyricsSource || "none"}|${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}`;
+    return `${lyricsSource || "none"}|${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
   }, [
     lyricsSource,
     songInfo?.artist,
     songInfo?.title,
     reduceAnimations,
     videoSessionKey,
+    lyricsAnimationStyle,
   ]);
 
   const { strategy, setIsUserScrolled } = useLyricsEngine(
@@ -969,6 +988,7 @@ const LyricsPanel = () => {
     contentRef,
     engineExtraData,
     engineResetKey,
+    lyricsAnimationStyle,
   );
 
   useEffect(() => {
@@ -980,19 +1000,28 @@ const LyricsPanel = () => {
       return;
     }
 
-    const nextExtraData = { romanizedLyrics, translatedLyrics };
+    const nextExtraData = {
+      romanizedLyrics: alignedRomanizedLyrics,
+      translatedLyrics: alignedTranslatedLyrics,
+      isRomanizationEnabled,
+      isTranslateEnabled,
+    };
     const rafId = requestAnimationFrame(() => {
       strategy.updateSecondaryLyrics(nextExtraData);
     });
-    const timeoutId = window.setTimeout(() => {
-      strategy.updateSecondaryLyrics(nextExtraData);
-    }, 80);
 
     return () => {
       cancelAnimationFrame(rafId);
-      window.clearTimeout(timeoutId);
     };
-  }, [shouldUseAnimationEngine, strategy, romanizedLyrics, translatedLyrics]);
+  }, [
+    shouldUseAnimationEngine,
+    strategy,
+    lyricsAnimationStyle,
+    alignedRomanizedLyrics,
+    alignedTranslatedLyrics,
+    isRomanizationEnabled,
+    isTranslateEnabled,
+  ]);
 
   // Invalidate scroll layout when compact mode toggles
   // The container height changes, so cached line positions become stale
@@ -1238,7 +1267,11 @@ const LyricsPanel = () => {
 
     if (strategy.isImperative) {
       return (
-        <ImperativeLyricsHost key={engineResetKey} resetKey={engineResetKey} />
+        <ImperativeLyricsHost
+          key={engineResetKey}
+          resetKey={engineResetKey}
+          rootId={strategy.rootId || "blyrics-root"}
+        />
       );
     }
 
@@ -1259,8 +1292,8 @@ const LyricsPanel = () => {
     shouldUseAnimationEngine,
     strategy,
     engineResetKey,
-    romanizedLyrics,
-    translatedLyrics,
+    strategy?.isImperative ? undefined : romanizedLyrics,
+    strategy?.isImperative ? undefined : translatedLyrics,
   ]);
 
   // Calculate active line for collapsed preview with early transition (0.35s early)
@@ -2223,7 +2256,24 @@ const LyricsPanel = () => {
                                 whiteSpace: "pre-wrap",
                               }}
                             >
-                              {lyricText}
+                              {lyricsAnimationStyle === "archivetune" &&
+                              isActive &&
+                              !reduceAnimations ? (
+                                lyricText.split(" ").map((word, wordIdx, arr) => (
+                                  <span
+                                    key={wordIdx}
+                                    className="at-word-ripple"
+                                    style={{
+                                      animationDelay: `${wordIdx * 40}ms`,
+                                    }}
+                                  >
+                                    {word}
+                                    {wordIdx < arr.length - 1 ? " " : ""}
+                                  </span>
+                                ))
+                              ) : (
+                                lyricText
+                              )}
                             </div>
                           )}
 

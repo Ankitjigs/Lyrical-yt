@@ -2,9 +2,20 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { LyricalLineStrategy } from "../modules/animations/LineStrategy";
 import { ImperativeBetterStrategy } from "../modules/animations/ImperativeBetterStrategy";
 import { PerWordStrategy } from "../modules/animations/PerWordStrategy";
+import { ArchiveTuneStrategy } from "../modules/animations/ArchiveTuneStrategy";
 
-function createStrategy(strategyName: string): any {
+function createStrategy(strategyName: string, animationStyle = "better-lyrics"): any {
   const normalizedName = strategyName.toLowerCase();
+
+  if (animationStyle === "archivetune") {
+    if (
+      normalizedName.includes("syllable") ||
+      normalizedName.includes("better") ||
+      normalizedName.includes("word")
+    ) {
+      return new ArchiveTuneStrategy();
+    }
+  }
 
   if (normalizedName.includes("syllable") || normalizedName.includes("better")) {
     return new ImperativeBetterStrategy();
@@ -17,9 +28,14 @@ function createStrategy(strategyName: string): any {
   return new LyricalLineStrategy();
 }
 
-function buildLyricsFingerprint(rawLyrics: any[] | null | undefined, strategyName: string, resetKey: string) {
+function buildLyricsFingerprint(
+  rawLyrics: any[] | null | undefined,
+  strategyName: string,
+  resetKey: string,
+  animationStyle = "better-lyrics",
+) {
   if (!rawLyrics || rawLyrics.length === 0) {
-    return `${strategyName}|${resetKey}|empty`;
+    return `${strategyName}|${animationStyle}|${resetKey}|empty`;
   }
 
   const lastIndex = rawLyrics.length - 1;
@@ -47,6 +63,8 @@ function buildLyricsContentFingerprint(rawLyrics: any[] | null | undefined, stra
 function buildExtraDataFingerprint(extraData: any = {}) {
   const romanizedLyrics = extraData?.romanizedLyrics || [];
   const translatedLyrics = extraData?.translatedLyrics || [];
+  const isRomanizationEnabled = extraData?.isRomanizationEnabled ? "1" : "0";
+  const isTranslateEnabled = extraData?.isTranslateEnabled ? "1" : "0";
   const sampleIndexes = [
     0,
     Math.floor(Math.max(romanizedLyrics.length, translatedLyrics.length) / 2),
@@ -60,7 +78,7 @@ function buildExtraDataFingerprint(extraData: any = {}) {
     .map((index) => translatedLyrics[index]?.translated || "")
     .join("|");
 
-  return `${romanizedLyrics.length}|${translatedLyrics.length}|${romanizedSample}|${translatedSample}`;
+  return `${isRomanizationEnabled}|${isTranslateEnabled}|${romanizedLyrics.length}|${translatedLyrics.length}|${romanizedSample}|${translatedSample}`;
 }
 
 /**
@@ -77,6 +95,7 @@ export function useLyricsEngine(
   containerRef,
   extraData = {},
   resetKey = "",
+  lyricsAnimationStyle = "better-lyrics",
 ) {
   const [currentTime, setCurrentTime] = useState(0);
   const [currentLineIndex, setCurrentLineIndex] = useState(-1);
@@ -87,8 +106,8 @@ export function useLyricsEngine(
 
   // Select strategy
   const strategy = useMemo(() => {
-    return createStrategy(strategyName);
-  }, [strategyName, resetKey]);
+    return createStrategy(strategyName, lyricsAnimationStyle);
+  }, [strategyName, resetKey, lyricsAnimationStyle]);
 
   // Track previous lyrics fingerprint to detect actual content changes
   const prevLyricsFingerprintRef = useRef<string | null>(null);
@@ -102,7 +121,12 @@ export function useLyricsEngine(
     prevStrategyRef.current = strategy;
 
     // Build a fingerprint from lyrics content to detect real changes
-    const fingerprint = buildLyricsFingerprint(rawLyrics, strategyName, resetKey);
+    const fingerprint = buildLyricsFingerprint(
+      rawLyrics,
+      strategyName,
+      resetKey,
+      lyricsAnimationStyle,
+    );
     const contentFingerprint = buildLyricsContentFingerprint(
       rawLyrics,
       strategyName,
@@ -156,9 +180,13 @@ export function useLyricsEngine(
 
     // Imperative Mount Lifecycle: ensure container is mounted whenever DOM or lyrics are ready
     if (strategy && strategy.mount && containerRef.current && syncedLyrics && syncedLyrics.length > 0) {
-      const root = containerRef.current.querySelector("#blyrics-root");
-      const isAlreadyMounted = root && root.querySelector(".blyrics-container");
-      if (!isAlreadyMounted) {
+      const rootId = strategy.rootId || "blyrics-root";
+      const root = containerRef.current.querySelector(`#${rootId}`);
+      const isAlreadyMounted =
+        root &&
+        ((strategy.container && root.contains(strategy.container)) ||
+          root.firstElementChild !== null);
+      if (root && !isAlreadyMounted) {
         strategy.mount(containerRef.current, syncedLyrics, extraData);
       }
     }
