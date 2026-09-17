@@ -192,20 +192,38 @@ export function useLyricsEngine(
     }
   }, [containerRef.current, strategy, syncedLyrics, extraData]);
 
+  const currentTimeRef = useRef(currentTime);
+  useEffect(() => {
+    currentTimeRef.current = currentTime;
+  }, [currentTime]);
+
   // Timer Logic: Sync with Prop
   useEffect(() => {
     if (songInfo?.currentTime !== undefined) {
       setCurrentTime(songInfo.currentTime);
+      currentTimeRef.current = songInfo.currentTime;
     }
   }, [songInfo?.currentTime]);
 
-  // Animation Loop - Only runs when playing (optimized for performance)
-  // Does one update when pausing to freeze current word state
+  // Animation Loop - Runs whenever playing and reacts to media events/seeking
   useEffect(() => {
     if (!syncedLyrics || syncedLyrics.length === 0) return;
 
     let animationFrameId: number | undefined;
     let lastTime = performance.now();
+
+    const getVideo = () =>
+      document.querySelector<HTMLVideoElement>(
+        "#movie_player video, video",
+      );
+
+    const checkIsActuallyPlaying = () => {
+      const video = getVideo();
+      return Boolean(
+        (video && !video.paused && !video.ended && video.readyState > 2) ||
+          songInfo?.isPlaying,
+      );
+    };
 
     const updateStrategy = () => {
       const now = performance.now();
@@ -213,10 +231,17 @@ export function useLyricsEngine(
       const safeDt = Math.min(dt, 0.1);
       lastTime = now;
 
-      let trackedTime = currentTime;
+      const video = getVideo();
+      const isPlaying = checkIsActuallyPlaying();
 
-      if (songInfo?.isPlaying) {
-        setCurrentTime((t) => t + safeDt);
+      let trackedTime = video ? video.currentTime : currentTimeRef.current;
+
+      if (isPlaying && !video) {
+        setCurrentTime((t) => {
+          const next = t + safeDt;
+          currentTimeRef.current = next;
+          return next;
+        });
         trackedTime += safeDt;
       }
 
@@ -225,15 +250,13 @@ export function useLyricsEngine(
         strategy.update({
           currentTime: trackedTime,
           offset: songInfo?.offset || 0,
-          isPlaying: songInfo?.isPlaying,
+          isPlaying,
         });
         return;
       }
 
       if (strategy && strategy.update) {
         // Skip LineStrategy scroll when LyricsPanel handles its own legacy scroll.
-        // LineStrategy.update() targets DOM rendered by strategy.renderLyrics(),
-        // but when shouldUseAnimationEngine is false, that output isn't used.
         if (strategy.name === "Lyrical Line") return;
 
         strategy.update({
@@ -241,8 +264,8 @@ export function useLyricsEngine(
           currentLineIndex,
           enableAutoScroll: !isUserScrolled,
           refs: refs.current,
-          isPlaying: songInfo?.isPlaying,
-          offset: songInfo?.offset || 0, // Pass offset to strategy
+          isPlaying,
+          offset: songInfo?.offset || 0,
           syncedLyrics,
         });
       }
@@ -250,22 +273,48 @@ export function useLyricsEngine(
 
     const loop = () => {
       updateStrategy();
-      animationFrameId = requestAnimationFrame(loop);
+      if (checkIsActuallyPlaying()) {
+        animationFrameId = requestAnimationFrame(loop);
+      } else {
+        animationFrameId = undefined;
+      }
     };
 
-    if (songInfo?.isPlaying) {
-      // Run animation loop when playing
+    if (checkIsActuallyPlaying()) {
       animationFrameId = requestAnimationFrame(loop);
     } else {
       // Do ONE update when paused to freeze current state
       updateStrategy();
     }
 
+    const video = getVideo();
+    const onVideoSync = () => {
+      updateStrategy();
+      if (checkIsActuallyPlaying() && !animationFrameId) {
+        lastTime = performance.now();
+        animationFrameId = requestAnimationFrame(loop);
+      }
+    };
+
+    video?.addEventListener("play", onVideoSync);
+    video?.addEventListener("playing", onVideoSync);
+    video?.addEventListener("pause", onVideoSync);
+    video?.addEventListener("ended", onVideoSync);
+    video?.addEventListener("seeked", onVideoSync);
+    video?.addEventListener("timeupdate", onVideoSync);
+
     return () => {
       if (animationFrameId) cancelAnimationFrame(animationFrameId);
+      video?.removeEventListener("play", onVideoSync);
+      video?.removeEventListener("playing", onVideoSync);
+      video?.removeEventListener("pause", onVideoSync);
+      video?.removeEventListener("ended", onVideoSync);
+      video?.removeEventListener("seeked", onVideoSync);
+      video?.removeEventListener("timeupdate", onVideoSync);
     };
   }, [
     songInfo?.isPlaying,
+    songInfo?.offset,
     strategy,
     isUserScrolled,
     syncedLyrics,

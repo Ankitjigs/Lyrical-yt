@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback } from "react";
+import { Fragment, useState, useEffect, useCallback, useRef } from "react";
 import {
   Settings,
   Monitor,
@@ -13,6 +13,13 @@ import {
   PictureInPicture2,
   RotateCcw,
   Type,
+  MicVocal,
+  MicOff,
+  ArrowUpToLine,
+  ArrowDownToLine,
+  AlignCenterHorizontal,
+  Move,
+  Sparkles,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import { log } from "../utils/logger";
@@ -108,6 +115,12 @@ const SettingsContent = () => {
     themeId: DEFAULT_THEME_ID,
     romanizationExclusions: [],
     translationExclusions: [],
+    isKaraokeMode: false,
+    karaokePosition: "bottom",
+    karaokeCustomPosition: 80,
+    karaokeFontSize: "medium",
+    karaokeAnimationStyle: "classic",
+    isVocalMuted: false,
   });
   const [cacheInfo, setCacheInfo] = useState({ bytes: 0, songCount: 0 });
   const themeId = settings.themeId || DEFAULT_THEME_ID;
@@ -210,6 +223,12 @@ const SettingsContent = () => {
         translationExclusions: [],
         [CUSTOM_THEMES_STORAGE_KEY]: [],
         sourcePreferences: null, // Will be null if never saved
+        isKaraokeMode: false,
+        karaokePosition: "bottom",
+        karaokeCustomPosition: 80,
+        karaokeFontSize: "medium",
+        karaokeAnimationStyle: "classic",
+        isVocalMuted: false,
       },
       (items) => {
         setSettings({
@@ -228,6 +247,12 @@ const SettingsContent = () => {
           themeId: items.themeId,
           romanizationExclusions: items.romanizationExclusions,
           translationExclusions: items.translationExclusions,
+          isKaraokeMode: Boolean(items.isKaraokeMode),
+          karaokePosition: items.karaokePosition || "bottom",
+          karaokeCustomPosition: typeof items.karaokeCustomPosition === "number" ? items.karaokeCustomPosition : 80,
+          karaokeFontSize: items.karaokeFontSize || "medium",
+          karaokeAnimationStyle: items.karaokeAnimationStyle || "classic",
+          isVocalMuted: Boolean(items.isVocalMuted),
         });
         const nextCustomThemeRecords = items[CUSTOM_THEMES_STORAGE_KEY] || [];
         const nextCustomThemes = resolveCustomThemes(nextCustomThemeRecords);
@@ -251,6 +276,12 @@ const SettingsContent = () => {
           translationExclusions: items.translationExclusions,
           themeId: items.themeId,
           customThemes: nextCustomThemes,
+          isKaraokeMode: Boolean(items.isKaraokeMode),
+          karaokePosition: items.karaokePosition || "bottom",
+          karaokeCustomPosition: typeof items.karaokeCustomPosition === "number" ? items.karaokeCustomPosition : 80,
+          karaokeFontSize: items.karaokeFontSize || "medium",
+          karaokeAnimationStyle: items.karaokeAnimationStyle || "classic",
+          isVocalMuted: Boolean(items.isVocalMuted),
         });
 
         // Load source preferences if saved
@@ -339,6 +370,15 @@ const SettingsContent = () => {
         setCustomThemes(nextCustomThemes);
         useAppStore.getState().setCustomThemes(nextCustomThemes);
       }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "isVocalMuted")
+      ) {
+        const nextVocalMuted = Boolean(changes.isVocalMuted.newValue);
+        setSettings((prev) => ({ ...prev, isVocalMuted: nextVocalMuted }));
+        useAppStore.getState().setVocalMuted(nextVocalMuted);
+      }
     };
 
     chrome.storage.onChanged.addListener(handleStorageChange);
@@ -350,8 +390,91 @@ const SettingsContent = () => {
     };
   }, [refreshCacheInfo]);
 
+  const karaokePositionDebounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const flushKaraokePosition = useCallback((value: number) => {
+    if (karaokePositionDebounceTimer.current) {
+      clearTimeout(karaokePositionDebounceTimer.current);
+      karaokePositionDebounceTimer.current = null;
+    }
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ karaokeCustomPosition: value }, () => {
+        if (chrome.runtime?.lastError) {
+          log("Karaoke position sync throttled:", chrome.runtime.lastError.message);
+        } else {
+          log("Settings Updated:", { karaokeCustomPosition: value });
+        }
+      });
+    }
+  }, []);
+
   const updateSetting = (key, value) => {
     setSettings((prev) => ({ ...prev, [key]: value }));
+
+    // Sync to store immediately for instantaneous UI/overlay updates
+    if (key === "compactMode") useAppStore.getState().setCompactMode(value);
+    if (key === "lyricsSizePreset")
+      useAppStore.setState({ lyricsSizePreset: value });
+    if (key === "lyricsAnimationStyle")
+      useAppStore.setState({ lyricsAnimationStyle: value });
+    if (key === "reduceAnimations")
+      useAppStore.getState().setReduceAnimations(value);
+    if (key === "showCollapsedArtwork")
+      useAppStore.setState({ showCollapsedArtwork: value });
+    if (key === "displayMode")
+      useAppStore.setState({ displayMode: value });
+    if (key === "floatingPositionPreset")
+      useAppStore.setState({ floatingPositionPreset: value });
+    if (key === "floatingCustomPosition")
+      useAppStore.setState({ floatingCustomPosition: value });
+    if (key === "romanization")
+      useAppStore.setState({ isRomanizationEnabled: value });
+    if (key === "autoTranslate")
+      useAppStore.setState({ isTranslateEnabled: value });
+    if (key === "translationLang")
+      useAppStore.setState({ translationLanguage: value });
+    if (key === "themeId") {
+      useAppStore.setState({
+        customThemes: customThemes,
+        themeId: value,
+      });
+    }
+    if (key === "romanizationExclusions")
+      useAppStore.setState({ romanizationExclusions: value });
+    if (key === "translationExclusions")
+      useAppStore.setState({ translationExclusions: value });
+    if (key === "isKaraokeMode")
+      useAppStore.setState({ isKaraokeMode: Boolean(value) });
+    if (key === "karaokePosition")
+      useAppStore.setState({ karaokePosition: value });
+    if (key === "karaokeCustomPosition")
+      useAppStore.setState({ karaokeCustomPosition: value });
+    if (key === "karaokeFontSize")
+      useAppStore.setState({ karaokeFontSize: value });
+    if (key === "karaokeAnimationStyle")
+      useAppStore.setState({ karaokeAnimationStyle: value });
+    if (key === "isVocalMuted")
+      useAppStore.getState().setVocalMuted(Boolean(value));
+
+    // Handle high-frequency slider drag with trailing debounce to prevent MAX_WRITE_OPERATIONS_PER_MINUTE quota error
+    if (key === "karaokeCustomPosition") {
+      if (karaokePositionDebounceTimer.current) {
+        clearTimeout(karaokePositionDebounceTimer.current);
+      }
+      karaokePositionDebounceTimer.current = setTimeout(() => {
+        karaokePositionDebounceTimer.current = null;
+        if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+          chrome.storage.sync.set({ karaokeCustomPosition: value }, () => {
+            if (chrome.runtime?.lastError) {
+              log("Karaoke position sync throttled:", chrome.runtime.lastError.message);
+            } else {
+              log("Settings Updated:", { karaokeCustomPosition: value });
+            }
+          });
+        }
+      }, 250);
+      return;
+    }
 
     let storageUpdate: Record<string, any> = {};
     if (key === "showLogs") storageUpdate.showLogs = value;
@@ -387,43 +510,21 @@ const SettingsContent = () => {
       storageUpdate.romanizationExclusions = value;
     if (key === "translationExclusions")
       storageUpdate.translationExclusions = value;
+    if (key === "isKaraokeMode") storageUpdate.isKaraokeMode = value;
+    if (key === "karaokePosition") storageUpdate.karaokePosition = value;
+    if (key === "karaokeFontSize") storageUpdate.karaokeFontSize = value;
+    if (key === "karaokeAnimationStyle") storageUpdate.karaokeAnimationStyle = value;
+    if (key === "isVocalMuted") storageUpdate.isVocalMuted = value;
 
-    chrome.storage.sync.set(storageUpdate, () => {
-      log("Settings Updated:", storageUpdate);
-
-      // Sync to store immediately for all settings that affect UI
-      if (key === "compactMode") useAppStore.getState().setCompactMode(value);
-      if (key === "lyricsSizePreset")
-        useAppStore.setState({ lyricsSizePreset: value });
-      if (key === "lyricsAnimationStyle")
-        useAppStore.setState({ lyricsAnimationStyle: value });
-      if (key === "reduceAnimations")
-        useAppStore.getState().setReduceAnimations(value);
-      if (key === "showCollapsedArtwork")
-        useAppStore.setState({ showCollapsedArtwork: value });
-      if (key === "displayMode")
-        useAppStore.setState({ displayMode: value });
-      if (key === "floatingPositionPreset")
-        useAppStore.setState({ floatingPositionPreset: value });
-      if (key === "floatingCustomPosition")
-        useAppStore.setState({ floatingCustomPosition: value });
-      if (key === "romanization")
-        useAppStore.setState({ isRomanizationEnabled: value });
-      if (key === "autoTranslate")
-        useAppStore.setState({ isTranslateEnabled: value });
-      if (key === "translationLang")
-        useAppStore.setState({ translationLanguage: value });
-      if (key === "themeId") {
-        useAppStore.setState({
-          customThemes: customThemes,
-          themeId: value,
-        });
-      }
-      if (key === "romanizationExclusions")
-        useAppStore.setState({ romanizationExclusions: value });
-      if (key === "translationExclusions")
-        useAppStore.setState({ translationExclusions: value });
-    });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set(storageUpdate, () => {
+        if (chrome.runtime?.lastError) {
+          log("Settings sync warning:", chrome.runtime.lastError.message);
+        } else {
+          log("Settings Updated:", storageUpdate);
+        }
+      });
+    }
   };
 
   const persistCustomThemes = (nextCustomThemeRecords) =>
@@ -1167,6 +1268,484 @@ const SettingsContent = () => {
                         >
                           <RotateCcw size={13} />
                           Reset Position
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* ─── Karaoke Mode Section ─── */}
+              <div style={{ marginTop: "20px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "12px",
+                    marginBottom: "8px",
+                  }}
+                >
+                  <MicVocal size={20} color="var(--lyrical-text-primary)" />
+                  <h2 style={sectionTitleStyle}>Karaoke Mode</h2>
+                </div>
+                <p style={sectionDescriptionStyle}>
+                  Overlay lyrics on the video player while watching.
+                </p>
+
+                <div style={sectionCardStyle}>
+                  {/* Karaoke Toggle */}
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "14px",
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontWeight: "600",
+                          fontSize: "13px",
+                          color: "var(--lyrical-text-primary)",
+                        }}
+                      >
+                        Enable Karaoke
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "11.5px",
+                          color: "var(--lyrical-text-secondary)",
+                          marginTop: "2px",
+                        }}
+                      >
+                        Show lyrics over the YouTube video
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={settings.isKaraokeMode}
+                      onClick={() =>
+                        updateSetting("isKaraokeMode", !settings.isKaraokeMode)
+                      }
+                      style={{
+                        position: "relative",
+                        width: "40px",
+                        height: "22px",
+                        borderRadius: "999px",
+                        border: "none",
+                        cursor: "pointer",
+                        background: settings.isKaraokeMode
+                          ? "var(--lyrical-accent)"
+                          : "var(--lyrical-card-bg-elevated)",
+                        transition: "background 0.2s ease",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          top: "2px",
+                          left: settings.isKaraokeMode ? "20px" : "2px",
+                          width: "18px",
+                          height: "18px",
+                          borderRadius: "999px",
+                          background: settings.isKaraokeMode
+                            ? "#fff"
+                            : "var(--lyrical-text-secondary)",
+                          transition: "left 0.2s ease",
+                        }}
+                      />
+                    </button>
+                  </div>
+
+                  {/* Position Presets — shown only when karaoke is on */}
+                  {settings.isKaraokeMode && (
+                    <div style={{ marginTop: "16px" }}>
+                      <div
+                        style={{
+                          fontWeight: "600",
+                          fontSize: "13px",
+                          color: "var(--lyrical-text-primary)",
+                          marginBottom: "8px",
+                        }}
+                      >
+                        Lyrics Position
+                      </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(4, 1fr)",
+                          gap: "6px",
+                        }}
+                      >
+                        {(
+                          [
+                            { id: "top", label: "Top", icon: <ArrowUpToLine size={15} /> },
+                            { id: "bottom", label: "Bottom", icon: <ArrowDownToLine size={15} /> },
+                            { id: "center", label: "Center", icon: <AlignCenterHorizontal size={15} /> },
+                            { id: "custom", label: "Custom", icon: <Move size={15} /> },
+                          ] as const
+                        ).map((pos) => (
+                          <button
+                            key={pos.id}
+                            type="button"
+                            onClick={() =>
+                              updateSetting("karaokePosition", pos.id)
+                            }
+                            style={{
+                              padding: "8px 4px",
+                              borderRadius: "8px",
+                              border:
+                                settings.karaokePosition === pos.id
+                                  ? "1.5px solid var(--lyrical-accent)"
+                                  : "1px solid var(--lyrical-border)",
+                              background:
+                                settings.karaokePosition === pos.id
+                                  ? "var(--lyrical-accent-soft)"
+                                  : "transparent",
+                              cursor: "pointer",
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                              gap: "4px",
+                              transition: "all 0.18s ease",
+                            }}
+                          >
+                            <span
+                              style={{
+                                color:
+                                  settings.karaokePosition === pos.id
+                                    ? "var(--lyrical-accent)"
+                                    : "var(--lyrical-text-secondary)",
+                              }}
+                            >
+                              {pos.icon}
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: "600",
+                                color:
+                                  settings.karaokePosition === pos.id
+                                    ? "var(--lyrical-accent)"
+                                    : "var(--lyrical-text-secondary)",
+                              }}
+                            >
+                              {pos.label}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Custom Position Slider */}
+                      {settings.karaokePosition === "custom" && (
+                        <div style={{ marginTop: "12px" }}>
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              marginBottom: "6px",
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: "12px",
+                                fontWeight: "500",
+                                color: "var(--lyrical-text-secondary)",
+                              }}
+                            >
+                              Vertical Position
+                            </span>
+                            <span
+                              style={{
+                                fontSize: "12px",
+                                fontWeight: "600",
+                                color: "var(--lyrical-accent)",
+                                fontVariantNumeric: "tabular-nums",
+                              }}
+                            >
+                              {settings.karaokeCustomPosition}%
+                            </span>
+                          </div>
+                          <input
+                            type="range"
+                            min={8}
+                            max={88}
+                            step={1}
+                            value={settings.karaokeCustomPosition}
+                            onChange={(e) =>
+                              updateSetting(
+                                "karaokeCustomPosition",
+                                Number(e.target.value),
+                              )
+                            }
+                            onPointerUp={(e) =>
+                              flushKaraokePosition(Number(e.currentTarget.value))
+                            }
+                            onKeyUp={(e) =>
+                              flushKaraokePosition(Number(e.currentTarget.value))
+                            }
+                            style={{
+                              width: "100%",
+                              accentColor: "var(--lyrical-accent)",
+                              cursor: "pointer",
+                            }}
+                          />
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              fontSize: "10px",
+                              color: "var(--lyrical-text-secondary)",
+                              opacity: 0.7,
+                              marginTop: "2px",
+                            }}
+                          >
+                            <span>Top (8%)</span>
+                            <span>Bottom (88%)</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Font Size Presets */}
+                      <div style={{ marginTop: "16px" }}>
+                        <div
+                          style={{
+                            fontWeight: "600",
+                            fontSize: "13px",
+                            color: "var(--lyrical-text-primary)",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          Karaoke Font Size
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(4, 1fr)",
+                            gap: "6px",
+                          }}
+                        >
+                          {(
+                            [
+                              { id: "small", label: "Small" },
+                              { id: "medium", label: "Medium" },
+                              { id: "large", label: "Large" },
+                              { id: "xlarge", label: "X-Large" },
+                            ] as const
+                          ).map((sz) => (
+                            <button
+                              key={sz.id}
+                              type="button"
+                              onClick={() =>
+                                updateSetting("karaokeFontSize", sz.id)
+                              }
+                              style={{
+                                padding: "8px 4px",
+                                borderRadius: "8px",
+                                border:
+                                  settings.karaokeFontSize === sz.id
+                                    ? "1.5px solid var(--lyrical-accent)"
+                                    : "1px solid var(--lyrical-border)",
+                                background:
+                                  settings.karaokeFontSize === sz.id
+                                    ? "var(--lyrical-accent-soft)"
+                                    : "transparent",
+                                cursor: "pointer",
+                                textAlign: "center",
+                                transition: "all 0.18s ease",
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: "11px",
+                                  fontWeight: "600",
+                                  color:
+                                    settings.karaokeFontSize === sz.id
+                                      ? "var(--lyrical-accent)"
+                                      : "var(--lyrical-text-secondary)",
+                                }}
+                              >
+                                {sz.label}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Karaoke Animation Style (Classic vs Modern Gentle Spring) */}
+                      <div style={{ marginTop: "16px" }}>
+                        <div
+                          style={{
+                            fontWeight: "600",
+                            fontSize: "13px",
+                            color: "var(--lyrical-text-primary)",
+                            marginBottom: "8px",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          <Sparkles size={14} color="var(--lyrical-accent)" />
+                          Karaoke Lines Animation Engine
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 1fr",
+                            gap: "8px",
+                          }}
+                        >
+                          {(
+                            [
+                              {
+                                id: "classic",
+                                label: "Classic",
+                                desc: "Steady elevated highlight",
+                                icon: <Layers size={14} />,
+                              },
+                              {
+                                id: "modern",
+                                label: "Modern (Gentle Spring)",
+                                desc: "Dynamic spring bounce & glow",
+                                icon: <Sparkles size={14} />,
+                              },
+                            ] as const
+                          ).map((styleOpt) => {
+                            const isSelected =
+                              (settings.karaokeAnimationStyle || "classic") ===
+                              styleOpt.id;
+                            return (
+                              <button
+                                key={styleOpt.id}
+                                type="button"
+                                onClick={() =>
+                                  updateSetting("karaokeAnimationStyle", styleOpt.id)
+                                }
+                                style={{
+                                  padding: "10px 10px",
+                                  borderRadius: "8px",
+                                  border: isSelected
+                                    ? "1.5px solid var(--lyrical-accent)"
+                                    : "1px solid var(--lyrical-border)",
+                                  background: isSelected
+                                    ? "var(--lyrical-accent-soft)"
+                                    : "transparent",
+                                  cursor: "pointer",
+                                  display: "flex",
+                                  flexDirection: "column",
+                                  alignItems: "flex-start",
+                                  textAlign: "left",
+                                  gap: "3px",
+                                  transition: "all 0.18s ease",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: "5px",
+                                    color: isSelected
+                                      ? "var(--lyrical-accent)"
+                                      : "var(--lyrical-text-primary)",
+                                    fontSize: "11.5px",
+                                    fontWeight: "600",
+                                  }}
+                                >
+                                  {styleOpt.icon}
+                                  <span>{styleOpt.label}</span>
+                                </div>
+                                <span
+                                  style={{
+                                    fontSize: "10px",
+                                    color: "var(--lyrical-text-secondary)",
+                                    lineHeight: "1.3",
+                                    opacity: isSelected ? 0.95 : 0.7,
+                                  }}
+                                >
+                                  {styleOpt.desc}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Real-time Vocal Removal Toggle */}
+                      <div
+                        style={{
+                          marginTop: "16px",
+                          paddingTop: "14px",
+                          borderTop: "1px solid var(--lyrical-border-soft)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: "14px",
+                        }}
+                      >
+                        <div>
+                          <div
+                            style={{
+                              fontWeight: "600",
+                              fontSize: "13px",
+                              color: "var(--lyrical-text-primary)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: "6px",
+                            }}
+                          >
+                            <MicOff size={14} color="var(--lyrical-accent)" />
+                            Mute Vocals (Instrumental)
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "11.5px",
+                              color: "var(--lyrical-text-secondary)",
+                              marginTop: "2px",
+                              lineHeight: "1.35",
+                            }}
+                          >
+                            Suppresses center lead vocals in real time so you can sing along
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={settings.isVocalMuted}
+                          onClick={() =>
+                            updateSetting("isVocalMuted", !settings.isVocalMuted)
+                          }
+                          style={{
+                            position: "relative",
+                            width: "40px",
+                            height: "22px",
+                            borderRadius: "999px",
+                            border: "none",
+                            cursor: "pointer",
+                            background: settings.isVocalMuted
+                              ? "var(--lyrical-accent)"
+                              : "var(--lyrical-card-bg-elevated)",
+                            transition: "background 0.2s ease",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: "2px",
+                              left: settings.isVocalMuted ? "20px" : "2px",
+                              width: "18px",
+                              height: "18px",
+                              borderRadius: "999px",
+                              background: settings.isVocalMuted
+                                ? "#fff"
+                                : "var(--lyrical-text-secondary)",
+                              transition: "left 0.2s ease",
+                            }}
+                          />
                         </button>
                       </div>
                     </div>

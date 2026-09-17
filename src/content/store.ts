@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { DEFAULT_THEME_ID } from "../themes";
+import { vocalRemover } from "../modules/audio/vocalRemover";
 import type {
   CaptionTrackInfo,
   CustomTheme,
@@ -141,6 +142,12 @@ interface LyricalSettingsState {
   compactMode: boolean;
   lyricsSizePreset: "compact" | "standard" | "large" | "cinematic";
   lyricsAnimationStyle: "better-lyrics" | "archivetune";
+  isKaraokeMode: boolean;
+  karaokePosition: "top" | "bottom" | "center" | "custom";
+  karaokeCustomPosition: number;
+  karaokeFontSize: "small" | "medium" | "large" | "xlarge";
+  karaokeAnimationStyle: "classic" | "modern";
+  isVocalMuted: boolean;
   reduceAnimations: boolean;
   showCollapsedArtwork: boolean;
   displayMode: "sidebar" | "floating";
@@ -190,6 +197,12 @@ interface LyricalAppState extends LyricalSettingsState {
   setSettings: (settings: Partial<LyricalSettingsState>) => void;
   setCompactMode: (isCompact: boolean) => void;
   setLyricsAnimationStyle: (style: "better-lyrics" | "archivetune") => void;
+  setKaraokeMode: (enabled: boolean) => void;
+  setKaraokePosition: (position: "top" | "bottom" | "center" | "custom") => void;
+  setKaraokeCustomPosition: (percent: number) => void;
+  setKaraokeFontSize: (size: "small" | "medium" | "large" | "xlarge") => void;
+  setKaraokeAnimationStyle: (style: "classic" | "modern") => void;
+  setVocalMuted: (muted: boolean) => void;
   setReduceAnimations: (reduceAnimations: boolean) => void;
   setThemeId: (themeId: string) => void;
   setCustomThemes: (customThemes: CustomTheme[]) => void;
@@ -199,6 +212,8 @@ interface LyricalAppState extends LyricalSettingsState {
   reset: () => void;
   resetLyricsOnly: () => void;
 }
+
+let karaokeCustomPosTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useAppStore = create<LyricalAppState>((set) => ({
   // Content Data
@@ -233,6 +248,12 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   compactMode: false, // Added compactMode
   lyricsSizePreset: "standard",
   lyricsAnimationStyle: "better-lyrics",
+  isKaraokeMode: false,
+  karaokePosition: "bottom",
+  karaokeCustomPosition: 80,
+  karaokeFontSize: "medium",
+  karaokeAnimationStyle: "classic",
+  isVocalMuted: false,
   reduceAnimations: false,
   showCollapsedArtwork: true,
   displayMode: "sidebar",
@@ -249,15 +270,25 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   // Actions
   setSongInfo: (info) => set({ songInfo: info }),
   setLyrics: (lyrics, source, language) => {
-    set((state) => ({
-      lyrics,
-      lyricsSource: source || null,
-      lyricsLanguage: language || null,
-      availableLyricsSources:
-        source && !state.availableLyricsSources.includes(source)
-          ? [...state.availableLyricsSources, source]
-          : state.availableLyricsSources,
-    }));
+    set((state) => {
+      const nextSource = source || null;
+      const isDifferentSource = nextSource !== state.lyricsSource;
+      return {
+        lyrics,
+        lyricsSource: nextSource,
+        lyricsLanguage: language || null,
+        ...(isDifferentSource
+          ? {
+              romanizedLyrics: [],
+              translatedLyrics: [],
+            }
+          : {}),
+        availableLyricsSources:
+          source && !state.availableLyricsSources.includes(source)
+            ? [...state.availableLyricsSources, source]
+            : state.availableLyricsSources,
+      };
+    });
     // Persist active source to storage for popup access
     if (source) {
       chrome.storage.local.set({ activeLyricsSource: source });
@@ -307,6 +338,69 @@ export const useAppStore = create<LyricalAppState>((set) => ({
     set({ lyricsAnimationStyle: style });
     chrome.storage.sync.set({ lyricsAnimationStyle: style });
   },
+  setKaraokeMode: (enabled) => {
+    set({ isKaraokeMode: enabled });
+    if (!enabled) {
+      void vocalRemover.setMuted(false);
+      set({ isVocalMuted: false });
+      if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+        chrome.storage.sync.set({ isVocalMuted: false }, () => {
+          void chrome.runtime?.lastError;
+        });
+      }
+    }
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ isKaraokeMode: enabled }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setKaraokePosition: (position) => {
+    set({ karaokePosition: position });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ karaokePosition: position }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+  setKaraokeCustomPosition: (percent) => {
+    const clamped = Math.max(8, Math.min(88, percent));
+    set({ karaokeCustomPosition: clamped });
+    if (karaokeCustomPosTimer) clearTimeout(karaokeCustomPosTimer);
+    karaokeCustomPosTimer = setTimeout(() => {
+      if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+        chrome.storage.sync.set({ karaokeCustomPosition: clamped }, () => {
+          void chrome.runtime?.lastError;
+        });
+      }
+    }, 250);
+  },
+  setKaraokeFontSize: (size) => {
+    set({ karaokeFontSize: size });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ karaokeFontSize: size }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+  setKaraokeAnimationStyle: (style) => {
+    set({ karaokeAnimationStyle: style });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ karaokeAnimationStyle: style }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+  setVocalMuted: (muted) => {
+    set({ isVocalMuted: muted });
+    void vocalRemover.setMuted(muted);
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ isVocalMuted: muted }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
   setReduceAnimations: (reduceAnimations) => set({ reduceAnimations }),
   setThemeId: (themeId) => set({ themeId }),
   setCustomThemes: (customThemes) =>
@@ -332,8 +426,10 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       return { sourcePreferences: newPrefs };
     }),
 
-  reset: () =>
+  reset: () => {
+    vocalRemover.reset();
     set({
+      isVocalMuted: false,
       songInfo: null,
       lyrics: [],
       lyricsSource: null,
@@ -348,7 +444,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       isLoading: false,
       isProcessingLyrics: false,
       lyricsLanguage: null,
-    }),
+    });
+  },
 
   resetLyricsOnly: () =>
     set({

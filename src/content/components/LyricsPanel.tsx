@@ -8,6 +8,8 @@ import {
   Settings,
   ArrowLeft,
   HelpCircle,
+  MicVocal,
+  MicOff,
   Globe,
   Type,
 } from "lucide-react";
@@ -116,6 +118,74 @@ const GeniusSearchPill = ({
       <GeniusIcon size={variant === "emptyState" ? 15 : 13} />
       <span>Search on Genius</span>
     </button>
+  );
+};
+
+const KaraokeModeNotice = ({
+  hasLyrics,
+  onExit,
+}: {
+  hasLyrics: boolean;
+  onExit: () => void;
+}) => {
+  const isVocalMuted = useAppStore((state) => state.isVocalMuted);
+  const setVocalMuted = useAppStore((state) => state.setVocalMuted);
+
+  return (
+    <div className="lyrical-karaoke-card-wrapper">
+      <div className="lyrical-karaoke-notice">
+        <div className="lyrical-karaoke-notice-icon">
+          <MicVocal size={20} />
+        </div>
+        <div className="lyrical-karaoke-notice-copy">
+          <strong>Karaoke mode is on</strong>
+          <span>
+            {hasLyrics
+              ? "ArchiveTune lyrics are now synced over the video."
+              : "The overlay will begin when synced lyrics are ready."}
+          </span>
+        </div>
+        <button className="lyrical-karaoke-exit" type="button" onClick={onExit}>
+          Exit
+        </button>
+      </div>
+
+      <div className="lyrical-karaoke-vocal-section">
+        <button
+          type="button"
+          className={`lyrical-karaoke-vocal-btn ${isVocalMuted ? "active" : ""}`}
+          onClick={() => setVocalMuted(!isVocalMuted)}
+          title={
+            isVocalMuted
+              ? "Restore original vocals"
+              : "Suppress vocals for karaoke sing-along"
+          }
+        >
+          <div className="lyrical-karaoke-vocal-btn-left">
+            <div className="lyrical-karaoke-vocal-btn-icon">
+              {isVocalMuted ? <MicOff size={16} /> : <Music size={16} />}
+            </div>
+            <div className="lyrical-karaoke-vocal-btn-text">
+              <span className="lyrical-karaoke-vocal-title">
+                {isVocalMuted
+                  ? "Vocals Muted (Sing Along)"
+                  : "Mute Vocals (Instrumental)"}
+              </span>
+              <span className="lyrical-karaoke-vocal-desc">
+                {isVocalMuted
+                  ? "Phase cancellation active • Click to restore vocals"
+                  : "Remove singing audio so you can sing the song"}
+              </span>
+            </div>
+          </div>
+          <div
+            className={`lyrical-karaoke-vocal-badge ${isVocalMuted ? "on" : ""}`}
+          >
+            {isVocalMuted ? "ON" : "OFF"}
+          </div>
+        </button>
+      </div>
+    </div>
   );
 };
 
@@ -561,7 +631,8 @@ const ImperativeLyricsHost = React.memo(
       />
     );
   },
-  (prev, next) => prev.resetKey === next.resetKey && prev.rootId === next.rootId,
+  (prev, next) =>
+    prev.resetKey === next.resetKey && prev.rootId === next.rootId,
 );
 
 const LyricsPanel = () => {
@@ -583,6 +654,7 @@ const LyricsPanel = () => {
     isLoading,
     isProcessingLyrics,
     compactMode,
+    isKaraokeMode,
     lyricsSizePreset,
     lyricsAnimationStyle,
     lyricsLanguage,
@@ -610,6 +682,7 @@ const LyricsPanel = () => {
       isLoading: state.isLoading,
       isProcessingLyrics: state.isProcessingLyrics,
       compactMode: state.compactMode,
+      isKaraokeMode: state.isKaraokeMode,
       lyricsSizePreset: state.lyricsSizePreset,
       lyricsAnimationStyle: state.lyricsAnimationStyle,
       lyricsLanguage: state.lyricsLanguage,
@@ -808,14 +881,15 @@ const LyricsPanel = () => {
   // Determine Strategy
   // If source is Better Lyrics or Musixmatch or Lyrical, enable animation engine
   const shouldUseAnimationEngine =
-    lyricsSource === "better_lyrics" ||
-    lyricsSource === "musixmatch" ||
-    lyricsSource === "musixmatch-richsync" ||
-    lyricsSource === "lyrical" ||
-    lyricsSource === "unison-richsynced" ||
-    lyricsSource === "binimum-richsynced" ||
-    lyricsSource === "portato-richsynced" ||
-    lyricsSource === "youlyplus-richsynced";
+    !isKaraokeMode &&
+    (lyricsSource === "better_lyrics" ||
+      lyricsSource === "musixmatch" ||
+      lyricsSource === "musixmatch-richsync" ||
+      lyricsSource === "lyrical" ||
+      lyricsSource === "unison-richsynced" ||
+      lyricsSource === "binimum-richsynced" ||
+      lyricsSource === "portato-richsynced" ||
+      lyricsSource === "youlyplus-richsynced");
 
   let strategyName = "line";
   if (shouldUseAnimationEngine) {
@@ -983,7 +1057,7 @@ const LyricsPanel = () => {
 
   const { strategy, setIsUserScrolled } = useLyricsEngine(
     strategyName,
-    lyrics,
+    isKaraokeMode ? [] : lyrics,
     { isPlaying, offset }, // Pass total offset (base + user)
     contentRef,
     engineExtraData,
@@ -1336,7 +1410,7 @@ const LyricsPanel = () => {
     collapsedLineIndex >= 0
       ? translatedLyrics?.[collapsedLineIndex]?.translated || ""
       : "";
-  const hasCollapsedPreview = !isExpanded && !!collapsedLine;
+  const hasCollapsedPreview = !isExpanded && !!collapsedLine && !isKaraokeMode;
   // Use global availability (hasRomanized/hasTranslated) to size the panel,
   // not current line content. This prevents height jumps on instrumental ↔ lyric transitions.
   const collapsedSecondaryCount =
@@ -1839,7 +1913,13 @@ const LyricsPanel = () => {
               }}
             >
               {isExpanded ? (
-                "Lyrical"
+                isKaraokeMode ? (
+                  "Karaoke"
+                ) : (
+                  "Lyrical"
+                )
+              ) : isKaraokeMode ? (
+                "Karaoke mode active"
               ) : lyrics && lyrics.length > 0 ? (
                 activeIndex >= 0 ? (
                   `🎵 ${lyrics[activeIndex].text}`
@@ -2016,13 +2096,12 @@ const LyricsPanel = () => {
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
+                      maxWidth: "100%",
                       transition:
                         "font-size 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.08s, letter-spacing 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.08s",
                     }}
                   >
-                    {(songInfo?.title || headerText)?.length > 18
-                      ? (songInfo?.title || headerText).substring(0, 18) + "..."
-                      : songInfo?.title || headerText}
+                    {songInfo?.title || headerText}
                   </h2>
                 </Tooltip>
                 <Tooltip
@@ -2038,16 +2117,12 @@ const LyricsPanel = () => {
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
+                      maxWidth: "100%",
                       transition:
                         "font-size 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.1s",
                     }}
                   >
-                    {(songInfo?.artist || t("lyricsPanel_playSong"))?.length >
-                    18
-                      ? (
-                          songInfo?.artist || t("lyricsPanel_playSong")
-                        ).substring(0, 18) + "..."
-                      : songInfo?.artist || t("lyricsPanel_playSong")}
+                    {songInfo?.artist || t("lyricsPanel_playSong")}
                   </p>
                 </Tooltip>
               </div>
@@ -2067,274 +2142,300 @@ const LyricsPanel = () => {
               id="lyrical-content"
               style={{
                 position: "relative",
-                height: !hasLyrics
+                height: isKaraokeMode
                   ? "auto"
+                  : !hasLyrics
+                    ? "auto"
+                    : compactMode
+                      ? "clamp(220px, 30vh, 260px)"
+                      : "clamp(320px, 50vh, 460px)",
+                maxHeight: isKaraokeMode
+                  ? "none"
                   : compactMode
                     ? "clamp(220px, 30vh, 260px)"
-                    : "clamp(320px, 50vh, 460px)",
-                maxHeight: compactMode
-                  ? "clamp(220px, 30vh, 260px)"
-                  : "clamp(320px, 50vh, 480px)",
-                minHeight: compactMode ? "160px" : "180px",
-                display: !hasLyrics ? "flex" : "block",
-                flexDirection: !hasLyrics ? "column" : undefined,
-                justifyContent: !hasLyrics ? "center" : undefined,
-                alignItems: !hasLyrics ? "center" : undefined,
-                overflowY: "auto",
+                    : "clamp(320px, 50vh, 480px)",
+                minHeight: isKaraokeMode
+                  ? "auto"
+                  : compactMode
+                    ? "160px"
+                    : "180px",
+                display: isKaraokeMode || !hasLyrics ? "flex" : "block",
+                flexDirection:
+                  isKaraokeMode || !hasLyrics ? "column" : undefined,
+                justifyContent:
+                  isKaraokeMode || !hasLyrics ? "center" : undefined,
+                alignItems: isKaraokeMode || !hasLyrics ? "center" : undefined,
+                overflowY: isKaraokeMode ? "hidden" : "auto",
                 overscrollBehavior: "contain",
                 padding: lyricsTypography.contentPadding,
-                paddingBottom: !hasLyrics
-                  ? lyricsTypography.contentPadding
-                  : "8px",
+                paddingBottom:
+                  isKaraokeMode || !hasLyrics
+                    ? lyricsTypography.contentPadding
+                    : "8px",
                 background: "var(--lyrical-panel-surface)",
                 borderRadius: "12px",
                 boxShadow: "inset 0 4px 12px rgba(0,0,0,0.3)",
                 transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
               }}
             >
-              <AnimatePresence>
-                {isProcessingLyrics && (
-                  <motion.div
-                    initial={
-                      reduceAnimations
-                        ? undefined
-                        : { opacity: 0, y: -6, scale: 0.98 }
-                    }
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={
-                      reduceAnimations
-                        ? undefined
-                        : { opacity: 0, y: -6, scale: 0.98 }
-                    }
-                    transition={{ duration: 0.22, ease: "easeOut" }}
-                    style={{
-                      position: "sticky",
-                      top: "4px",
-                      zIndex: 10,
-                      margin: "0 auto 8px auto",
-                      width: "fit-content",
-                      padding: "6px 14px",
-                      background: "var(--lyrical-accent-soft)",
-                      backdropFilter: "blur(8px)",
-                      borderRadius: "8px",
-                      textAlign: "center",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      pointerEvents: "none",
-                    }}
-                  >
-                    <ShinyText
-                      text={t("lyricsPanel_processing")}
-                      disabled={reduceAnimations}
-                      speed={3}
-                      className="lyrical-processing-text"
-                      color="var(--lyrical-accent)"
-                      shineColor="var(--lyrical-text-primary)"
-                      spread={120}
-                    />
-                    <style>{`
+              {isKaraokeMode ? (
+                <KaraokeModeNotice
+                  hasLyrics={hasLyrics}
+                  onExit={() => useAppStore.getState().setKaraokeMode(false)}
+                />
+              ) : (
+                <>
+                  <AnimatePresence>
+                    {isProcessingLyrics && (
+                      <motion.div
+                        initial={
+                          reduceAnimations
+                            ? undefined
+                            : { opacity: 0, y: -6, scale: 0.98 }
+                        }
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={
+                          reduceAnimations
+                            ? undefined
+                            : { opacity: 0, y: -6, scale: 0.98 }
+                        }
+                        transition={{ duration: 0.22, ease: "easeOut" }}
+                        style={{
+                          position: "sticky",
+                          top: "4px",
+                          zIndex: 10,
+                          margin: "0 auto 8px auto",
+                          width: "fit-content",
+                          padding: "6px 14px",
+                          background: "var(--lyrical-accent-soft)",
+                          backdropFilter: "blur(8px)",
+                          borderRadius: "8px",
+                          textAlign: "center",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <ShinyText
+                          text={t("lyricsPanel_processing")}
+                          disabled={reduceAnimations}
+                          speed={3}
+                          className="lyrical-processing-text"
+                          color="var(--lyrical-accent)"
+                          shineColor="var(--lyrical-text-primary)"
+                          spread={120}
+                        />
+                        <style>{`
                       .lyrical-processing-text {
                         font-size: 13.5px;
                         font-weight: 600;
                         letter-spacing: 0.25px;
                       }
                     `}</style>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              {lyrics && lyrics.length > 0 ? (
-                renderedStrategyLyrics ? (
-                  <React.Fragment key={engineResetKey}>
-                    {renderedStrategyLyrics}
-                  </React.Fragment>
-                ) : (
-                  // Fallback / Line Logic
-                  <>
-                    {lyrics.map((line, idx) => {
-                      // Get extra versions from REACTIVE store props
-                      const romanized = romanizedLyrics?.[idx]?.romanized;
-                      const translated = translatedLyrics?.[idx]?.translated;
-                      const isActive = idx === activeIndex;
-                      const isPast = activeIndex >= 0 && idx < activeIndex;
-                      const lyricText = line.text?.trim() ?? "";
-                      const isInstrumental =
-                        line.isInstrumental ||
-                        !lyricText ||
-                        lyricText === "♪" ||
-                        lyricText === "♫" ||
-                        /^\[?instrumental\s*only\]?$/i.test(lyricText);
-                      const nextLine = lyrics[idx + 1];
-                      const lineDuration =
-                        line.duration ??
-                        (nextLine
-                          ? Math.max(nextLine.time - line.time, 0.8)
-                          : 2);
-                      const paragraphAlign = "center";
-                      const secondaryAlign = "center";
-                      const canSeek = typeof line.time === "number";
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                  {lyrics && lyrics.length > 0 ? (
+                    renderedStrategyLyrics ? (
+                      <React.Fragment key={engineResetKey}>
+                        {renderedStrategyLyrics}
+                      </React.Fragment>
+                    ) : (
+                      // Fallback / Line Logic
+                      <>
+                        {lyrics.map((line, idx) => {
+                          // Get extra versions from REACTIVE store props
+                          const romanized = romanizedLyrics?.[idx]?.romanized;
+                          const translated =
+                            translatedLyrics?.[idx]?.translated;
+                          const isActive = idx === activeIndex;
+                          const isPast = activeIndex >= 0 && idx < activeIndex;
+                          const lyricText = line.text?.trim() ?? "";
+                          const isInstrumental =
+                            line.isInstrumental ||
+                            !lyricText ||
+                            lyricText === "♪" ||
+                            lyricText === "♫" ||
+                            /^\[?instrumental\s*only\]?$/i.test(lyricText);
+                          const nextLine = lyrics[idx + 1];
+                          const lineDuration =
+                            line.duration ??
+                            (nextLine
+                              ? Math.max(nextLine.time - line.time, 0.8)
+                              : 2);
+                          const paragraphAlign = "center";
+                          const secondaryAlign = "center";
+                          const canSeek = typeof line.time === "number";
 
-                      return (
-                        <div
-                          key={idx}
-                          data-line-index={idx}
-                          className={`lyric-line ${isActive ? "active" : ""}`}
-                          onClick={() => seekToLyricTime(line.time)}
-                          role={canSeek ? "button" : undefined}
-                          tabIndex={canSeek ? 0 : undefined}
-                          onKeyDown={(event) => {
-                            if (
-                              !canSeek ||
-                              (event.key !== "Enter" && event.key !== " ")
-                            ) {
-                              return;
-                            }
-
-                            event.preventDefault();
-                            seekToLyricTime(line.time);
-                          }}
-                          style={{
-                            padding: lyricsTypography.linePadding,
-                            textAlign: paragraphAlign,
-                            display: "flex",
-                            flexDirection: "column",
-                            alignItems: "center",
-                            gap: lyricsTypography.lineGap,
-                            borderRadius: "0",
-                            minHeight: isInstrumental
-                              ? lyricsTypography.instrumentalMinHeight
-                              : "auto",
-                            margin: lyricsTypography.lineMargin,
-                            opacity: isActive ? 1 : isPast ? 0.76 : 0.62,
-                            filter: "none",
-                            transform: "none",
-                            transition: "opacity 0.22s ease, color 0.22s ease",
-                            background: "transparent",
-                            boxShadow: "none",
-                            cursor: canSeek ? "pointer" : "default",
-                            outline: "none",
-                          }}
-                        >
-                          {/* Main Text / Instrumental Indicator */}
-                          {isInstrumental ? (
-                            <FallbackInstrumentalLine
-                              durationSeconds={lineDuration}
-                              lineIndex={idx}
-                              lineTime={
-                                typeof line.time === "number" ? line.time : 0
-                              }
-                              isActive={isActive}
-                              offset={offset}
-                              minHeight={lyricsTypography.instrumentalMinHeight}
-                              fontSize={lyricsTypography.activeOriginal}
-                            />
-                          ) : (
+                          return (
                             <div
-                              className="lyric-original"
+                              key={idx}
+                              data-line-index={idx}
+                              className={`lyric-line ${isActive ? "active" : ""}`}
+                              onClick={() => seekToLyricTime(line.time)}
+                              role={canSeek ? "button" : undefined}
+                              tabIndex={canSeek ? 0 : undefined}
+                              onKeyDown={(event) => {
+                                if (
+                                  !canSeek ||
+                                  (event.key !== "Enter" && event.key !== " ")
+                                ) {
+                                  return;
+                                }
+
+                                event.preventDefault();
+                                seekToLyricTime(line.time);
+                              }}
                               style={{
-                                fontSize: isActive
-                                  ? lyricsTypography.activeOriginal
-                                  : lyricsTypography.inactiveOriginal,
-                                fontWeight: isActive
-                                  ? "750"
-                                  : isPast
-                                    ? "600"
-                                    : "560",
-                                color: isActive
-                                  ? "var(--lyrical-text-primary)"
-                                  : isPast
-                                    ? "var(--lyrical-text-secondary)"
-                                    : "var(--lyrical-text-muted)",
-                                lineHeight: "1.45",
-                                letterSpacing: "0",
-                                maxWidth: "100%",
-                                order: 1,
-                                overflowWrap: "break-word",
-                                textShadow: "none",
-                                textAlign: "center",
-                                textWrap: "pretty",
-                                whiteSpace: "pre-wrap",
+                                padding: lyricsTypography.linePadding,
+                                textAlign: paragraphAlign,
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: lyricsTypography.lineGap,
+                                borderRadius: "0",
+                                minHeight: isInstrumental
+                                  ? lyricsTypography.instrumentalMinHeight
+                                  : "auto",
+                                margin: lyricsTypography.lineMargin,
+                                opacity: isActive ? 1 : isPast ? 0.76 : 0.62,
+                                filter: "none",
+                                transform: "none",
+                                transition:
+                                  "opacity 0.22s ease, color 0.22s ease",
+                                background: "transparent",
+                                boxShadow: "none",
+                                cursor: canSeek ? "pointer" : "default",
+                                outline: "none",
                               }}
                             >
-                              {lyricsAnimationStyle === "archivetune" &&
-                              isActive &&
-                              !reduceAnimations ? (
-                                lyricText.split(" ").map((word, wordIdx, arr) => (
-                                  <span
-                                    key={wordIdx}
-                                    className="at-word-ripple"
-                                    style={{
-                                      animationDelay: `${wordIdx * 40}ms`,
-                                    }}
-                                  >
-                                    {word}
-                                    {wordIdx < arr.length - 1 ? " " : ""}
-                                  </span>
-                                ))
+                              {/* Main Text / Instrumental Indicator */}
+                              {isInstrumental ? (
+                                <FallbackInstrumentalLine
+                                  durationSeconds={lineDuration}
+                                  lineIndex={idx}
+                                  lineTime={
+                                    typeof line.time === "number"
+                                      ? line.time
+                                      : 0
+                                  }
+                                  isActive={isActive}
+                                  offset={offset}
+                                  minHeight={
+                                    lyricsTypography.instrumentalMinHeight
+                                  }
+                                  fontSize={lyricsTypography.activeOriginal}
+                                />
                               ) : (
-                                lyricText
+                                <div
+                                  className="lyric-original"
+                                  style={{
+                                    fontSize: isActive
+                                      ? lyricsTypography.activeOriginal
+                                      : lyricsTypography.inactiveOriginal,
+                                    fontWeight: isActive
+                                      ? "750"
+                                      : isPast
+                                        ? "600"
+                                        : "560",
+                                    color: isActive
+                                      ? "var(--lyrical-text-primary)"
+                                      : isPast
+                                        ? "var(--lyrical-text-secondary)"
+                                        : "var(--lyrical-text-muted)",
+                                    lineHeight: "1.45",
+                                    letterSpacing: "0",
+                                    maxWidth: "100%",
+                                    order: 1,
+                                    overflowWrap: "break-word",
+                                    textShadow: "none",
+                                    textAlign: "center",
+                                    textWrap: "pretty",
+                                    whiteSpace: "pre-wrap",
+                                  }}
+                                >
+                                  {lyricsAnimationStyle === "archivetune" &&
+                                  isActive &&
+                                  !reduceAnimations
+                                    ? lyricText
+                                        .split(" ")
+                                        .map((word, wordIdx, arr) => (
+                                          <span
+                                            key={wordIdx}
+                                            className="at-word-ripple"
+                                            style={{
+                                              animationDelay: `${wordIdx * 40}ms`,
+                                            }}
+                                          >
+                                            {word}
+                                            {wordIdx < arr.length - 1
+                                              ? " "
+                                              : ""}
+                                          </span>
+                                        ))
+                                    : lyricText}
+                                </div>
+                              )}
+
+                              {/* Romanized */}
+                              {!isInstrumental && romanized && (
+                                <div
+                                  className="lyric-romanized"
+                                  style={{
+                                    alignSelf: secondaryAlign,
+                                    order: 5,
+                                    textAlign: paragraphAlign,
+                                  }}
+                                >
+                                  {romanized}
+                                </div>
+                              )}
+
+                              {/* Translated */}
+                              {!isInstrumental && translated && (
+                                <div
+                                  className="lyric-translated"
+                                  style={{
+                                    alignSelf: secondaryAlign,
+                                    order: 10,
+                                    textAlign: paragraphAlign,
+                                  }}
+                                >
+                                  {translated}
+                                </div>
                               )}
                             </div>
-                          )}
-
-                          {/* Romanized */}
-                          {!isInstrumental && romanized && (
-                            <div
-                              className="lyric-romanized"
-                              style={{
-                                alignSelf: secondaryAlign,
-                                order: 5,
-                                textAlign: paragraphAlign,
-                              }}
-                            >
-                              {romanized}
-                            </div>
-                          )}
-
-                          {/* Translated */}
-                          {!isInstrumental && translated && (
-                            <div
-                              className="lyric-translated"
-                              style={{
-                                alignSelf: secondaryAlign,
-                                order: 10,
-                                textAlign: paragraphAlign,
-                              }}
-                            >
-                              {translated}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                          );
+                        })}
+                        <div
+                          className="lyrical-line-spacer"
+                          style={{
+                            height: compactMode ? "130px" : "240px",
+                            minHeight: compactMode ? "130px" : "240px",
+                            pointerEvents: "none",
+                            flexShrink: 0,
+                          }}
+                          aria-hidden="true"
+                        />
+                      </>
+                    )
+                  ) : (
                     <div
-                      className="lyrical-line-spacer"
                       style={{
-                        height: compactMode ? "130px" : "240px",
-                        minHeight: compactMode ? "130px" : "240px",
-                        pointerEvents: "none",
-                        flexShrink: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "12px",
+                        padding: "32px",
+                        color: "var(--lyrical-text-muted)",
+                        height: "100%",
+                        justifyContent: "center",
                       }}
-                      aria-hidden="true"
-                    />
-                  </>
-                )
-              ) : (
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "center",
-                    gap: "12px",
-                    padding: "32px",
-                    color: "var(--lyrical-text-muted)",
-                    height: "100%",
-                    justifyContent: "center",
-                  }}
-                >
-                  {isLoading ? (
-                    <>
-                      {/* <div
+                    >
+                      {isLoading ? (
+                        <>
+                          {/* <div
                         style={{
                           width: "24px",
                           height: "24px",
@@ -2344,48 +2445,50 @@ const LyricsPanel = () => {
                           animation: "spin 0.8s linear infinite",
                         }}
                       ></div> */}
-                      <ShinyText
-                        text={t("lyricsPanel_searching")}
-                        disabled={reduceAnimations}
-                        speed={2.4}
-                        className="lyrical-searching-text"
-                        color="var(--lyrical-text-secondary)"
-                        shineColor="var(--lyrical-text-primary)"
-                        spread={115}
-                      />
-                      <style>{`
+                          <ShinyText
+                            text={t("lyricsPanel_searching")}
+                            disabled={reduceAnimations}
+                            speed={2.4}
+                            className="lyrical-searching-text"
+                            color="var(--lyrical-text-secondary)"
+                            shineColor="var(--lyrical-text-primary)"
+                            spread={115}
+                          />
+                          <style>{`
                         .lyrical-searching-text {
                           font-size: 14px;
                           font-weight: 500;
                           margin: 0;
                         }
                       `}</style>
-                    </>
-                  ) : (
-                    <>
-                      <div style={{ opacity: 0.5 }}>
-                        <svg
-                          width="32"
-                          height="32"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M9 18V5l12-2v13" />
-                          <circle cx="6" cy="18" r="3" />
-                          <circle cx="18" cy="16" r="3" />
-                          <line x1="2" y1="2" x2="22" y2="22" />
-                        </svg>
-                      </div>
-                      <p style={{ fontSize: "14px", margin: 0 }}>
-                        {t("lyricsPanel_noLyrics")}
-                      </p>
-                    </>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ opacity: 0.5 }}>
+                            <svg
+                              width="32"
+                              height="32"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            >
+                              <path d="M9 18V5l12-2v13" />
+                              <circle cx="6" cy="18" r="3" />
+                              <circle cx="18" cy="16" r="3" />
+                              <line x1="2" y1="2" x2="22" y2="22" />
+                            </svg>
+                          </div>
+                          <p style={{ fontSize: "14px", margin: 0 }}>
+                            {t("lyricsPanel_noLyrics")}
+                          </p>
+                        </>
+                      )}
+                    </div>
                   )}
-                </div>
+                </>
               )}
             </motion.div>
 

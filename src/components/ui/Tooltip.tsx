@@ -63,6 +63,8 @@ export const Tooltip = ({
         position: "relative",
         display: "inline-flex",
         alignItems: "center",
+        maxWidth: "100%",
+        minWidth: 0,
       }}
       onMouseEnter={() => setIsVisible(true)}
       onMouseLeave={() => setIsVisible(false)}

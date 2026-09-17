@@ -779,7 +779,9 @@ export class ArchiveTuneStrategy {
     }
 
     const now = Date.now();
-    const video = document.querySelector("video");
+    const video =
+      document.querySelector<HTMLVideoElement>("#movie_player video") ||
+      document.querySelector<HTMLVideoElement>("video");
     let mediaTime = video ? video.currentTime - offset : currentTime - offset;
 
     const offsetChanged =

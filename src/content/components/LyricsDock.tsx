@@ -7,6 +7,7 @@ import {
   Clock3,
   Languages,
   Minus,
+  MicVocal,
   Plus,
   RotateCcw,
   Type,
@@ -111,6 +112,12 @@ export default function LyricsDock({
   showResumeAutoscroll,
   onResumeAutoscroll,
 }: LyricsDockProps) {
+  const { isKaraokeMode, setKaraokeMode } = useAppStore(
+    useShallow((state) => ({
+      isKaraokeMode: state.isKaraokeMode,
+      setKaraokeMode: state.setKaraokeMode,
+    })),
+  );
   const {
     sourcePreferences,
     userOffset,
@@ -550,6 +557,22 @@ export default function LyricsDock({
             aria-pressed={isRomanizationEnabled}
           >
             <Type size={16} />
+          </button>
+        </Tooltip>
+
+        <Tooltip
+          content={isKaraokeMode ? "Exit karaoke mode" : "Start karaoke mode"}
+          align="center"
+        >
+          <button
+            className="lyrical-dock-icon"
+            type="button"
+            data-active={isKaraokeMode ? "true" : "false"}
+            onClick={() => setKaraokeMode(!isKaraokeMode)}
+            aria-label="Toggle karaoke mode"
+            aria-pressed={isKaraokeMode}
+          >
+            <MicVocal size={16} />
           </button>
         </Tooltip>
 

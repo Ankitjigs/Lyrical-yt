@@ -2,6 +2,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import LyricsPanel from "./components/LyricsPanel";
+import KaraokeOverlay from "./components/KaraokeOverlay";
 import { useAppStore } from "./store";
 import { log, warn, error, setDebugMode } from "./utils/logger";
 import { fetchBoiduLyrics } from "../modules/sources/boidu";
@@ -13,10 +14,12 @@ import { fetchYouLyPlusSourceLyrics } from "../modules/sources/youlyplus";
 import panelStyles from "./styles.css?inline";
 import lyricsEffectsStyles from "./lyricsEffects.css?inline";
 import archivetuneEffectsStyles from "./archivetuneEffects.css?inline";
+import karaokeEffectsStyles from "./karaokeEffects.css?inline";
 import shinyTextStyles from "./components/ShinyText.css?inline";
 import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
 import type { CaptionTrackInfo } from "../types/lyrics";
+import { vocalRemover } from "../modules/audio/vocalRemover";
 
 const SHADOW_HOST_STYLES = `
   :host {
@@ -41,6 +44,11 @@ const CONTENT_SHADOW_STYLES = [
   lyricsEffectsStyles,
   archivetuneEffectsStyles,
   shinyTextStyles,
+].join("\n");
+
+const KARAOKE_SHADOW_STYLES = [
+  CONTENT_SHADOW_STYLES,
+  karaokeEffectsStyles,
 ].join("\n");
 
 // This script creates and manages the lyrics panel on YouTube/Spotify pages
@@ -72,6 +80,11 @@ useAppStore.subscribe((state, prevState) => {
   ) {
     applyWrapperPlacement();
   }
+
+  // Ensure Karaoke Overlay is mounted whenever Karaoke Mode is active
+  if (state.isKaraokeMode) {
+    ensureKaraokeOverlay();
+  }
 });
 
 log("VERSION 2.1 - Script loaded!", window.location.href);
@@ -88,6 +101,12 @@ if (chrome.storage) {
       compactMode: false,
       lyricsSizePreset: "standard",
       lyricsAnimationStyle: "better-lyrics",
+      isKaraokeMode: false,
+      karaokePosition: "bottom",
+      karaokeCustomPosition: 80,
+      karaokeFontSize: "medium",
+      karaokeAnimationStyle: "classic",
+      isVocalMuted: false,
       reduceAnimations: false,
       showCollapsedArtwork: true,
       displayMode: "sidebar",
@@ -118,6 +137,12 @@ if (chrome.storage) {
         compactMode: res.compactMode,
         lyricsSizePreset: res.lyricsSizePreset || "standard",
         lyricsAnimationStyle: res.lyricsAnimationStyle || "better-lyrics",
+        isKaraokeMode: Boolean(res.isKaraokeMode),
+        karaokePosition: res.karaokePosition || "bottom",
+        karaokeCustomPosition: typeof res.karaokeCustomPosition === "number" ? res.karaokeCustomPosition : 80,
+        karaokeFontSize: res.karaokeFontSize || "medium",
+        karaokeAnimationStyle: res.karaokeAnimationStyle || "classic",
+        isVocalMuted: Boolean(res.isVocalMuted),
         reduceAnimations: res.reduceAnimations,
         showCollapsedArtwork: res.showCollapsedArtwork ?? true,
         displayMode: res.displayMode || "sidebar",
@@ -136,6 +161,9 @@ if (chrome.storage) {
 
       useAppStore.getState().setSettings(updates);
       applyWrapperPlacement();
+      if (res.isKaraokeMode) {
+        ensureKaraokeOverlay();
+      }
 
       log("Debug mode enabled via settings");
     },
@@ -303,6 +331,52 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     useAppStore.setState({
       showCollapsedArtwork: Boolean(changes.showCollapsedArtwork.newValue),
     });
+  }
+
+  // 12. Karaoke Mode & Position
+  if (changes.isKaraokeMode) {
+    const isKaraoke = Boolean(changes.isKaraokeMode.newValue);
+    useAppStore.getState().setSettings({ isKaraokeMode: isKaraoke });
+    if (isKaraoke) {
+      ensureKaraokeOverlay();
+    } else {
+      useAppStore.setState({ isVocalMuted: false });
+      void vocalRemover.setMuted(false);
+    }
+  }
+
+  if (changes.karaokePosition) {
+    useAppStore.setState({
+      karaokePosition: changes.karaokePosition.newValue || "bottom",
+    });
+  }
+
+  if (changes.karaokeCustomPosition) {
+    useAppStore.setState({
+      karaokeCustomPosition:
+        typeof changes.karaokeCustomPosition.newValue === "number"
+          ? changes.karaokeCustomPosition.newValue
+          : 80,
+    });
+  }
+
+  if (changes.karaokeFontSize) {
+    useAppStore.setState({
+      karaokeFontSize: changes.karaokeFontSize.newValue || "medium",
+    });
+  }
+
+  if (changes.karaokeAnimationStyle) {
+    useAppStore.setState({
+      karaokeAnimationStyle: changes.karaokeAnimationStyle.newValue || "classic",
+    });
+  }
+
+  // 13. Real-time Vocal Removal (Instrumental Filter)
+  if (changes.isVocalMuted !== undefined) {
+    const isMuted = Boolean(changes.isVocalMuted.newValue);
+    useAppStore.setState({ isVocalMuted: isMuted });
+    void vocalRemover.setMuted(isMuted);
   }
 });
 
@@ -946,6 +1020,45 @@ function createLyricsPanel() {
   return wrapper;
 }
 
+let karaokeOverlayElement: HTMLElement | null = null;
+
+function ensureKaraokeOverlay() {
+  if (document.getElementById("lyrical-karaoke-wrapper")) {
+    return;
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "lyrical-karaoke-wrapper";
+  wrapper.style.display = "none";
+  wrapper.style.position = "absolute";
+  wrapper.style.inset = "0";
+  wrapper.style.width = "100%";
+  wrapper.style.height = "100%";
+  wrapper.style.pointerEvents = "none";
+  wrapper.style.zIndex = "40"; // Above player controls layer
+
+  const shadowRoot = wrapper.attachShadow({ mode: "open" });
+  const style = document.createElement("style");
+  style.textContent = KARAOKE_SHADOW_STYLES;
+  shadowRoot.appendChild(style);
+
+  const mountPoint = document.createElement("div");
+  mountPoint.id = "lyrical-karaoke-root";
+  mountPoint.style.position = "absolute";
+  mountPoint.style.inset = "0";
+  mountPoint.style.width = "100%";
+  mountPoint.style.height = "100%";
+  shadowRoot.appendChild(mountPoint);
+
+  const root = createRoot(mountPoint);
+  root.render(<KaraokeOverlay />);
+  (wrapper as any)._reactRoot = root;
+
+  document.body.appendChild(wrapper);
+  karaokeOverlayElement = wrapper;
+  log("✅ Karaoke overlay initialized and mounted");
+}
+
 function findVisibleSecondaryColumn() {
   const secondaries = document.querySelectorAll("#secondary");
   for (const s of secondaries) {
@@ -1072,6 +1185,7 @@ function injectIntoYouTube() {
     log("Watch layout confirmed, injecting panel");
     lyricsPanel = createLyricsPanel();
     applyWrapperPlacement(lyricsPanel);
+    ensureKaraokeOverlay();
 
     lyricsPanel.style.display = "block";
     lyricsPanel.style.visibility = "visible";
@@ -1109,6 +1223,7 @@ function injectIntoYouTube() {
             lyricsPanel = createLyricsPanel();
           }
           applyWrapperPlacement(lyricsPanel);
+          ensureKaraokeOverlay();
           lyricsPanel.style.display = "block";
           lyricsPanel.style.visibility = "visible";
           lyricsPanel.style.opacity = "1";
