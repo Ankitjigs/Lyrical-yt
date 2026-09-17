@@ -22,6 +22,126 @@ function getActiveVideo(): HTMLVideoElement | null {
   );
 }
 
+interface TimedKaraokeWord {
+  text: string;
+  time: number;
+  duration: number;
+  trailingSpace?: boolean;
+}
+
+/**
+ * Calculates optimal singing duration and allocates word-by-word timestamps
+ * for line-synced lyrics without syllable timestamps.
+ *
+ * Implements:
+ * 1. Active singing ratio with breath/rest buffer (prevents unmount cutoff)
+ * 2. Word count & character heuristic (natural pacing for short vs long lines)
+ * 3. Proportional token distribution (sequential word illumination)
+ * 4. Language-aware tokenization:
+ *    - CJK (Japanese / Chinese): Tokenized character-by-character (each Kana/Kanji is a mora/syllable)
+ *      with clause spaces preserved.
+ *    - Non-CJK (Hindi, English, Spanish, etc.): Tokenized word-by-word, keeping ligatures intact.
+ */
+function generateLineSyncedWords(
+  text: string,
+  lineStart: number,
+  rawInterval: number,
+  hasExplicitDuration: boolean,
+  explicitDuration?: number,
+): TimedKaraokeWord[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  // Detect CJK characters (Hiragana, Katakana, Kanji / Hanzi)
+  const isCJK = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/u.test(trimmed);
+
+  interface RawToken {
+    text: string;
+    trailingSpace: boolean;
+  }
+
+  const tokens: RawToken[] = [];
+
+  if (isCJK) {
+    // For Japanese/Chinese: Each character is a syllable unit.
+    // Preserve spaces only between clauses if the lyricist included them.
+    const clauses = trimmed.split(/\s+/).filter(Boolean);
+    clauses.forEach((clause, clauseIdx) => {
+      const chars = Array.from(clause);
+      const isLastClause = clauseIdx === clauses.length - 1;
+      chars.forEach((char, charIdx) => {
+        const isLastCharInClause = charIdx === chars.length - 1;
+        tokens.push({
+          text: char,
+          trailingSpace: isLastCharInClause && !isLastClause,
+        });
+      });
+    });
+  } else {
+    // For spaced languages (Hindi, English, Spanish, Korean, etc.):
+    // Tokenize word-by-word. Preserves Devanagari ligatures and natural phrasing.
+    const words = trimmed.split(/\s+/).filter(Boolean);
+    words.forEach((w, idx) => {
+      tokens.push({
+        text: w,
+        trailingSpace: idx < words.length - 1,
+      });
+    });
+  }
+
+  if (tokens.length === 0) return [];
+
+  // Estimate singing duration based on token count and language density
+  // Human singing average: ~0.32s per word (spaced) or ~0.22s per character (CJK)
+  const estDuration = isCJK
+    ? Math.max(0.8, tokens.length * 0.22 + 0.25)
+    : Math.max(0.8, tokens.length * 0.32 + 0.25);
+
+  const EARLY_PREPARE_S = 0.35;
+  // Maximum safe duration: line unmounts at rawInterval - EARLY_PREPARE_S.
+  // We reserve an additional 0.25s rest/breath buffer so the swipe completes to 100%
+  // and stays fully lit before transitioning to the next line.
+  const maxSafeDuration = Math.max(0.35, rawInterval - EARLY_PREPARE_S - 0.25);
+
+  let effectiveDuration: number;
+
+  if (hasExplicitDuration && explicitDuration && explicitDuration > 0) {
+    effectiveDuration = Math.min(explicitDuration, maxSafeDuration);
+  } else {
+    // Target ~76% of raw interval to leave a natural singing pause
+    let target = rawInterval * 0.76;
+
+    if (estDuration > target) {
+      // Word-heavy or fast-tempo line: give it as much safe time as possible
+      target = Math.min(maxSafeDuration, estDuration);
+    } else {
+      // Few words with long gap (e.g. 3 words in 7s gap): don't crawl slowly;
+      // bound duration to realistic singing speed
+      target = Math.max(Math.min(target, estDuration * 1.25), 1.2);
+    }
+
+    effectiveDuration = Math.min(maxSafeDuration, Math.max(0.5, target));
+  }
+
+  // Weight distribution: word length + baseline weight to prevent short words from being instantaneous
+  const weights = tokens.map((token) => Math.max(1, token.text.length) + (isCJK ? 0.5 : 1.5));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+  let tCursor = lineStart;
+  return tokens.map((token, idx) => {
+    const wordDuration = (weights[idx] / totalWeight) * effectiveDuration;
+    const clampedDuration = Math.max(wordDuration, 0.10);
+    const item: TimedKaraokeWord = {
+      text: token.text,
+      time: tCursor,
+      duration: clampedDuration,
+      trailingSpace: token.trailingSpace,
+    };
+    tCursor += wordDuration;
+    return item;
+  });
+}
+
 export default function KaraokeLyricDisplay({
   lyrics,
   romanizedLyrics,
@@ -187,75 +307,51 @@ export default function KaraokeLyricDisplay({
     }
 
     const rawParts = activeLine.parts;
-
-    // Line-Synced fallback when syllable parts are not available
-    if (!rawParts || rawParts.length === 0) {
-      const lineStart = Number(activeLine.time ?? 0);
-      const nextLine = lyrics?.[activeLineIndex + 1];
-      const lineDuration = Math.max(
-        Number(
-          activeLine.duration ?? (nextLine ? nextLine.time - lineStart : 3),
-        ),
-        0.5,
-      );
-      const isPast = currentTime >= lineStart + lineDuration;
-      const isActive = currentTime >= lineStart && !isPast;
-      let progress = 0;
-      if (isPast) {
-        progress = 1;
-      } else if (isActive) {
-        progress = Math.min(
-          1,
-          Math.max(0, (currentTime - lineStart) / lineDuration),
-        );
-      }
-
-      return (
-        <span
-          className={[
-            "lyrical-karaoke-word",
-            isPast ? "is-past" : "",
-            isActive ? "is-active" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          data-content={activeOriginalText}
-          style={
-            {
-              "--cw-progress": progress,
-              "--cw-duration": `${lineDuration}s`,
-            } as React.CSSProperties
-          }
-        >
-          {activeOriginalText}
-        </span>
-      );
-    }
-
     const lineStart = Number(activeLine.time ?? 0);
     const nextLine = lyrics?.[activeLineIndex + 1];
-    const hasDurations = rawParts.some((p: any) => Number(p.duration || 0) > 0);
+    const rawInterval = nextLine
+      ? Math.max(0.5, Number(nextLine.time) - lineStart)
+      : Math.max(0.5, Number(activeLine.duration) || 3.5);
 
-    const wordObjects = hasDurations
-      ? rawParts.map((p: any) => ({
-          text: p.text,
-          time: Number(p.time ?? lineStart),
-          duration: Math.max(Number(p.duration ?? 0), 0.12),
-        }))
-      : rawParts.map((p: any, i: number) => {
-          const start = Number(p.time ?? lineStart);
-          const isLastPart = i === rawParts.length - 1;
-          const rawDuration = isLastPart
-            ? nextLine
-              ? Math.min(Math.max(nextLine.time - start, 0.4), 1.2)
-              : 1.2
-            : Number(rawParts[i + 1].time ?? start) - start;
-          return {
+    let wordObjects: TimedKaraokeWord[];
+
+    // Line-Synced: When syllable parts are not available, pace words proportionally
+    if (!rawParts || rawParts.length === 0) {
+      wordObjects = generateLineSyncedWords(
+        activeOriginalText,
+        lineStart,
+        rawInterval,
+        Boolean(activeLine.duration && activeLine.duration > 0),
+        Number(activeLine.duration),
+      );
+
+      if (wordObjects.length === 0) {
+        return activeOriginalText;
+      }
+    } else {
+      const hasDurations = rawParts.some((p: any) => Number(p.duration || 0) > 0);
+
+      wordObjects = hasDurations
+        ? rawParts.map((p: any) => ({
             text: p.text,
-            time: start,
-            duration: Math.max(rawDuration, 0.12),
-          };
-        });
+            time: Number(p.time ?? lineStart),
+            duration: Math.max(Number(p.duration ?? 0), 0.12),
+          }))
+        : rawParts.map((p: any, i: number) => {
+            const start = Number(p.time ?? lineStart);
+            const isLastPart = i === rawParts.length - 1;
+            const rawDuration = isLastPart
+              ? nextLine
+                ? Math.min(Math.max(nextLine.time - start, 0.4), 1.2)
+                : 1.2
+              : Number(rawParts[i + 1].time ?? start) - start;
+            return {
+              text: p.text,
+              time: start,
+              duration: Math.max(rawDuration, 0.12),
+            };
+          });
+    }
 
     const shouldInsertSpaces = /\s/.test(activeOriginalText);
     const EARLY_PREPARE_S = 0.35;
@@ -306,7 +402,9 @@ export default function KaraokeLyricDisplay({
           >
             {wordObj.text}
           </span>
-          {shouldInsertSpaces && index < wordObjects.length - 1 ? " " : null}
+          {wordObj.trailingSpace !== undefined
+            ? (wordObj.trailingSpace ? " " : null)
+            : (shouldInsertSpaces && index < wordObjects.length - 1 ? " " : null)}
         </React.Fragment>
       );
     });
@@ -317,17 +415,14 @@ export default function KaraokeLyricDisplay({
 
     const lineStart = Number(activeLine?.time ?? 0);
     const nextLine = lyrics?.[activeLineIndex + 1];
-    const lineDuration = Math.max(
-      Number(
-        activeLine?.duration ?? (nextLine ? nextLine.time - lineStart : 3),
-      ),
-      0.5,
-    );
+    const rawInterval = nextLine
+      ? Math.max(0.5, Number(nextLine.time) - lineStart)
+      : Math.max(0.5, Number(activeLine?.duration) || 3.5);
 
     const romData = romanizedLyrics?.[activeLineIndex];
     const timedRom = romData?.timedRomanization || activeLine?.timedRomanization;
 
-    let wordObjects: Array<{ text: string; time: number; duration: number }>;
+    let wordObjects: TimedKaraokeWord[];
 
     if (timedRom && timedRom.length > 0) {
       wordObjects = timedRom.map((p: any) => ({
@@ -336,27 +431,14 @@ export default function KaraokeLyricDisplay({
         duration: Math.max(Number(p.duration ?? 0), 0.12),
       }));
     } else {
-      const rawWords = activeRomanized
-        .split(/\s+/)
-        .filter((w: string) => w.length > 0);
-      if (rawWords.length === 0) return activeRomanized;
-
-      // Distribute accurately across lineStart and lineDuration matching ArchiveTuneStrategy
-      const totalChars = rawWords.reduce(
-        (sum: number, w: string) => sum + w.length,
-        0,
+      wordObjects = generateLineSyncedWords(
+        activeRomanized,
+        lineStart,
+        rawInterval,
+        Boolean(activeLine?.duration && activeLine.duration > 0),
+        Number(activeLine?.duration),
       );
-      let tCursor = lineStart;
-      wordObjects = rawWords.map((w: string) => {
-        const wordDuration = (w.length / totalChars) * lineDuration;
-        const obj = {
-          text: w,
-          time: tCursor,
-          duration: Math.max(wordDuration, 0.12),
-        };
-        tCursor += wordDuration;
-        return obj;
-      });
+      if (wordObjects.length === 0) return activeRomanized;
     }
 
     const EARLY_PREPARE_S = 0.35;
@@ -407,7 +489,9 @@ export default function KaraokeLyricDisplay({
           >
             {wordObj.text}
           </span>
-          {index < wordObjects.length - 1 ? " " : null}
+          {wordObj.trailingSpace !== undefined
+            ? (wordObj.trailingSpace ? " " : null)
+            : (index < wordObjects.length - 1 ? " " : null)}
         </React.Fragment>
       );
     });
