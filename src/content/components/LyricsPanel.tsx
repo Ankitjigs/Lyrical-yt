@@ -141,7 +141,7 @@ const KaraokeModeNotice = ({
           <strong>Karaoke mode is on</strong>
           <span>
             {hasLyrics
-              ? "ArchiveTune lyrics are now synced over the video."
+              ? "Karaoke lyrics are now synced over the video."
               : "The overlay will begin when synced lyrics are ready."}
           </span>
         </div>
