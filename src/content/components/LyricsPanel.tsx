@@ -12,6 +12,8 @@ import {
   MicOff,
   Globe,
   Type,
+  SlidersHorizontal,
+  RotateCcw,
 } from "lucide-react";
 import ShinyText from "./ShinyText";
 import { useLyricsEngine } from "../../hooks/useLyricsEngine";
@@ -130,6 +132,14 @@ const KaraokeModeNotice = ({
 }) => {
   const isVocalMuted = useAppStore((state) => state.isVocalMuted);
   const setVocalMuted = useAppStore((state) => state.setVocalMuted);
+  const vocalCutDepth = useAppStore((state) => state.vocalCutDepth);
+  const vocalBassCutoff = useAppStore((state) => state.vocalBassCutoff);
+  const vocalBalanceTrim = useAppStore((state) => state.vocalBalanceTrim);
+  const vocalReverbDampening = useAppStore((state) => state.vocalReverbDampening);
+  const setVocalRemoverSettings = useAppStore(
+    (state) => state.setVocalRemoverSettings,
+  );
+  const [isTuneOpen, setIsTuneOpen] = useState(false);
 
   return (
     <div className="lyrical-karaoke-card-wrapper">
@@ -184,6 +194,149 @@ const KaraokeModeNotice = ({
             {isVocalMuted ? "ON" : "OFF"}
           </div>
         </button>
+
+        {isVocalMuted && (
+          <div className="lyrical-karaoke-tune-container">
+            <button
+              type="button"
+              className={`lyrical-karaoke-tune-toggle ${isTuneOpen ? "open" : ""}`}
+              onClick={() => setIsTuneOpen(!isTuneOpen)}
+              aria-expanded={isTuneOpen}
+            >
+              <div className="lyrical-karaoke-tune-toggle-left">
+                <SlidersHorizontal size={13} />
+                <span>Fine-Tune Instrumental</span>
+              </div>
+              <ChevronDown
+                size={13}
+                style={{
+                  transform: isTuneOpen ? "rotate(180deg)" : "none",
+                  transition: "transform 0.2s cubic-bezier(0.2, 0, 0, 1)",
+                }}
+              />
+            </button>
+
+            {isTuneOpen && (
+              <div className="lyrical-karaoke-tune-panel">
+                {/* Vocal Cut Depth Slider */}
+                <div className="lyrical-karaoke-tune-row">
+                  <div className="lyrical-karaoke-tune-label">
+                    <span>Vocal Cut Depth</span>
+                    <strong>{Math.round(vocalCutDepth * 100)}%</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="50"
+                    max="100"
+                    step="1"
+                    value={Math.round(vocalCutDepth * 100)}
+                    onChange={(e) =>
+                      setVocalRemoverSettings({
+                        cutDepth: Number(e.target.value) / 100,
+                      })
+                    }
+                    className="lyrical-karaoke-tune-slider"
+                  />
+                  <div className="lyrical-karaoke-tune-hint">
+                    <span>Gentle (50%)</span>
+                    <span>Max Null (100%)</span>
+                  </div>
+                </div>
+
+                {/* Stereo Center Null Balance Slider */}
+                <div className="lyrical-karaoke-tune-row">
+                  <div className="lyrical-karaoke-tune-label">
+                    <span>Stereo Center Null (Pan)</span>
+                    <strong>
+                      {vocalBalanceTrim === 0
+                        ? "0% (Center)"
+                        : vocalBalanceTrim > 0
+                        ? `+${vocalBalanceTrim}% R`
+                        : `${vocalBalanceTrim}% L`}
+                    </strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="-10"
+                    max="10"
+                    step="1"
+                    value={vocalBalanceTrim}
+                    onChange={(e) =>
+                      setVocalRemoverSettings({
+                        balanceTrim: Number(e.target.value),
+                      })
+                    }
+                    className="lyrical-karaoke-tune-slider"
+                  />
+                  <div className="lyrical-karaoke-tune-hint">
+                    <span>Trim Left (-10%)</span>
+                    <span>Trim Right (+10%)</span>
+                  </div>
+                </div>
+
+                {/* Bass Guard Slider */}
+                <div className="lyrical-karaoke-tune-row">
+                  <div className="lyrical-karaoke-tune-label">
+                    <span>Bass Guard</span>
+                    <strong>{vocalBassCutoff} Hz</strong>
+                  </div>
+                  <input
+                    type="range"
+                    min="90"
+                    max="300"
+                    step="10"
+                    value={vocalBassCutoff}
+                    onChange={(e) =>
+                      setVocalRemoverSettings({
+                        bassCutoff: Number(e.target.value),
+                      })
+                    }
+                    className="lyrical-karaoke-tune-slider"
+                  />
+                  <div className="lyrical-karaoke-tune-hint">
+                    <span>Cut Lower (90 Hz)</span>
+                    <span>Preserve Punch (300 Hz)</span>
+                  </div>
+                </div>
+
+                {/* Reverb Damper & Reset */}
+                <div className="lyrical-karaoke-tune-footer">
+                  <button
+                    type="button"
+                    className={`lyrical-karaoke-damp-btn ${vocalReverbDampening ? "active" : ""}`}
+                    onClick={() =>
+                      setVocalRemoverSettings({
+                        reverbDampening: !vocalReverbDampening,
+                      })
+                    }
+                  >
+                    <span>Vocal Reverb Damper</span>
+                    <span className="lyrical-karaoke-damp-badge">
+                      {vocalReverbDampening ? "ON" : "OFF"}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="lyrical-karaoke-tune-reset"
+                    onClick={() =>
+                      setVocalRemoverSettings({
+                        cutDepth: 1.0,
+                        bassCutoff: 160,
+                        balanceTrim: 0,
+                        reverbDampening: false,
+                      })
+                    }
+                    title="Reset tuning parameters to defaults"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Reset</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

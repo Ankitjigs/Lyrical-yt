@@ -148,6 +148,10 @@ interface LyricalSettingsState {
   karaokeFontSize: "small" | "medium" | "large" | "xlarge";
   karaokeAnimationStyle: "classic" | "modern";
   isVocalMuted: boolean;
+  vocalCutDepth: number;
+  vocalBassCutoff: number;
+  vocalBalanceTrim: number;
+  vocalReverbDampening: boolean;
   reduceAnimations: boolean;
   showCollapsedArtwork: boolean;
   displayMode: "sidebar" | "floating";
@@ -203,6 +207,14 @@ interface LyricalAppState extends LyricalSettingsState {
   setKaraokeFontSize: (size: "small" | "medium" | "large" | "xlarge") => void;
   setKaraokeAnimationStyle: (style: "classic" | "modern") => void;
   setVocalMuted: (muted: boolean) => void;
+  setVocalRemoverSettings: (
+    settings: Partial<{
+      cutDepth: number;
+      bassCutoff: number;
+      balanceTrim: number;
+      reverbDampening: boolean;
+    }>,
+  ) => void;
   setReduceAnimations: (reduceAnimations: boolean) => void;
   setThemeId: (themeId: string) => void;
   setCustomThemes: (customThemes: CustomTheme[]) => void;
@@ -214,6 +226,7 @@ interface LyricalAppState extends LyricalSettingsState {
 }
 
 let karaokeCustomPosTimer: ReturnType<typeof setTimeout> | null = null;
+let vocalSettingsSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useAppStore = create<LyricalAppState>((set) => ({
   // Content Data
@@ -254,6 +267,10 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   karaokeFontSize: "medium",
   karaokeAnimationStyle: "classic",
   isVocalMuted: false,
+  vocalCutDepth: 1.0,
+  vocalBassCutoff: 160,
+  vocalBalanceTrim: 0,
+  vocalReverbDampening: false,
   reduceAnimations: false,
   showCollapsedArtwork: true,
   displayMode: "sidebar",
@@ -400,6 +417,55 @@ export const useAppStore = create<LyricalAppState>((set) => ({
         void chrome.runtime?.lastError;
       });
     }
+  },
+  setVocalRemoverSettings: (settings) => {
+    set((state) => {
+      const nextCutDepth =
+        settings.cutDepth !== undefined ? settings.cutDepth : state.vocalCutDepth;
+      const nextBassCutoff =
+        settings.bassCutoff !== undefined
+          ? settings.bassCutoff
+          : state.vocalBassCutoff;
+      const nextBalanceTrim =
+        settings.balanceTrim !== undefined
+          ? settings.balanceTrim
+          : state.vocalBalanceTrim;
+      const nextReverbDamp =
+        settings.reverbDampening !== undefined
+          ? settings.reverbDampening
+          : state.vocalReverbDampening;
+
+      vocalRemover.updateSettings({
+        cutDepth: nextCutDepth,
+        bassCutoff: nextBassCutoff,
+        balanceTrim: nextBalanceTrim,
+        reverbDampening: nextReverbDamp,
+      });
+
+      if (vocalSettingsSyncTimer) clearTimeout(vocalSettingsSyncTimer);
+      vocalSettingsSyncTimer = setTimeout(() => {
+        if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+          chrome.storage.sync.set(
+            {
+              vocalCutDepth: nextCutDepth,
+              vocalBassCutoff: nextBassCutoff,
+              vocalBalanceTrim: nextBalanceTrim,
+              vocalReverbDampening: nextReverbDamp,
+            },
+            () => {
+              void chrome.runtime?.lastError;
+            },
+          );
+        }
+      }, 200);
+
+      return {
+        vocalCutDepth: nextCutDepth,
+        vocalBassCutoff: nextBassCutoff,
+        vocalBalanceTrim: nextBalanceTrim,
+        vocalReverbDampening: nextReverbDamp,
+      };
+    });
   },
   setReduceAnimations: (reduceAnimations) => set({ reduceAnimations }),
   setThemeId: (themeId) => set({ themeId }),

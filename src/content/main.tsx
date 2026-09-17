@@ -107,6 +107,10 @@ if (chrome.storage) {
       karaokeFontSize: "medium",
       karaokeAnimationStyle: "classic",
       isVocalMuted: false,
+      vocalCutDepth: 1.0,
+      vocalBassCutoff: 160,
+      vocalBalanceTrim: 0,
+      vocalReverbDampening: false,
       reduceAnimations: false,
       showCollapsedArtwork: true,
       displayMode: "sidebar",
@@ -143,6 +147,10 @@ if (chrome.storage) {
         karaokeFontSize: res.karaokeFontSize || "medium",
         karaokeAnimationStyle: res.karaokeAnimationStyle || "classic",
         isVocalMuted: Boolean(res.isVocalMuted),
+        vocalCutDepth: typeof res.vocalCutDepth === "number" ? res.vocalCutDepth : 1.0,
+        vocalBassCutoff: typeof res.vocalBassCutoff === "number" ? res.vocalBassCutoff : 160,
+        vocalBalanceTrim: typeof res.vocalBalanceTrim === "number" ? res.vocalBalanceTrim : 0,
+        vocalReverbDampening: Boolean(res.vocalReverbDampening),
         reduceAnimations: res.reduceAnimations,
         showCollapsedArtwork: res.showCollapsedArtwork ?? true,
         displayMode: res.displayMode || "sidebar",
@@ -153,6 +161,13 @@ if (chrome.storage) {
         customThemes: hydratedCustomThemes,
         themeId: res.themeId || DEFAULT_THEME_ID,
       };
+
+      vocalRemover.updateSettings({
+        cutDepth: updates.vocalCutDepth,
+        bassCutoff: updates.vocalBassCutoff,
+        balanceTrim: updates.vocalBalanceTrim,
+        reverbDampening: updates.vocalReverbDampening,
+      });
 
       // Only set if exists, otherwise keep store default
       if (res.sourcePreferences) {
@@ -377,6 +392,43 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     const isMuted = Boolean(changes.isVocalMuted.newValue);
     useAppStore.setState({ isVocalMuted: isMuted });
     void vocalRemover.setMuted(isMuted);
+  }
+
+  if (
+    changes.vocalCutDepth !== undefined ||
+    changes.vocalBassCutoff !== undefined ||
+    changes.vocalBalanceTrim !== undefined ||
+    changes.vocalReverbDampening !== undefined
+  ) {
+    const cutDepth =
+      typeof changes.vocalCutDepth?.newValue === "number"
+        ? changes.vocalCutDepth.newValue
+        : useAppStore.getState().vocalCutDepth;
+    const bassCutoff =
+      typeof changes.vocalBassCutoff?.newValue === "number"
+        ? changes.vocalBassCutoff.newValue
+        : useAppStore.getState().vocalBassCutoff;
+    const balanceTrim =
+      typeof changes.vocalBalanceTrim?.newValue === "number"
+        ? changes.vocalBalanceTrim.newValue
+        : useAppStore.getState().vocalBalanceTrim;
+    const reverbDampening =
+      typeof changes.vocalReverbDampening?.newValue === "boolean"
+        ? changes.vocalReverbDampening.newValue
+        : useAppStore.getState().vocalReverbDampening;
+
+    useAppStore.setState({
+      vocalCutDepth: cutDepth,
+      vocalBassCutoff: bassCutoff,
+      vocalBalanceTrim: balanceTrim,
+      vocalReverbDampening: reverbDampening,
+    });
+    vocalRemover.updateSettings({
+      cutDepth,
+      bassCutoff,
+      balanceTrim,
+      reverbDampening,
+    });
   }
 });
 

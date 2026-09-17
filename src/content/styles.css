@@ -1172,6 +1172,192 @@
   color: #ffffff;
 }
 
+/* ─── Karaoke Instrumental Fine-Tuning Drawer ─── */
+.lyrical-karaoke-tune-container {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.lyrical-karaoke-tune-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--lyrical-border) 80%, transparent);
+  background: color-mix(in srgb, var(--lyrical-panel-surface) 60%, transparent);
+  color: var(--lyrical-text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lyrical-karaoke-tune-toggle:hover,
+.lyrical-karaoke-tune-toggle.open {
+  border-color: var(--lyrical-accent);
+  color: var(--lyrical-text-primary);
+  background: var(--lyrical-panel-surface-strong);
+}
+
+.lyrical-karaoke-tune-toggle-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lyrical-karaoke-tune-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--lyrical-panel-surface-strong) 92%, #000 8%);
+  border: 1px solid var(--lyrical-border);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  animation: lyrical-fade-down 0.2s ease-out;
+}
+
+@keyframes lyrical-fade-down {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.lyrical-karaoke-tune-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lyrical-karaoke-tune-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--lyrical-text-secondary);
+}
+
+.lyrical-karaoke-tune-label strong {
+  color: var(--lyrical-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.lyrical-karaoke-tune-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--lyrical-panel-surface);
+  outline: none;
+  cursor: pointer;
+  margin: 4px 0 2px;
+}
+
+.lyrical-karaoke-tune-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--lyrical-accent);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  transition: transform 0.1s ease;
+}
+
+.lyrical-karaoke-tune-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.lyrical-karaoke-tune-hint {
+  display: flex;
+  justify-content: space-between;
+  font-size: 9.5px;
+  color: var(--lyrical-text-subtle, #888888);
+}
+
+.lyrical-karaoke-tune-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--lyrical-border) 60%, transparent);
+}
+
+.lyrical-karaoke-damp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--lyrical-border);
+  background: var(--lyrical-panel-surface);
+  color: var(--lyrical-text-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lyrical-karaoke-damp-btn:hover {
+  border-color: var(--lyrical-accent);
+  color: var(--lyrical-text-primary);
+}
+
+.lyrical-karaoke-damp-btn.active {
+  border-color: var(--lyrical-accent);
+  background: color-mix(in srgb, var(--lyrical-accent) 20%, var(--lyrical-panel-surface));
+  color: var(--lyrical-text-primary);
+}
+
+.lyrical-karaoke-damp-badge {
+  font-size: 9px;
+  font-weight: 750;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--lyrical-panel-surface-strong);
+  color: var(--lyrical-text-secondary);
+}
+
+.lyrical-karaoke-damp-btn.active .lyrical-karaoke-damp-badge {
+  background: var(--lyrical-accent);
+  color: #ffffff;
+}
+
+.lyrical-karaoke-tune-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--lyrical-text-secondary);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.lyrical-karaoke-tune-reset:hover {
+  color: var(--lyrical-accent);
+  background: color-mix(in srgb, var(--lyrical-accent) 12%, transparent);
+}
+
 .lyrical-dock-offset-value {
   color: var(--lyrical-text-secondary);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
