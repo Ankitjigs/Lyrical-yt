@@ -281,7 +281,21 @@ export default function KaraokeLyricDisplay({
         );
       }
 
-      const clipY = 21 - progress * 18;
+      // Liquid level: at progress 0, Y = 22.5 (below note bottom at 21)
+      // at progress 1, Y = 2.0 (above note top at 3)
+      const liquidY = 22.5 - progress * 20.5;
+      const waveAmp = reduceAnimations ? 0 : 0.65;
+      const phase = currentTime * 4.2;
+      const y1 = liquidY + Math.sin(phase) * waveAmp;
+      const y2 = liquidY - Math.sin(phase) * waveAmp;
+
+      const wavePath =
+        progress >= 1
+          ? "M -2 0 L 26 0 L 26 26 L -2 26 Z"
+          : progress <= 0
+          ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
+          : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
+
       const NOTE_PATH =
         "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
       const clipId = `karaoke-inst-clip-${activeLineIndex}`;
@@ -291,17 +305,18 @@ export default function KaraokeLyricDisplay({
           <svg className="lyrical-karaoke-inst-icon" viewBox="0 0 24 24">
             <defs>
               <clipPath id={clipId}>
-                <rect x="0" y={clipY} width="24" height={24 - clipY} />
+                <path d={wavePath} />
               </clipPath>
             </defs>
-            <path d={NOTE_PATH} fill="rgba(255, 255, 255, 0.38)" />
+            {/* Background unfilled note (translucent) */}
+            <path d={NOTE_PATH} fill="rgba(255, 255, 255, 0.32)" />
+            {/* Liquid filling note (luminous white with subtle theme aura) */}
             <path
               d={NOTE_PATH}
-              fill="var(--lyrical-accent, #38bdf8)"
+              fill="#ffffff"
               clipPath={`url(#${clipId})`}
             />
           </svg>
-          <span className="lyrical-karaoke-inst-text">♪ Instrumental ♪</span>
         </div>
       );
     }
@@ -526,7 +541,7 @@ export default function KaraokeLyricDisplay({
         >
           <div className="lyrical-karaoke-original">{renderOriginal()}</div>
 
-          {activeRomanized && isRomanizationEnabled && (
+          {!activeLine?.isInstrumental && activeRomanized && isRomanizationEnabled && (
             <motion.div
               className="lyrical-karaoke-romanized"
               initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
@@ -537,7 +552,7 @@ export default function KaraokeLyricDisplay({
             </motion.div>
           )}
 
-          {activeTranslated && isTranslateEnabled && (
+          {!activeLine?.isInstrumental && activeTranslated && isTranslateEnabled && (
             <motion.div
               className="lyrical-karaoke-translated"
               initial={reduceAnimations ? false : { opacity: 0, y: 4 }}

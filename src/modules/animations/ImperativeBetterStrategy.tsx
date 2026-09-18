@@ -398,56 +398,58 @@ export class ImperativeBetterStrategy {
       }
       this.createBreakElem(lineDiv, 1);
 
-      const romanized = romanizedLyrics?.[lineIndex]?.romanized;
-      if (romanized) {
-        const break4 = this.createBreakElem(lineDiv, 4);
-        const romanizedEl = document.createElement("div");
-        romanizedEl.className = "blyrics--romanized";
-        if (!isRomanizationEnabled) {
-          romanizedEl.classList.add("blyrics--hidden");
-          break4?.classList.add("blyrics--hidden");
+      if (!line.isInstrumental) {
+        const romanized = romanizedLyrics?.[lineIndex]?.romanized;
+        if (romanized) {
+          const break4 = this.createBreakElem(lineDiv, 4);
+          const romanizedEl = document.createElement("div");
+          romanizedEl.className = "blyrics--romanized";
+          if (!isRomanizationEnabled) {
+            romanizedEl.classList.add("blyrics--hidden");
+            break4?.classList.add("blyrics--hidden");
+          }
+          romanizedEl.dataset.romanizedText = romanized;
+          romanizedEl.style.cssText = [
+            "order:5",
+            "transition:opacity 0.3s ease",
+          ].join(";");
+
+          const timedRom = romanizedLyrics?.[lineIndex]?.timedRomanization;
+          const finalTimedRom =
+            timedRom && timedRom.length > 0
+              ? timedRom
+              : this.estimateTimedRomanization(
+                  romanized,
+                  lineData.time,
+                  lineData.duration,
+                );
+
+          if (finalTimedRom && finalTimedRom.length > 0) {
+            this.createWordSpans(finalTimedRom, romanizedEl, lineData);
+          } else {
+            romanizedEl.textContent = romanized;
+          }
+
+          lineDiv.appendChild(romanizedEl);
         }
-        romanizedEl.dataset.romanizedText = romanized;
-        romanizedEl.style.cssText = [
-          "order:5",
-          "transition:opacity 0.3s ease",
-        ].join(";");
 
-        const timedRom = romanizedLyrics?.[lineIndex]?.timedRomanization;
-        const finalTimedRom =
-          timedRom && timedRom.length > 0
-            ? timedRom
-            : this.estimateTimedRomanization(
-                romanized,
-                lineData.time,
-                lineData.duration,
-              );
-
-        if (finalTimedRom && finalTimedRom.length > 0) {
-          this.createWordSpans(finalTimedRom, romanizedEl, lineData);
-        } else {
-          romanizedEl.textContent = romanized;
+        const translated = translatedLyrics?.[lineIndex]?.translated;
+        if (translated) {
+          const break6 = this.createBreakElem(lineDiv, 6);
+          const translatedEl = document.createElement("div");
+          translatedEl.className = "blyrics--translated";
+          if (!isTranslateEnabled) {
+            translatedEl.classList.add("blyrics--hidden");
+            break6?.classList.add("blyrics--hidden");
+          }
+          translatedEl.textContent = translated;
+          translatedEl.dataset.translatedText = translated;
+          translatedEl.style.cssText = [
+            "order:7",
+            "transition:opacity 0.3s ease",
+          ].join(";");
+          lineDiv.appendChild(translatedEl);
         }
-
-        lineDiv.appendChild(romanizedEl);
-      }
-
-      const translated = translatedLyrics?.[lineIndex]?.translated;
-      if (translated) {
-        const break6 = this.createBreakElem(lineDiv, 6);
-        const translatedEl = document.createElement("div");
-        translatedEl.className = "blyrics--translated";
-        if (!isTranslateEnabled) {
-          translatedEl.classList.add("blyrics--hidden");
-          break6?.classList.add("blyrics--hidden");
-        }
-        translatedEl.textContent = translated;
-        translatedEl.dataset.translatedText = translated;
-        translatedEl.style.cssText = [
-          "order:7",
-          "transition:opacity 0.3s ease",
-        ].join(";");
-        lineDiv.appendChild(translatedEl);
       }
 
       fragment.appendChild(lineDiv);

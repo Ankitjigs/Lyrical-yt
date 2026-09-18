@@ -383,56 +383,58 @@ export class ArchiveTuneStrategy {
       }
       this.createBreakElem(lineDiv, 1);
 
-      const romanized = romanizedLyrics?.[lineIndex]?.romanized;
-      if (romanized) {
-        const break4 = this.createBreakElem(lineDiv, 4);
-        const romanizedEl = document.createElement("div");
-        romanizedEl.className = "at-lyrics--romanized";
-        if (!isRomanizationEnabled) {
-          romanizedEl.classList.add("at-lyrics--hidden");
-          break4.classList.add("at-lyrics--hidden");
+      if (!line.isInstrumental) {
+        const romanized = romanizedLyrics?.[lineIndex]?.romanized;
+        if (romanized) {
+          const break4 = this.createBreakElem(lineDiv, 4);
+          const romanizedEl = document.createElement("div");
+          romanizedEl.className = "at-lyrics--romanized";
+          if (!isRomanizationEnabled) {
+            romanizedEl.classList.add("at-lyrics--hidden");
+            break4.classList.add("at-lyrics--hidden");
+          }
+          romanizedEl.dataset.romanizedText = romanized;
+          romanizedEl.style.cssText = [
+            "order:5",
+            "transition:opacity 0.3s ease",
+          ].join(";");
+
+          const timedRom = romanizedLyrics?.[lineIndex]?.timedRomanization;
+          const finalTimedRom =
+            timedRom && timedRom.length > 0
+              ? timedRom
+              : this.estimateTimedRomanization(
+                  romanized,
+                  lineData.time,
+                  lineData.duration,
+                );
+
+          if (finalTimedRom && finalTimedRom.length > 0) {
+            this.createWordSpans(finalTimedRom, romanizedEl, lineData);
+          } else {
+            romanizedEl.textContent = romanized;
+          }
+
+          lineDiv.appendChild(romanizedEl);
         }
-        romanizedEl.dataset.romanizedText = romanized;
-        romanizedEl.style.cssText = [
-          "order:5",
-          "transition:opacity 0.3s ease",
-        ].join(";");
 
-        const timedRom = romanizedLyrics?.[lineIndex]?.timedRomanization;
-        const finalTimedRom =
-          timedRom && timedRom.length > 0
-            ? timedRom
-            : this.estimateTimedRomanization(
-                romanized,
-                lineData.time,
-                lineData.duration,
-              );
-
-        if (finalTimedRom && finalTimedRom.length > 0) {
-          this.createWordSpans(finalTimedRom, romanizedEl, lineData);
-        } else {
-          romanizedEl.textContent = romanized;
+        const translated = translatedLyrics?.[lineIndex]?.translated;
+        if (translated) {
+          const break6 = this.createBreakElem(lineDiv, 6);
+          const translatedEl = document.createElement("div");
+          translatedEl.className = "at-lyrics--translated";
+          if (!isTranslateEnabled) {
+            translatedEl.classList.add("at-lyrics--hidden");
+            break6.classList.add("at-lyrics--hidden");
+          }
+          translatedEl.textContent = translated;
+          translatedEl.dataset.translatedText = translated;
+          translatedEl.style.cssText = [
+            "order:7",
+            "transition:opacity 0.3s ease",
+          ].join(";");
+          lineDiv.appendChild(translatedEl);
         }
-
-        lineDiv.appendChild(romanizedEl);
-      }
-
-      const translated = translatedLyrics?.[lineIndex]?.translated;
-      if (translated) {
-        const break6 = this.createBreakElem(lineDiv, 6);
-        const translatedEl = document.createElement("div");
-        translatedEl.className = "at-lyrics--translated";
-        if (!isTranslateEnabled) {
-          translatedEl.classList.add("at-lyrics--hidden");
-          break6.classList.add("at-lyrics--hidden");
-        }
-        translatedEl.textContent = translated;
-        translatedEl.dataset.translatedText = translated;
-        translatedEl.style.cssText = [
-          "order:7",
-          "transition:opacity 0.3s ease",
-        ].join(";");
-        lineDiv.appendChild(translatedEl);
       }
 
       fragment.appendChild(lineDiv);

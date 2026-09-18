@@ -10,7 +10,11 @@ type UnifiedSourceId =
   | "legato-synced"
   | "musixmatch-synced";
 
-type UnisonSourceId = "unison-richsynced" | "unison-synced" | "unison-plain";
+type UnisonSourceId =
+  | "unison-richsynced"
+  | "unison-wordsynced"
+  | "unison-synced"
+  | "unison-plain";
 
 interface SourceFetchResult {
   sourceId: string;
@@ -271,14 +275,26 @@ export async function fetchUnisonSourceLyrics(
     if (sourceId === "unison-richsynced" && parsed.type === "syllable") {
       return result(sourceId, "Better Lyrics Unison", parsed.lyrics, parsed.language);
     }
+    if (
+      sourceId === "unison-wordsynced" &&
+      (parsed.type === "word" || parsed.type === "syllable")
+    ) {
+      return result(sourceId, "Better Lyrics Unison", parsed.lyrics, parsed.language);
+    }
     if (sourceId === "unison-synced" && parsed.type === "line") {
       return result(sourceId, "Better Lyrics Unison", parsed.lyrics, parsed.language);
     }
     return null;
   }
 
-  if (data.format === "lrc" && sourceId === "unison-synced") {
-    return result(sourceId, "Better Lyrics Unison", parseLrcLyrics(data.lyrics));
+  if (data.format === "lrc") {
+    const isWordSynced = data.syncType === "richsync";
+    if (sourceId === "unison-wordsynced" && isWordSynced) {
+      return result(sourceId, "Better Lyrics Unison", parseLrcLyrics(data.lyrics));
+    }
+    if (sourceId === "unison-synced" && !isWordSynced) {
+      return result(sourceId, "Better Lyrics Unison", parseLrcLyrics(data.lyrics));
+    }
   }
 
   if (data.format === "plain" && sourceId === "unison-plain") {

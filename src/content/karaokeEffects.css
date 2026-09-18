@@ -328,26 +328,32 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 12px;
-  padding: 8px 16px;
+  padding: 16px 28px;
+  animation: lyrical-karaoke-inst-float 3.2s ease-in-out infinite;
+}
+
+@keyframes lyrical-karaoke-inst-float {
+  0%, 100% {
+    transform: translateY(0px) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) scale(1.035);
+  }
 }
 
 :host .lyrical-karaoke-inst-icon {
-  width: 36px;
-  height: 36px;
-  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.9));
+  width: clamp(52px, 6vw, 76px);
+  height: clamp(52px, 6vw, 76px);
+  overflow: visible;
+  filter:
+    drop-shadow(0 0 16px var(--lyrical-accent, rgba(168, 85, 247, 0.7)))
+    drop-shadow(0 0 35px color-mix(in srgb, var(--lyrical-accent, #a855f7) 35%, transparent))
+    drop-shadow(0 4px 14px rgba(0, 0, 0, 0.95));
 }
 
-:host .lyrical-karaoke-inst-text {
-  font-size: clamp(18px, 2vw, 28px);
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.88);
-  text-shadow:
-    -1px -1px 0 #000,
-     1px -1px 0 #000,
-    -1px  1px 0 #000,
-     1px  1px 0 #000,
-     0 2px 8px rgba(0, 0, 0, 0.95);
+/* Pause animations when video is paused */
+:host [data-paused="true"] .lyrical-karaoke-instrumental {
+  animation-play-state: paused !important;
 }
 
 /* Waiting for lyrics indicator */

@@ -28,6 +28,7 @@ import { getThemeCssVariables } from "../../themes";
 import { useShallow } from "zustand/react/shallow";
 import { t } from "../../i18n";
 import LyricsDock from "./LyricsDock";
+import { isMetadataLine } from "../../modules/lyrics/lyricsNormalizer";
 
 const GeniusIcon = ({ size = 14 }: { size?: number }) => (
   <svg
@@ -680,41 +681,97 @@ function alignSecondaryLyrics(lyrics: any[] = [], sourceLines: any[] = []) {
   const usedRomanizedIndexes = new Set<number>();
   const usedTranslatedIndexes = new Set<number>();
 
+  // Filter out any metadata/credit lines that may be lingering in sourceLines
+  const cleanSourceLines = sourceLines.filter(
+    (item) => item && !isMetadataLine(item.text || "") && !item.isInstrumental,
+  );
+
   return lyrics.reduce(
     (acc, line, index) => {
-      const direct = sourceLines[index];
-      const timedRomanization =
-        direct?.timedRomanization || direct?.timedRomanized || null;
-      const directRomanized =
-        pickFirstTextValue(direct, ["romanized", "romanization", "romaji"]) ||
-        timedRomanizationToText(timedRomanization);
-      const directTranslated = pickFirstTextValue(direct, [
-        "translated",
-        "translation",
-        "translatedText",
-      ]);
+      // 1. Instrumental lines NEVER receive secondary lyrics
+      if (line?.isInstrumental || (!line?.text && !line?.parts?.length)) {
+        acc.romanizedLyrics.push({
+          time: line?.time,
+          text: "",
+          romanized: "",
+          timedRomanization: null,
+        });
+        acc.translatedLyrics.push({
+          time: line?.time,
+          text: "",
+          translated: "",
+        });
+        return acc;
+      }
 
-      let romanizedSource = directRomanized ? direct : null;
-      let translatedSource = directTranslated ? direct : null;
-
-      if (romanizedSource && index < sourceLines.length) {
-        usedRomanizedIndexes.add(index);
-      } else {
-        romanizedSource = findClosestSecondaryLine(
-          sourceLines,
-          line,
-          usedRomanizedIndexes,
+      // 2. Try exact text match first
+      const cleanLineText = String(line?.text || "").trim();
+      let matchedSource: any = null;
+      if (cleanLineText) {
+        matchedSource = cleanSourceLines.find(
+          (s, idx) =>
+            !usedRomanizedIndexes.has(idx) &&
+            String(s?.text || "").trim() === cleanLineText,
         );
       }
 
-      if (translatedSource && index < sourceLines.length) {
-        usedTranslatedIndexes.add(index);
+      // 3. Try timestamp proximity match
+      let romanizedSource = matchedSource;
+      let translatedSource = matchedSource;
+
+      if (!romanizedSource) {
+        romanizedSource = findClosestSecondaryLine(
+          cleanSourceLines,
+          line,
+          usedRomanizedIndexes,
+        );
       } else {
+        const foundIdx = cleanSourceLines.indexOf(matchedSource);
+        if (foundIdx >= 0) usedRomanizedIndexes.add(foundIdx);
+      }
+
+      if (!translatedSource) {
         translatedSource = findClosestSecondaryLine(
-          sourceLines,
+          cleanSourceLines,
           line,
           usedTranslatedIndexes,
         );
+      } else {
+        const foundIdx = cleanSourceLines.indexOf(matchedSource);
+        if (foundIdx >= 0) usedTranslatedIndexes.add(foundIdx);
+      }
+
+      // 4. Fallback to direct index in cleanSourceLines if not yet matched
+      if (
+        !romanizedSource &&
+        cleanSourceLines[index] &&
+        !usedRomanizedIndexes.has(index)
+      ) {
+        const candidate = cleanSourceLines[index];
+        const dirRom =
+          pickFirstTextValue(candidate, ["romanized", "romanization", "romaji"]) ||
+          timedRomanizationToText(candidate?.timedRomanization);
+        if (dirRom) {
+          romanizedSource = candidate;
+          usedRomanizedIndexes.add(index);
+        }
+      }
+
+      if (
+        !translatedSource &&
+        cleanSourceLines[index] &&
+        !usedTranslatedIndexes.has(index)
+      ) {
+        const candidate = cleanSourceLines[index];
+        const dirTrans = pickFirstTextValue(candidate, [
+          "translated",
+          "translation",
+          "translatedText",
+        ]);
+        if (dirTrans) {
+          translatedSource = candidate;
+          usedTranslatedIndexes.add(index);
+        }
       }
 
       const matchedTimedRomanization =
@@ -1040,6 +1097,7 @@ const LyricsPanel = () => {
       lyricsSource === "musixmatch-richsync" ||
       lyricsSource === "lyrical" ||
       lyricsSource === "unison-richsynced" ||
+      lyricsSource === "unison-wordsynced" ||
       lyricsSource === "binimum-richsynced" ||
       lyricsSource === "portato-richsynced" ||
       lyricsSource === "youlyplus-richsynced");
@@ -1048,7 +1106,8 @@ const LyricsPanel = () => {
   if (shouldUseAnimationEngine) {
     if (
       lyricsSource === "musixmatch" ||
-      lyricsSource === "musixmatch-richsync"
+      lyricsSource === "musixmatch-richsync" ||
+      lyricsSource === "unison-wordsynced"
     ) {
       strategyName = "word";
     } else if (

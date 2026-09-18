@@ -35,6 +35,7 @@ const SOURCE_LABELS: Record<string, string> = {
   "youlyplus-synced": "YouLy+",
   "bLyrics-synced": "Better Lyrics",
   "unison-richsynced": "Better Lyrics Unison",
+  "unison-wordsynced": "Better Lyrics Unison",
   "unison-synced": "Better Lyrics Unison",
   "unison-plain": "Better Lyrics Unison",
   "binimum-richsynced": "BiniLyrics",
@@ -55,6 +56,7 @@ const DOCK_SHORT_LABELS: Record<string, string> = {
   "youlyplus-synced": "YouLy+",
   "bLyrics-synced": "Better Lyrics",
   "unison-richsynced": "Unison",
+  "unison-wordsynced": "Unison",
   "unison-synced": "Unison",
   "unison-plain": "Unison",
   "binimum-richsynced": "BiniLyrics",
@@ -276,6 +278,9 @@ export default function LyricsDock({
   const selectSourceById = (sourceId: LyricsSourceId) => {
     setIsSourceMenuOpen(false);
     setHoveredSourceId(null);
+    if (sourceId === "captions") {
+      useAppStore.getState().setOffset(0, 0);
+    }
     if (sourceId === activePreferenceId) return;
     window.dispatchEvent(
       new CustomEvent("lyrical-select-source", {
@@ -287,6 +292,7 @@ export default function LyricsDock({
   const selectCaptionTrack = (track: CaptionTrackInfo) => {
     setIsSourceMenuOpen(false);
     setHoveredSourceId(null);
+    useAppStore.getState().setOffset(0, 0);
     window.dispatchEvent(
       new CustomEvent("lyrical-select-caption-track", {
         detail: { track },
@@ -296,9 +302,11 @@ export default function LyricsDock({
 
   const updateOffset = (nextValue: number) => {
     const nextUserOffset = clampOffset(nextValue);
+    const isCaptions = activePreferenceId === "captions";
+    const effectivePlatformOffset = isCaptions ? 0 : PLATFORM_OFFSET;
     useAppStore
       .getState()
-      .setOffset(PLATFORM_OFFSET + nextUserOffset, nextUserOffset);
+      .setOffset(effectivePlatformOffset + nextUserOffset, nextUserOffset);
   };
 
   const nudgeOffset = (delta: number) => updateOffset(userOffset + delta);

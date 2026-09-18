@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { DEFAULT_THEME_ID } from "../themes";
 import { vocalRemover } from "../modules/audio/vocalRemover";
+import { normalizeLyricsPipeline } from "../modules/lyrics/lyricsNormalizer";
 import type {
   CaptionTrackInfo,
   CustomTheme,
@@ -38,6 +39,12 @@ export const DEFAULT_SOURCE_PREFERENCES: SourcePreference[] = [
   {
     id: "better_lyrics",
     label: "Better Lyrics",
+    enabled: true,
+    tags: ["WORD"],
+  },
+  {
+    id: "unison-wordsynced",
+    label: "Better Lyrics Unison",
     enabled: true,
     tags: ["WORD"],
   },
@@ -287,13 +294,19 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   // Actions
   setSongInfo: (info) => set({ songInfo: info }),
   setLyrics: (lyrics, source, language) => {
+    const isCaptions = source === "captions";
+    const songInfo = useAppStore.getState().songInfo;
+    const songDuration = Number(songInfo?.duration || 0);
+    const cleanLyrics = isCaptions ? lyrics : normalizeLyricsPipeline(lyrics, songDuration, songInfo);
+
     set((state) => {
       const nextSource = source || null;
       const isDifferentSource = nextSource !== state.lyricsSource;
       return {
-        lyrics,
+        lyrics: cleanLyrics,
         lyricsSource: nextSource,
         lyricsLanguage: language || null,
+        ...(isCaptions ? { offset: 0, userOffset: 0 } : {}),
         ...(isDifferentSource
           ? {
               romanizedLyrics: [],

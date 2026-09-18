@@ -1,4 +1,4 @@
-export {};
+import { isMetadataLine } from "../modules/lyrics/lyricsNormalizer";
 
 // Background service worker
 // Handles Google Translate API requests for lyrics translation
@@ -824,7 +824,7 @@ async function translateLyrics(
     new Set<string>(
       lyrics
         .map((l: any) => String(l.text || "").trim())
-        .filter(Boolean),
+        .filter((text: string) => Boolean(text) && !isMetadataLine(text)),
     ),
   );
   const translatedLookup = new Map();
@@ -893,6 +893,15 @@ async function translateLyrics(
 
   const results = lyrics.map((lyric) => {
     const key = String(lyric.text || "").trim();
+    if (!key || isMetadataLine(key)) {
+      return {
+        time: lyric.time,
+        text: lyric.text,
+        translated: "",
+        skipped: true,
+        error: false,
+      };
+    }
     const translated = translatedLookup.get(key) || {};
     return {
       time: lyric.time,
@@ -922,7 +931,7 @@ async function romanizeLyrics(
     new Set<string>(
       lyrics
         .map((l: any) => String(l.text || "").trim())
-        .filter(Boolean),
+        .filter((text: string) => Boolean(text) && !isMetadataLine(text)),
     ),
   );
   const romanizedLookup = new Map();
@@ -999,6 +1008,15 @@ async function romanizeLyrics(
 
   const results = lyrics.map((lyric) => {
     const key = String(lyric.text || "").trim();
+    if (!key || isMetadataLine(key)) {
+      return {
+        time: lyric.time,
+        text: lyric.text,
+        romanized: "",
+        skipped: true,
+        error: false,
+      };
+    }
     const romanized = romanizedLookup.get(key) || {};
     return {
       time: lyric.time,
