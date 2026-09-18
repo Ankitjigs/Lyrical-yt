@@ -74,9 +74,58 @@ const KNOWN_METADATA_PREFIXES = new Set([
   "監製",
   "监修",
   "監修",
+  "总监",
+  "總監",
+  "音乐总监",
+  "音樂總監",
+  "音楽総監",
+  "艺术总监",
+  "藝術總監",
+  "总策划",
+  "總策劃",
+  "总制作",
+  "總製作",
+  "总制作人",
+  "總製作人",
+  "录音师",
+  "錄音師",
+  "录音室",
+  "錄音室",
+  "混音师",
+  "混音師",
+  "混音室",
+  "混音室",
+  "混音工程",
+  "母带师",
+  "母帶師",
+  "母带室",
+  "母帶室",
+  "母带工程",
+  "母带制作",
+  "母帶製作",
+  "出品人",
+  "出品方",
+  "发行人",
+  "發行人",
+  "发行方",
+  "發行方",
+  "统筹",
+  "統籌",
+  "项目统筹",
+  "企划",
+  "企劃",
+  "编写",
+  "和声编写",
+  "配唱制作人",
   "音乐",
   "音樂",
   "音楽",
+  "版权",
+  "版權",
+  "op",
+  "sp",
+  "isrc",
+  "upc",
   // English credits
   "writtenby",
   "producedby",
@@ -109,7 +158,7 @@ const KNOWN_METADATA_PREFIXES = new Set([
 ]);
 
 const METADATA_COLON_REGEX =
-  /^(?:原唱|作词|作詞|作曲|编曲|編曲|和声|和音|コーラス|混音|ミックス|ミキシング|母带|母帶|マスタリング|吉他|ギター|贝斯|貝斯|ベース|鼓|ドラム|键盘|鍵盤|キーボード|钢琴|鋼琴|ピアノ|制作人?|製作人?|演唱|歌|唄|ボーカル|翻唱|原曲|后期|後記|录音|録音|レコーディング|策划|企画|企劃|伴奏|美工|海报|海報|旁白|出品|发行|發行|监制|監製|监修|監修|音乐|音樂|音楽|词|詞|曲|written\s*by|produced\s*by|composed\s*by|arranged\s*by|mixed\s*by|mastered\s*by|performed\s*by|recorded\s*by|mixing|mastering|vocals?|producer|lyricist|composer|arranger|lyrics\s*by|words\s*by|music\s*by|artist|title|album)\s*[:：]/i;
+  /^(?:原唱|作词|作詞|作曲|编曲|編曲|和声|和音|コーラス|混音|ミックス|ミキシング|母带|母帶|マスタリング|吉他|ギター|贝斯|貝斯|ベース|鼓|ドラム|键盘|鍵盤|キーボード|钢琴|鋼琴|ピアノ|(?:音乐|音樂|音楽|艺术|藝術)?(?:总监|總監)|(?:总|總)?(?:制作人?|製作人?)|(?:总|總)?(?:策划|企画|企劃|统筹|統籌)|演唱|歌|唄|ボーカル|翻唱|原曲|后期|後記|(?:录音|録音|混音|母带|母帶)(?:师|師|室|工程)?|レコーディング|伴奏|美工|海报|海報|旁白|(?:出品|发行|發行)(?:人|方)?|监制|監製|监修|監修|音乐|音樂|音楽|词|詞|曲|版权|版權|op|sp|isrc|written\s*by|produced\s*by|composed\s*by|arranged\s*by|mixed\s*by|mastered\s*by|performed\s*by|recorded\s*by|mixing|mastering|vocals?|producer|lyricist|composer|arranger|lyrics\s*by|words\s*by|music\s*by|artist|title|album)\s*[:：\-–—]/i;
 
 const ID_TAG_REGEX = /^\[(?:ti|ar|al|by|offset|re|ve|length):/i;
 
@@ -118,21 +167,31 @@ const ID_TAG_REGEX = /^\[(?:ti|ar|al|by|offset|re|ve|length):/i;
  */
 export function isMetadataLine(text: string): boolean {
   if (!text) return false;
-  const trimmed = text.trim();
+  let trimmed = text.trim();
   if (!trimmed) return false;
+
+  // Strip wrapping brackets or parentheses (e.g. "(音乐总监 : 陈建骐)" or "[作词:xxx]")
+  if (
+    (trimmed.startsWith("(") && trimmed.endsWith(")")) ||
+    (trimmed.startsWith("（") && trimmed.endsWith("）")) ||
+    (trimmed.startsWith("【") && trimmed.endsWith("】"))
+  ) {
+    trimmed = trimmed.slice(1, -1).trim();
+  }
 
   // 1. Tag format: [ar:Artist], [ti:Title]
   if (ID_TAG_REGEX.test(trimmed)) {
     return true;
   }
 
-  // 2. Direct regex match on prefix + colon: "原唱 : Charlie Puth", "词 : 野田洋次郎", "Written by: ..."
+  // 2. Direct regex match on prefix + colon/dash: "原唱 : Charlie Puth", "音乐总监 : 陈建骐", "Written by: ..."
   if (METADATA_COLON_REGEX.test(trimmed)) {
     return true;
   }
 
-  // 3. Normalize prefix before colon / space (supports ASCII : and fullwidth ：)
-  const colonIdx = trimmed.indexOf(":") !== -1 ? trimmed.indexOf(":") : trimmed.indexOf("：");
+  // 3. Normalize prefix before colon / dash (supports ASCII :, fullwidth ：, and dashes)
+  const delimiterMatch = trimmed.match(/[:：\-–—]/);
+  const colonIdx = delimiterMatch ? delimiterMatch.index! : -1;
   if (colonIdx > 0 && colonIdx <= 25) {
     const rawPrefix = trimmed.slice(0, colonIdx).trim().toLowerCase();
     const cleanPrefix = rawPrefix.replace(/\s+/g, "");
@@ -145,7 +204,28 @@ export function isMetadataLine(text: string): boolean {
       cleanPrefix.endsWith("声") ||
       cleanPrefix.endsWith("音") ||
       cleanPrefix.endsWith("唄") ||
-      cleanPrefix.endsWith("歌")
+      cleanPrefix.endsWith("歌") ||
+      cleanPrefix.endsWith("总监") ||
+      cleanPrefix.endsWith("總監") ||
+      cleanPrefix.endsWith("监") ||
+      cleanPrefix.endsWith("監") ||
+      cleanPrefix.endsWith("师") ||
+      cleanPrefix.endsWith("師") ||
+      cleanPrefix.endsWith("室") ||
+      cleanPrefix.endsWith("人") ||
+      cleanPrefix.endsWith("制作") ||
+      cleanPrefix.endsWith("製作") ||
+      cleanPrefix.endsWith("统筹") ||
+      cleanPrefix.endsWith("統籌") ||
+      cleanPrefix.endsWith("策划") ||
+      cleanPrefix.endsWith("策劃") ||
+      cleanPrefix.endsWith("企划") ||
+      cleanPrefix.endsWith("企劃") ||
+      cleanPrefix.endsWith("工程") ||
+      cleanPrefix.endsWith("设计") ||
+      cleanPrefix.endsWith("設計") ||
+      cleanPrefix.endsWith("编辑") ||
+      cleanPrefix.endsWith("編輯")
     ) {
       return true;
     }
@@ -159,7 +239,14 @@ export function isMetadataLine(text: string): boolean {
           KNOWN_METADATA_PREFIXES.has(p) ||
           p.endsWith("词") ||
           p.endsWith("詞") ||
-          p.endsWith("曲"),
+          p.endsWith("曲") ||
+          p.endsWith("总监") ||
+          p.endsWith("總監") ||
+          p.endsWith("监") ||
+          p.endsWith("監") ||
+          p.endsWith("师") ||
+          p.endsWith("室") ||
+          p.endsWith("人"),
       )
     ) {
       return true;

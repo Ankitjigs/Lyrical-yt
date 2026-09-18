@@ -137,6 +137,34 @@ export function normalizeSourcePreferences(prefs: unknown): SourcePreference[] {
   return normalized;
 }
 
+export function isRichsyncSourceId(
+  sourceId: LyricsSourceId | string | null | undefined,
+  lyrics?: any[],
+): boolean {
+  if (sourceId) {
+    const match = DEFAULT_SOURCE_PREFERENCES.find((s) => s.id === sourceId);
+    if (match) {
+      return match.tags.includes("SYLLABLE") || match.tags.includes("WORD");
+    }
+    const s = String(sourceId).toLowerCase();
+    if (
+      s.includes("richsync") ||
+      s.includes("wordsync") ||
+      s.includes("syllable") ||
+      s.includes("portato") ||
+      s === "better_lyrics" ||
+      s === "lyrical" ||
+      s === "musixmatch"
+    ) {
+      return true;
+    }
+  }
+  if (Array.isArray(lyrics) && lyrics.length > 0) {
+    return lyrics.some((l) => Array.isArray(l.parts) && l.parts.length > 0);
+  }
+  return false;
+}
+
 interface LyricalSettingsState {
   offset: number;
   userOffset: number;
@@ -164,6 +192,8 @@ interface LyricalSettingsState {
   displayMode: "sidebar" | "floating";
   floatingPositionPreset: "left" | "center" | "right";
   floatingCustomPosition: { top: number; left: number } | null;
+  richsyncOffsetTrim: number;
+  lineOffsetTrim: number;
   themeId: string;
   customThemes: CustomTheme[];
   sourcePreferences: SourcePreference[];
@@ -205,6 +235,8 @@ interface LyricalAppState extends LyricalSettingsState {
   setIsProcessingLyrics: (processing: boolean) => void;
   setHeaderText: (text: string) => void;
   setOffset: (offset: number, userOffset: number) => void;
+  setRichsyncOffsetTrim: (val: number) => void;
+  setLineOffsetTrim: (val: number) => void;
   setSettings: (settings: Partial<LyricalSettingsState>) => void;
   setCompactMode: (isCompact: boolean) => void;
   setLyricsAnimationStyle: (style: "better-lyrics" | "archivetune") => void;
@@ -285,6 +317,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   floatingCustomPosition: null,
   themeId: DEFAULT_THEME_ID,
   customThemes: [],
+  richsyncOffsetTrim: 0,
+  lineOffsetTrim: 0,
 
   // Source Preferences
 
@@ -354,6 +388,42 @@ export const useAppStore = create<LyricalAppState>((set) => ({
     set({ isProcessingLyrics: processing }),
   setHeaderText: (text) => set({ headerText: text }),
   setOffset: (offset, userOffset) => set({ offset, userOffset }),
+  setRichsyncOffsetTrim: (val) => {
+    const trimmed = Math.round(val * 10) / 10;
+    set((state) => {
+      const isRich = isRichsyncSourceId(state.lyricsSource, state.lyrics);
+      const isCaptions = state.lyricsSource === "captions";
+      const trim = isRich ? trimmed : state.lineOffsetTrim;
+      const nextOffset = (isCaptions ? 0 : -0.45) + state.userOffset + trim;
+      return {
+        richsyncOffsetTrim: trimmed,
+        ...(isRich ? { offset: nextOffset } : {}),
+      };
+    });
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+        chrome.storage.sync.set({ richsyncOffsetTrim: trimmed });
+      }
+    } catch {}
+  },
+  setLineOffsetTrim: (val) => {
+    const trimmed = Math.round(val * 10) / 10;
+    set((state) => {
+      const isRich = isRichsyncSourceId(state.lyricsSource, state.lyrics);
+      const isCaptions = state.lyricsSource === "captions";
+      const trim = isRich ? state.richsyncOffsetTrim : trimmed;
+      const nextOffset = (isCaptions ? 0 : -0.45) + state.userOffset + trim;
+      return {
+        lineOffsetTrim: trimmed,
+        ...(!isRich ? { offset: nextOffset } : {}),
+      };
+    });
+    try {
+      if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+        chrome.storage.sync.set({ lineOffsetTrim: trimmed });
+      }
+    } catch {}
+  },
   setSettings: (settings) =>
     set((state) => ({
       ...state,

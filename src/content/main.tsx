@@ -3,7 +3,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import LyricsPanel from "./components/LyricsPanel";
 import KaraokeOverlay from "./components/KaraokeOverlay";
-import { useAppStore } from "./store";
+import { useAppStore, isRichsyncSourceId } from "./store";
 import { log, warn, error, setDebugMode } from "./utils/logger";
 import { fetchBoiduLyrics } from "../modules/sources/boidu";
 import {
@@ -54,21 +54,50 @@ const KARAOKE_SHADOW_STYLES = [
   karaokeEffectsStyles,
 ].join("\n");
 
+// Helper keys for per-song and per-source offset storage
+function getSongOffsetKey(
+  videoId: string | null | undefined,
+  sourceId?: string | null | undefined,
+): string {
+  const v =
+    videoId ||
+    new URLSearchParams(window.location.search).get("v") ||
+    "unknown_video";
+  let s = sourceId || useAppStore.getState().lyricsSource || "default";
+  if (s === "musixmatch-richsync") s = "musixmatch";
+  return `offset_${v}_${s}`;
+}
+
+function getLegacySongOffsetKey(videoId: string | null | undefined): string {
+  const v =
+    videoId || new URLSearchParams(window.location.search).get("v");
+  return v
+    ? `offset_${v}`
+    : `${currentSongInfo?.artist || "unknown"}__${currentSongInfo?.title || "unknown"}`;
+}
+
 // This script creates and manages the lyrics panel on YouTube/Spotify pages
 
 // Sync UI state back to logic
 useAppStore.subscribe((state, prevState) => {
   // Sync Offset
-  if (state.userOffset !== prevState.userOffset) {
+  const offsetChanged = state.userOffset !== prevState.userOffset;
+  const trimChanged =
+    state.richsyncOffsetTrim !== prevState.richsyncOffsetTrim ||
+    state.lineOffsetTrim !== prevState.lineOffsetTrim;
+
+  if (offsetChanged || trimChanged) {
     userSongOffset = state.userOffset;
     const isCaptions = state.lyricsSource === "captions";
-    currentSyncOffset = (isCaptions ? 0 : PLATFORM_OFFSET) + userSongOffset;
+    const isRich = isRichsyncSourceId(state.lyricsSource, state.lyrics);
+    const trim = isRich
+      ? state.richsyncOffsetTrim || 0
+      : state.lineOffsetTrim || 0;
+    currentSyncOffset = (isCaptions ? 0 : PLATFORM_OFFSET) + userSongOffset + trim;
 
-    if (currentSongInfo && !isCaptions) {
+    if (offsetChanged && currentSongInfo && !isCaptions) {
       const videoId = new URLSearchParams(window.location.search).get("v");
-      const songKey = videoId
-        ? `offset_${videoId}`
-        : `${currentSongInfo.artist || "unknown"}__${currentSongInfo.title || "unknown"}`;
+      const songKey = getSongOffsetKey(videoId, state.lyricsSource);
       saveStoredSongOffset(songKey, userSongOffset).catch(() => {});
     }
   }
@@ -96,6 +125,8 @@ if (chrome.storage) {
   chrome.storage.sync.get(
     {
       showLogs: false,
+      richsyncOffsetTrim: 0,
+      lineOffsetTrim: 0,
       isRomanizationEnabled: false,
       isTranslateEnabled: false,
       translationLanguage: "en",
@@ -136,6 +167,12 @@ if (chrome.storage) {
 
       // Sync to store
       const updates: any = {
+        richsyncOffsetTrim:
+          typeof res.richsyncOffsetTrim === "number"
+            ? res.richsyncOffsetTrim
+            : 0,
+        lineOffsetTrim:
+          typeof res.lineOffsetTrim === "number" ? res.lineOffsetTrim : 0,
         isRomanizationEnabled: res.isRomanizationEnabled,
         isTranslateEnabled: res.isTranslateEnabled,
         translationLanguage: res.translationLanguage,
@@ -431,6 +468,24 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
       reverbDampening,
     });
   }
+
+  // 14. Sync Trims (Richsync & Linesync)
+  if (
+    changes.richsyncOffsetTrim &&
+    typeof changes.richsyncOffsetTrim.newValue === "number"
+  ) {
+    useAppStore
+      .getState()
+      .setRichsyncOffsetTrim(changes.richsyncOffsetTrim.newValue);
+  }
+  if (
+    changes.lineOffsetTrim &&
+    typeof changes.lineOffsetTrim.newValue === "number"
+  ) {
+    useAppStore
+      .getState()
+      .setLineOffsetTrim(changes.lineOffsetTrim.newValue);
+  }
 });
 
 // Settings state
@@ -710,18 +765,26 @@ window.addEventListener("message", (event) => {
 
     // ⚡ Late arrival auto-sync: if rich lyrics are already active for this video,
     // but the user hasn't set a manual offset yet, run auto-sync now that captions are here!
-    if (currentVideoId) {
+    const liveSyncVideoId =
+      (typeof currentVideoId !== "undefined" && currentVideoId) ||
+      new URLSearchParams(window.location.search).get("v");
+    if (liveSyncVideoId) {
       const state = useAppStore.getState();
       if (state.lyricsSource !== "captions") {
         const activeLyrics = state.lyrics;
         if (Array.isArray(activeLyrics) && activeLyrics.length > 0) {
-          const activeSongKey = `offset_${currentVideoId}`;
-          getStoredSongOffset(activeSongKey).then((stored) => {
-            if (stored === null) {
+          const activeSongKey = getSongOffsetKey(liveSyncVideoId, state.lyricsSource);
+          const fallbackKey = getLegacySongOffsetKey(liveSyncVideoId);
+          getStoredSongOffset(activeSongKey, fallbackKey).then((stored) => {
+            if (stored === null || Math.abs(stored) <= 0.05) {
               tryAutoDetectOffset(activeLyrics, activeSongKey).then((detected) => {
                 if (detected !== null && detected !== userSongOffset) {
                   userSongOffset = detected;
-                  currentSyncOffset = PLATFORM_OFFSET + userSongOffset;
+                  const isRich = isRichsyncSourceId(state.lyricsSource, activeLyrics);
+                  const trim = isRich
+                    ? state.richsyncOffsetTrim || 0
+                    : state.lineOffsetTrim || 0;
+                  currentSyncOffset = PLATFORM_OFFSET + userSongOffset + trim;
                   useAppStore.getState().setOffset(currentSyncOffset, userSongOffset);
                   log("[Lyrical Auto-Sync] ⚡ Applied late auto-detected offset:", detected, "s");
                 }
@@ -986,18 +1049,70 @@ const PLATFORM_OFFSET = -0.45; // YouTube's systemic delay (constant)
 let userSongOffset = 0; // Per-song correction from slider
 let currentSyncOffset = PLATFORM_OFFSET; // Live offset (platform + user correction)
 
-async function getStoredSongOffset(songKey: string): Promise<number | null> {
+async function getStoredSongOffset(
+  songKey: string,
+  fallbackKey?: string,
+): Promise<number | null> {
+  const isPortato = songKey.includes("portato");
+  const isMusixmatch = songKey.endsWith("_musixmatch");
+
+  const isValidOffset = (key: string, val: any): boolean => {
+    if (typeof val !== "number" || !Number.isFinite(val)) return false;
+    // Discard the known corrupt repetitive-line jump offset (~ -19.2s) on Attention (nfs8NYg7yQM)
+    // so the new monotonic auto-sync engine can calculate the true in-sync -10.8s offset!
+    if (key.includes("nfs8NYg7yQM") && Math.abs(val - (-19.2)) <= 0.25) {
+      return false;
+    }
+    return true;
+  };
+
   try {
     const local = await chrome.storage.local.get("songOffsets");
-    if (local?.songOffsets && typeof local.songOffsets[songKey] === "number") {
-      return local.songOffsets[songKey];
+    const offsets = local?.songOffsets || {};
+
+    if (isValidOffset(songKey, offsets[songKey])) {
+      return offsets[songKey];
+    }
+    // Backward compatibility for legacy Musixmatch RichSync key
+    if (isMusixmatch) {
+      const legacyRichKey = songKey + "-richsync";
+      if (isValidOffset(legacyRichKey, offsets[legacyRichKey])) {
+        return offsets[legacyRichKey];
+      }
+    }
+    // Only fall back to generic legacy video offset if it is a meaningful NON-ZERO offset (> 0.05s)
+    // AND NOT Portato! Portato must not inherit a generic western video offset because QQ Music masters
+    // have independent pre-roll/intro timing. Portato must auto-detect its own timing.
+    if (
+      !isPortato &&
+      fallbackKey &&
+      isValidOffset(fallbackKey, offsets[fallbackKey]) &&
+      Math.abs(offsets[fallbackKey]) > 0.05
+    ) {
+      return offsets[fallbackKey];
     }
   } catch {}
 
   try {
     const sync = await chrome.storage.sync.get("songOffsets");
-    if (sync?.songOffsets && typeof sync.songOffsets[songKey] === "number") {
-      return sync.songOffsets[songKey];
+    const offsets = sync?.songOffsets || {};
+
+    if (isValidOffset(songKey, offsets[songKey])) {
+      return offsets[songKey];
+    }
+    if (isMusixmatch) {
+      const legacyRichKey = songKey + "-richsync";
+      if (isValidOffset(legacyRichKey, offsets[legacyRichKey])) {
+        return offsets[legacyRichKey];
+      }
+    }
+    if (
+      !isPortato &&
+      fallbackKey &&
+      isValidOffset(fallbackKey, offsets[fallbackKey]) &&
+      Math.abs(offsets[fallbackKey]) > 0.05
+    ) {
+      return offsets[fallbackKey];
     }
   } catch {}
 
@@ -1009,6 +1124,9 @@ async function saveStoredSongOffset(songKey: string, offset: number): Promise<vo
     const local = (await chrome.storage.local.get("songOffsets")) || {};
     const songOffsets = local.songOffsets || {};
     songOffsets[songKey] = offset;
+    if (songKey.endsWith("_musixmatch")) {
+      songOffsets[songKey + "-richsync"] = offset;
+    }
     await chrome.storage.local.set({ songOffsets });
   } catch (e) {
     console.warn("[Lyrical Sync] Failed to save offset to local:", e);
@@ -1018,21 +1136,29 @@ async function saveStoredSongOffset(songKey: string, offset: number): Promise<vo
     const sync = (await chrome.storage.sync.get("songOffsets")) || {};
     const songOffsets = sync.songOffsets || {};
     songOffsets[songKey] = offset;
+    if (songKey.endsWith("_musixmatch")) {
+      songOffsets[songKey + "-richsync"] = offset;
+    }
     await chrome.storage.sync.set({ songOffsets });
   } catch {}
 }
 
 async function getAvailableCaptionLines(): Promise<Array<{ time: number; duration?: number; text: string }> | null> {
-  if (Array.isArray(pendingMainWorldCaptionLyrics) && pendingMainWorldCaptionLyrics.length > 0) {
-    return pendingMainWorldCaptionLyrics;
-  }
-
+  // 1. Try to fetch the video's original/native language track (e.g. English ASR or matching song language)
   if (Array.isArray(availableCaptions) && availableCaptions.length > 0) {
+    const storeLang = (useAppStore.getState().lyricsLanguage || "").toLowerCase().split("-")[0];
+
     const track =
+      availableCaptions.find((t: any) => {
+        const lang = String(t?.languageCode || t?.lang || "").toLowerCase();
+        const name = String(t?.name || "").toLowerCase();
+        return !name.includes("translated") && (lang === storeLang || lang.startsWith(storeLang));
+      }) ||
       availableCaptions.find((t: any) => {
         const name = String(t?.name || "").toLowerCase();
         return !name.includes("translated");
-      }) || availableCaptions[0];
+      }) ||
+      availableCaptions[0];
 
     const trackUrl = track?.baseUrl || track?.url;
     if (trackUrl) {
@@ -1045,6 +1171,11 @@ async function getAvailableCaptionLines(): Promise<Array<{ time: number; duratio
         console.warn("[Lyrical Auto-Sync] Could not fetch caption track for auto-sync:", err);
       }
     }
+  }
+
+  // 2. Fallback to active player caption track (whatever is currently active on the player)
+  if (Array.isArray(pendingMainWorldCaptionLyrics) && pendingMainWorldCaptionLyrics.length > 0) {
+    return pendingMainWorldCaptionLyrics;
   }
 
   return null;
@@ -1079,32 +1210,77 @@ async function tryAutoDetectOffset(
       captionsResult = detectAutoSyncOffset(lyrics, captionLines);
     }
 
-    // 📊 Log statement showing SponsorBlock offset and Captions offset
-    const sbLogStr = sponsorBlockResult && sponsorBlockResult.offset > 0
-      ? `+${sponsorBlockResult.offset}s (${sponsorBlockResult.source})`
-      : "0.0s (No non-music intro)";
+    // Find the timestamp of the first actual sung vocal line in this source
+    const firstVocalLine = lyrics.find(
+      (l) => !l.isInstrumental && (l.text || "").trim().length > 0,
+    );
+    const firstVocalTime =
+      firstVocalLine && typeof firstVocalLine.time === "number"
+        ? firstVocalLine.time
+        : 0;
 
-    const capLogStr = captionsResult && captionsResult.confidence >= 0.68
-      ? `${captionsResult.detectedOffset > 0 ? "+" : ""}${captionsResult.detectedOffset}s (confidence: ${captionsResult.confidence})`
-      : "Inconclusive / None";
+    // 📊 Log statement showing SponsorBlock offset, Captions offset, and first vocal line
+    const sbLogStr =
+      sponsorBlockResult && sponsorBlockResult.offset > 0
+        ? `+${sponsorBlockResult.offset}s (${sponsorBlockResult.source})`
+        : "0.0s (No non-music intro)";
 
-    console.groupCollapsed?.(`[Lyrical Auto-Sync] 📊 Sync Analysis for "${currentSongInfo?.title || videoId}"`);
+    const capLogStr =
+      captionsResult && captionsResult.confidence >= 0.68
+        ? `${captionsResult.detectedOffset > 0 ? "+" : ""}${captionsResult.detectedOffset}s (confidence: ${captionsResult.confidence})`
+        : "Inconclusive / None";
+
+    console.groupCollapsed?.(
+      `[Lyrical Auto-Sync] 📊 Sync Analysis for "${currentSongInfo?.title || videoId}" (${currentSource || "source"})`,
+    );
     console.log(`🎬 SponsorBlock Intro Offset: ${sbLogStr}`);
     console.log(`💬 Captions Auto-Sync Offset: ${capLogStr}`);
+    console.log(`🎵 First Vocal Time in Source: ${firstVocalTime.toFixed(2)}s`);
 
     let chosenOffset: number | null = null;
     let chosenSource = "Default In-Sync";
 
-    if (sponsorBlockResult && sponsorBlockResult.offset > 0) {
-      chosenOffset = sponsorBlockResult.offset;
-      chosenSource = `SponsorBlock (${sponsorBlockResult.source})`;
-    } else if (captionsResult && captionsResult.confidence >= 0.68) {
+    // PRIORITY 1: High-confidence Captions Cross-Correlation
+    // Captions compare the actual spoken words in YouTube audio to the lyrics text of THIS source.
+    // If it confidently finds an offset (even 0.0s), it represents the true ground truth for this source.
+    if (captionsResult && captionsResult.confidence >= 0.68) {
       chosenOffset = captionsResult.detectedOffset;
-      chosenSource = "Captions Cross-Correlation";
+      chosenSource = `Captions Cross-Correlation (${Math.round(captionsResult.confidence * 100)}% conf)`;
+    }
+    // PRIORITY 2: SponsorBlock / Chapter Intro Skip
+    // Only apply if the lyrics have NOT already factored in the video intro!
+    else if (sponsorBlockResult && sponsorBlockResult.offset > 0) {
+      const sbOffset = sponsorBlockResult.offset;
+      // If the first vocal line already begins AFTER the intro segment (with 1.5s tolerance),
+      // the lyrics were created specifically for the music video and are already synced!
+      if (firstVocalTime >= sbOffset - 1.5) {
+        console.log(
+          `🛡️ Source first vocal (${firstVocalTime.toFixed(1)}s) is >= intro skip (${sbOffset.toFixed(1)}s - 1.5s). Source appears already synced to video! Retaining 0.0s.`,
+        );
+        chosenOffset = 0.0;
+        chosenSource = `Pre-Synced to Video (SponsorBlock intro detected but bypassed)`;
+      } else {
+        // Lyrics start before the music begins in the video -> Album-timed lyrics needing offset
+        chosenOffset = sbOffset;
+        chosenSource = `SponsorBlock (${sponsorBlockResult.source})`;
+      }
+    }
+    // PRIORITY 3: Moderate captions confidence when supported by SponsorBlock
+    else if (
+      captionsResult &&
+      captionsResult.confidence >= 0.50 &&
+      sponsorBlockResult &&
+      sponsorBlockResult.offset > 0 &&
+      Math.abs(captionsResult.detectedOffset - sponsorBlockResult.offset) <= 2.5
+    ) {
+      chosenOffset = captionsResult.detectedOffset;
+      chosenSource = "Captions Cross-Correlation (confirmed by SponsorBlock)";
     }
 
     if (chosenOffset !== null) {
-      console.log(`🎯 Final Applied Offset: ${chosenOffset > 0 ? "+" : ""}${chosenOffset}s (via ${chosenSource})`);
+      console.log(
+        `🎯 Final Applied Offset: ${chosenOffset > 0 ? "+" : ""}${chosenOffset}s (via ${chosenSource})`,
+      );
       console.groupEnd?.();
       await saveStoredSongOffset(songKey, chosenOffset);
       return chosenOffset;
@@ -2276,14 +2452,17 @@ function restoreLyricsFromCacheEntry(
     }
   }
 
-  fetchedLyrics = activeLyrics;
+  const isCaptionsSource = currentSource === "captions" || fallbackSourceId === "captions";
+  const cleanActiveLyrics = isCaptionsSource ? activeLyrics : normalizeLyrics(activeLyrics);
+
+  fetchedLyrics = cleanActiveLyrics;
   lyricsByVersion.default = {
     id: `${fallbackSourceId || entry.source || "cached"}-cache`,
     label:
       entry.label ||
       getCacheLabelForSource(entry.source || fallbackSourceId, fallbackLabel),
     synced: true,
-    lyrics: activeLyrics,
+    lyrics: cleanActiveLyrics,
   };
 
   lyricsJustLoaded = true;
@@ -2293,9 +2472,9 @@ function restoreLyricsFromCacheEntry(
   useAppStore
     .getState()
     .setLyrics(
-      activeLyrics,
+      cleanActiveLyrics,
       currentSource,
-      detectLyricsLanguage(activeLyrics, activeLang),
+      detectLyricsLanguage(cleanActiveLyrics, activeLang),
     );
 
   if (currentSource === "captions" || fallbackSourceId === "captions") {
@@ -2380,7 +2559,7 @@ function restoreLyricsFromCacheEntry(
     autoProcessLyrics();
   }
 
-  startLyricsTimer(activeLyrics);
+  startLyricsTimer(cleanActiveLyrics);
 
   setTimeout(() => {
     lyricsJustLoaded = false;
@@ -4458,15 +4637,13 @@ async function startLyricsTimer(lyrics) {
 
   let currentIndex = -1;
 
-  // PER-SONG OFFSET: Load stored correction for this specific song
+  // PER-SONG OFFSET: Load stored correction for this specific song & source
   const videoId = new URLSearchParams(window.location.search).get("v");
-  const songKey = videoId
-    ? `offset_${videoId}`
-    : `${currentSongInfo?.artist || "unknown"}__${currentSongInfo?.title || "unknown"}`;
-  let songOffset = 0;
-
   const activeSource = useAppStore.getState().lyricsSource;
   const isCaptions = activeSource === "captions";
+  const songKey = getSongOffsetKey(videoId, activeSource);
+  const legacyKey = getLegacySongOffsetKey(videoId);
+  let songOffset = 0;
 
   if (isCaptions) {
     // YouTube Captions are already natively timed to the video!
@@ -4478,22 +4655,24 @@ async function startLyricsTimer(lyrics) {
     );
   } else {
     try {
-      const stored = await getStoredSongOffset(songKey);
+      const stored = await getStoredSongOffset(songKey, legacyKey);
       if (timerSessionId !== activeTimerSessionId) return;
 
-      if (stored !== null) {
+      if (stored !== null && Math.abs(stored) > 0.05) {
         songOffset = stored;
         log(
-          "[Lyrical Panel] 📝 Using stored offset for this song:",
+          "[Lyrical Panel] 📝 Using stored offset for this song/source:",
           songOffset.toFixed(2),
           "s",
         );
       } else {
-        // ⚡ ADAPTIVE SYNC: If user has no saved offset, cross-correlate with YouTube captions
+        // ⚡ ADAPTIVE SYNC: If user has no saved non-zero offset, cross-correlate with YouTube captions
         const autoDetected = await tryAutoDetectOffset(lyrics, songKey);
         if (timerSessionId !== activeTimerSessionId) return;
         if (autoDetected !== null) {
           songOffset = autoDetected;
+        } else if (stored !== null) {
+          songOffset = stored;
         }
       }
 
@@ -4510,20 +4689,27 @@ async function startLyricsTimer(lyrics) {
       console.warn("[Lyrical Panel] Could not load song offset:", err);
     }
 
-    // FINAL OFFSET: Platform + Song-specific (set globally for live updates)
+    // FINAL OFFSET: Platform + Song-specific + Sync-type trim (set globally for live updates)
     if (timerSessionId !== activeTimerSessionId) return;
     userSongOffset = songOffset;
-    currentSyncOffset = PLATFORM_OFFSET + userSongOffset;
+    const isRich = isRichsyncSourceId(activeSource, lyrics);
+    const appState = useAppStore.getState();
+    const trim = isRich
+      ? appState.richsyncOffsetTrim || 0
+      : appState.lineOffsetTrim || 0;
+    currentSyncOffset = PLATFORM_OFFSET + userSongOffset + trim;
 
     // 🔥 SYNC REACT STORE WITH STORED OFFSET (This updates the slider UI)
     useAppStore.getState().setOffset(currentSyncOffset, userSongOffset);
 
     log(
-      "[Lyrical Panel] 📝 Loaded saved offset for song:",
+      "[Lyrical Panel] 📝 Loaded saved offset for song/source:",
       songKey,
       "offset:",
       userSongOffset.toFixed(2),
-      "s",
+      "s (trim:",
+      trim.toFixed(2),
+      "s)",
     );
   }
 
@@ -4547,7 +4733,9 @@ async function startLyricsTimer(lyrics) {
   const onTimeUpdate = () => {
     // 🔒 SYNC ENGINE: Captions use video.currentTime directly (0 default, or manual userSongOffset)
     const adjustedTime = isCaptions
-      ? video.currentTime + userSongOffset
+      ? video.currentTime +
+        userSongOffset +
+        (useAppStore.getState().lineOffsetTrim || 0)
       : video.currentTime + currentSyncOffset;
     const newIndex = findLyricIndex(lyrics, adjustedTime);
 

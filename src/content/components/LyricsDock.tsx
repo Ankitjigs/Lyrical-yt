@@ -12,7 +12,11 @@ import {
   RotateCcw,
   Type,
 } from "lucide-react";
-import { useAppStore, DEFAULT_SOURCE_PREFERENCES } from "../store";
+import {
+  useAppStore,
+  DEFAULT_SOURCE_PREFERENCES,
+  isRichsyncSourceId,
+} from "../store";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
 import type {
@@ -123,6 +127,10 @@ export default function LyricsDock({
   const {
     sourcePreferences,
     userOffset,
+    richsyncOffsetTrim,
+    lineOffsetTrim,
+    setRichsyncOffsetTrim,
+    setLineOffsetTrim,
     isTranslateEnabled,
     isRomanizationEnabled,
     isLoading,
@@ -135,6 +143,10 @@ export default function LyricsDock({
     useShallow((state) => ({
       sourcePreferences: state.sourcePreferences,
       userOffset: state.userOffset,
+      richsyncOffsetTrim: state.richsyncOffsetTrim,
+      lineOffsetTrim: state.lineOffsetTrim,
+      setRichsyncOffsetTrim: state.setRichsyncOffsetTrim,
+      setLineOffsetTrim: state.setLineOffsetTrim,
       isTranslateEnabled: state.isTranslateEnabled,
       isRomanizationEnabled: state.isRomanizationEnabled,
       isLoading: state.isLoading,
@@ -150,6 +162,7 @@ export default function LyricsDock({
   const [hoveredSourceId, setHoveredSourceId] = useState<string | null>(null);
   const sourceMenuRef = useRef<HTMLDivElement>(null);
   const sourcePillRef = useRef<HTMLButtonElement>(null);
+  const offsetRef = useRef<HTMLDivElement>(null);
 
   const activePreferenceId = normalizeSourceId(activeSource);
   const hasLyrics = Array.isArray(lyrics) && lyrics.length > 0;
@@ -261,6 +274,34 @@ export default function LyricsDock({
     };
   }, [isSourceMenuOpen]);
 
+  useEffect(() => {
+    if (!isOffsetOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      const path = event.composedPath ? event.composedPath() : [];
+      const isInside =
+        (offsetRef.current && offsetRef.current.contains(target)) ||
+        (offsetRef.current && path.includes(offsetRef.current));
+      if (!isInside) {
+        setIsOffsetOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOffsetOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOffsetOpen]);
+
   const selectSource = (index: number) => {
     if (!canCycleSources) return;
     const nextIndex =
@@ -304,9 +345,14 @@ export default function LyricsDock({
     const nextUserOffset = clampOffset(nextValue);
     const isCaptions = activePreferenceId === "captions";
     const effectivePlatformOffset = isCaptions ? 0 : PLATFORM_OFFSET;
+    const isRich = isRichsyncSourceId(activePreferenceId, lyrics);
+    const trim = isRich ? richsyncOffsetTrim : lineOffsetTrim;
     useAppStore
       .getState()
-      .setOffset(effectivePlatformOffset + nextUserOffset, nextUserOffset);
+      .setOffset(
+        effectivePlatformOffset + nextUserOffset + trim,
+        nextUserOffset,
+      );
   };
 
   const nudgeOffset = (delta: number) => updateOffset(userOffset + delta);
@@ -586,7 +632,7 @@ export default function LyricsDock({
 
         <span className="lyrical-dock-divider" />
 
-        <div className="lyrical-dock-offset">
+        <div className="lyrical-dock-offset" ref={offsetRef}>
           <Tooltip content="Sync offset slider" align="right">
             <button
               className="lyrical-dock-icon"
@@ -657,11 +703,141 @@ export default function LyricsDock({
                     : { opacity: 0, y: -6, scale: 0.98 }
                 }
                 transition={{ duration: 0.16 }}
+                onClick={(e) => e.stopPropagation()}
               >
-                <div className="lyrical-dock-popover-row">
-                  <span>Lyrics Sync</span>
-                  <strong>{formatOffset(userOffset)}</strong>
+                <div className="lyrical-dock-popover-steppers">
+                  {/* Row 1: Global */}
+                  <div className="lyrical-offset-stepper-row">
+                    <span
+                      className="lyrical-offset-label"
+                      title="Global track offset (double-click to reset)"
+                      onDoubleClick={() => updateOffset(0)}
+                    >
+                      Global
+                    </span>
+                    <div className="lyrical-offset-stepper-controls">
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          nudgeOffset(
+                            e.shiftKey ? -OFFSET_STEP_LARGE : -OFFSET_STEP,
+                          )
+                        }
+                        aria-label="Global offset earlier (-0.1s, Shift -0.5s)"
+                      >
+                        <Minus size={13} />
+                      </button>
+                      <span className="lyrical-offset-val">
+                        {formatOffset(userOffset)}
+                      </span>
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          nudgeOffset(
+                            e.shiftKey ? OFFSET_STEP_LARGE : OFFSET_STEP,
+                          )
+                        }
+                        aria-label="Global offset later (+0.1s, Shift +0.5s)"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Richsync */}
+                  <div className="lyrical-offset-stepper-row">
+                    <span
+                      className="lyrical-offset-label"
+                      title="Syllable & Word sync trim (double-click to reset)"
+                      onDoubleClick={() => setRichsyncOffsetTrim(0)}
+                    >
+                      Richsync
+                    </span>
+                    <div className="lyrical-offset-stepper-controls">
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          setRichsyncOffsetTrim(
+                            richsyncOffsetTrim +
+                              (e.shiftKey
+                                ? -OFFSET_STEP_LARGE
+                                : -OFFSET_STEP),
+                          )
+                        }
+                        aria-label="Richsync trim earlier (-0.1s, Shift -0.5s)"
+                      >
+                        <Minus size={13} />
+                      </button>
+                      <span className="lyrical-offset-val">
+                        {formatOffset(richsyncOffsetTrim)}
+                      </span>
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          setRichsyncOffsetTrim(
+                            richsyncOffsetTrim +
+                              (e.shiftKey ? OFFSET_STEP_LARGE : OFFSET_STEP),
+                          )
+                        }
+                        aria-label="Richsync trim later (+0.1s, Shift +0.5s)"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Row 3: Linesync */}
+                  <div className="lyrical-offset-stepper-row">
+                    <span
+                      className="lyrical-offset-label"
+                      title="Line sync trim (double-click to reset)"
+                      onDoubleClick={() => setLineOffsetTrim(0)}
+                    >
+                      Linesync
+                    </span>
+                    <div className="lyrical-offset-stepper-controls">
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          setLineOffsetTrim(
+                            lineOffsetTrim +
+                              (e.shiftKey
+                                ? -OFFSET_STEP_LARGE
+                                : -OFFSET_STEP),
+                          )
+                        }
+                        aria-label="Linesync trim earlier (-0.1s, Shift -0.5s)"
+                      >
+                        <Minus size={13} />
+                      </button>
+                      <span className="lyrical-offset-val">
+                        {formatOffset(lineOffsetTrim)}
+                      </span>
+                      <button
+                        type="button"
+                        className="lyrical-offset-btn"
+                        onClick={(e) =>
+                          setLineOffsetTrim(
+                            lineOffsetTrim +
+                              (e.shiftKey ? OFFSET_STEP_LARGE : OFFSET_STEP),
+                          )
+                        }
+                        aria-label="Linesync trim later (+0.1s, Shift +0.5s)"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
+
+                <div className="lyrical-dock-popover-divider" />
+
+                {/* Global Scrubber Slider */}
                 <input
                   className="lyrical-sync-slider"
                   type="range"
@@ -673,11 +849,20 @@ export default function LyricsDock({
                     updateOffset(parseFloat(event.currentTarget.value))
                   }
                   onKeyDown={(event) => event.stopPropagation()}
-                  aria-label="Lyrics sync offset"
+                  aria-label="Global sync offset slider"
                 />
+
                 <div className="lyrical-dock-popover-scale">
                   <span>-2min</span>
-                  <button type="button" onClick={() => updateOffset(0)}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateOffset(0);
+                      setRichsyncOffsetTrim(0);
+                      setLineOffsetTrim(0);
+                    }}
+                    title="Reset all offsets to 0.0s"
+                  >
                     <RotateCcw size={13} />
                     Reset
                   </button>

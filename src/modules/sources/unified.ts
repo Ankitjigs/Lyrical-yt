@@ -1,6 +1,7 @@
 import { parseLRC, lrcFixers } from "../../content/lrcParser";
 import type { LyricalLyricLine, SongInfo } from "../../types/lyrics";
 import { parseTTML } from "./boidu";
+import { isMetadataLine } from "../lyrics/lyricsNormalizer";
 
 type UnifiedSourceId =
   | "bLyrics-synced"
@@ -145,18 +146,21 @@ function parseQRC(qrcXml: string, songDurationSeconds?: number): LyricalLyricLin
     if (!lineTiming) continue;
 
     const qrcWords = parseQrcWords(lineTiming.body);
-    const text = qrcWords.map((word) => word.text).join("");
-    if (!text) continue;
+    const text = (qrcWords.map((word) => word.text).join("") || decodeXmlEntities(lineTiming.body.replace(/\(\d+,\d+\)/g, ""))).trim();
+    if (!text || isMetadataLine(text)) continue;
 
     parsedLines.push({
       time: lineTiming.startMs / 1000,
       duration: lineTiming.durationMs / 1000,
       text,
-      parts: qrcWords.map((word) => ({
-        time: word.timeMs / 1000,
-        duration: word.durationMs / 1000,
-        text: word.text,
-      })),
+      parts: qrcWords.length > 0 ? qrcWords.map((word) => {
+        const absTimeMs = word.timeMs < lineTiming.startMs ? lineTiming.startMs + word.timeMs : word.timeMs;
+        return {
+          time: absTimeMs / 1000,
+          duration: word.durationMs / 1000,
+          text: word.text,
+        };
+      }) : null,
     });
   }
 
