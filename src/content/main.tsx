@@ -776,7 +776,7 @@ window.addEventListener("message", (event) => {
           const activeSongKey = getSongOffsetKey(liveSyncVideoId, state.lyricsSource);
           const fallbackKey = getLegacySongOffsetKey(liveSyncVideoId);
           getStoredSongOffset(activeSongKey, fallbackKey).then((stored) => {
-            if (stored === null || Math.abs(stored) <= 0.05) {
+            if (stored === null) {
               tryAutoDetectOffset(activeLyrics, activeSongKey).then((detected) => {
                 if (detected !== null && detected !== userSongOffset) {
                   userSongOffset = detected;
@@ -2102,8 +2102,10 @@ async function persistLyricsVersions() {
 }
 
 function getLyricsCacheKey(songInfo, sourceId = null) {
-  if (!songInfo?.artist || !songInfo?.title) return null;
-  const baseKey = `lyrics_${songInfo.artist}_${songInfo.title}`;
+  const artist = songInfo?.originalArtist || songInfo?.artist;
+  const title = songInfo?.originalTitle || songInfo?.title;
+  if (!artist || !title) return null;
+  const baseKey = `lyrics_${artist}_${title}`;
   return sourceId ? `${baseKey}__${sourceId}` : baseKey;
 }
 
@@ -2574,9 +2576,30 @@ async function tryRestoreCachedLyricsForSource(
   source,
   maxCacheAgeMs,
 ) {
-  const sourceCacheKeys = getCacheLookupIdsForSource(source.id)
-    .map((cacheSourceId) => getLyricsCacheKey(songInfo, cacheSourceId))
-    .filter(Boolean);
+  const candidateSongInfos = [songInfo];
+  if (
+    songInfo?.originalTitle &&
+    songInfo?.title &&
+    songInfo.originalTitle !== songInfo.title
+  ) {
+    candidateSongInfos.push({
+      ...songInfo,
+      artist: songInfo.artist,
+      title: songInfo.title,
+      originalArtist: songInfo.artist,
+      originalTitle: songInfo.title,
+    });
+  }
+
+  const sourceCacheKeys = Array.from(
+    new Set(
+      candidateSongInfos.flatMap((info) =>
+        getCacheLookupIdsForSource(source.id)
+          .map((cacheSourceId) => getLyricsCacheKey(info, cacheSourceId))
+          .filter(Boolean),
+      ),
+    ),
+  );
   if (sourceCacheKeys.length === 0) return false;
 
   const cachedEntries = await chrome.storage.local.get(sourceCacheKeys);
@@ -2775,7 +2798,7 @@ function setFetchedSourceLyrics({
 /**
  * Try to fetch from Cubey (Better Lyrics / Musixmatch aggregator)
  */
-async function tryFetchCubey(songInfo, preferredIdentity = "better_lyrics") {
+async function tryFetchCubey(songInfo, preferredIdentity = "musixmatch") {
   if (!window.CubeyProvider) return false;
 
   log("Attempting Cubey fetch...");
@@ -2790,11 +2813,10 @@ async function tryFetchCubey(songInfo, preferredIdentity = "better_lyrics") {
 
     if (richLyrics && richLyrics.length) {
       const richSourceIdentity =
-        preferredIdentity === "musixmatch"
-          ? "musixmatch-richsync"
-          : "better_lyrics";
-      const richLabel =
-        preferredIdentity === "musixmatch" ? "Musixmatch" : "Better Lyrics";
+        preferredIdentity === "better_lyrics"
+          ? "better_lyrics"
+          : "musixmatch-richsync";
+      const richLabel = "Musixmatch";
 
       fetchedLyrics = richLyrics;
       lyricsByVersion.default = {
@@ -3511,9 +3533,17 @@ async function tryFetchLRCLib(songInfo) {
 
       // Update song info from API response if we have better data
       if (match.artistName && match.trackName) {
-        // Update our stored song info with API data
+        // Update our stored song info with API data while preserving original keys
         const newInfo = {
           ...currentSongInfo,
+          originalArtist:
+            currentSongInfo?.originalArtist ||
+            currentSongInfo?.artist ||
+            match.artistName,
+          originalTitle:
+            currentSongInfo?.originalTitle ||
+            currentSongInfo?.title ||
+            match.trackName,
           artist: match.artistName,
           title: match.trackName,
           album: match.albumName || currentSongInfo.album,
@@ -3573,12 +3603,29 @@ async function preScanAvailableCachedSources(
   if (!songInfo?.artist || !songInfo?.title) return;
   useAppStore.getState().clearAvailableLyricsSources();
 
+  const candidateSongInfos = [songInfo];
+  if (
+    songInfo?.originalTitle &&
+    songInfo?.title &&
+    songInfo.originalTitle !== songInfo.title
+  ) {
+    candidateSongInfos.push({
+      ...songInfo,
+      artist: songInfo.artist,
+      title: songInfo.title,
+      originalArtist: songInfo.artist,
+      originalTitle: songInfo.title,
+    });
+  }
+
   const allKeysMap = new Map<string, string>();
-  for (const source of enabledSources) {
-    const lookupIds = getCacheLookupIdsForSource(source.id);
-    for (const subId of lookupIds) {
-      const key = getLyricsCacheKey(songInfo, subId);
-      if (key) allKeysMap.set(key, subId);
+  for (const info of candidateSongInfos) {
+    for (const source of enabledSources) {
+      const lookupIds = getCacheLookupIdsForSource(source.id);
+      for (const subId of lookupIds) {
+        const key = getLyricsCacheKey(info, subId);
+        if (key) allKeysMap.set(key, subId);
+      }
     }
   }
 
@@ -3700,7 +3747,7 @@ async function backgroundPreScanAllSources(
             language: boiduRes.language || null,
           };
         }
-      } else if (source.id === "musixmatch" || source.id === "better_lyrics") {
+      } else if (source.id === "musixmatch") {
         if (window.CubeyProvider) {
           const cubeyData = await window.CubeyProvider.fetchLyrics(songInfo);
           if (cubeyData?.musixmatchWordByWordLyrics) {
@@ -3776,6 +3823,12 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
 
   if (videoId && !songInfo.videoId) {
     songInfo.videoId = videoId;
+  }
+  if (!songInfo.originalTitle) {
+    songInfo.originalTitle = songInfo.title;
+  }
+  if (!songInfo.originalArtist) {
+    songInfo.originalArtist = songInfo.artist;
   }
 
   if (
@@ -3884,11 +3937,6 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
             console.error("Test Boidu fetch crashed loop", e);
             found = false;
           }
-          break;
-        case "better_lyrics":
-          // Placeholder for now, typically same as Cubey but maybe different endpoint?
-          // Using Cubey provider for Better Lyrics too for now as they are likely same backend
-          found = await tryFetchCubey(songInfo, "better_lyrics");
           break;
         case "unison-richsynced":
         case "unison-wordsynced":
@@ -4079,7 +4127,8 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       } catch (e) {}
       break;
     case "better_lyrics":
-      found = await tryFetchCubey(currentSongInfo, "better_lyrics");
+    case "musixmatch":
+      found = await tryFetchCubey(currentSongInfo, "musixmatch");
       break;
     case "unison-richsynced":
     case "unison-wordsynced":
@@ -4098,10 +4147,6 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
     case "legato-synced":
     case "musixmatch-synced":
       found = await tryFetchUnifiedSource(currentSongInfo, sourceId);
-      break;
-    case "musixmatch":
-      found = await tryFetchCubey(currentSongInfo, "musixmatch");
-      break;
     case "lrclib":
       found = await tryFetchLRCLib(currentSongInfo);
       break;
@@ -4658,7 +4703,7 @@ async function startLyricsTimer(lyrics) {
       const stored = await getStoredSongOffset(songKey, legacyKey);
       if (timerSessionId !== activeTimerSessionId) return;
 
-      if (stored !== null && Math.abs(stored) > 0.05) {
+      if (stored !== null) {
         songOffset = stored;
         log(
           "[Lyrical Panel] 📝 Using stored offset for this song/source:",
@@ -4666,7 +4711,7 @@ async function startLyricsTimer(lyrics) {
           "s",
         );
       } else {
-        // ⚡ ADAPTIVE SYNC: If user has no saved non-zero offset, cross-correlate with YouTube captions
+        // ⚡ ADAPTIVE SYNC: If user has no saved offset, cross-correlate with YouTube captions
         const autoDetected = await tryAutoDetectOffset(lyrics, songKey);
         if (timerSessionId !== activeTimerSessionId) return;
         if (autoDetected !== null) {

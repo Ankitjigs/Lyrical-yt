@@ -440,7 +440,9 @@ export function detectAutoSyncOffset(
   }
 
   let finalOffset = onsetOffset;
-  if (Math.abs(finalOffset) < 0.35) {
+  // If the onset difference is small (< 2.0s), it is within standard YouTube ASR recognition latency,
+  // NOT a true video intro skit/dialogue. Default to 0.0s to preserve studio-synced lyrics!
+  if (Math.abs(finalOffset) < 2.0) {
     finalOffset = 0.0;
   }
 

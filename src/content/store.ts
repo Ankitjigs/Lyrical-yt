@@ -37,12 +37,6 @@ export const DEFAULT_SOURCE_PREFERENCES: SourcePreference[] = [
     tags: ["SYLLABLE"],
   },
   {
-    id: "better_lyrics",
-    label: "Better Lyrics",
-    enabled: true,
-    tags: ["WORD"],
-  },
-  {
     id: "unison-wordsynced",
     label: "Better Lyrics Unison",
     enabled: true,

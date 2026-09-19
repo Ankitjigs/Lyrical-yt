@@ -217,33 +217,45 @@ function formatTrackDisplayName(track: any): string {
   return isAsr ? "English (auto)" : "English";
 }
 
+function extractVideoId(val: any): string | null {
+  if (!val) return null;
+  if (typeof val.videoId === "string" && val.videoId.trim()) {
+    return val.videoId.trim();
+  }
+  if (typeof val.tracks === "object" && val.tracks) {
+    for (const tr of Object.values(val.tracks)) {
+      if (typeof (tr as any)?.videoId === "string" && (tr as any).videoId.trim()) {
+        return (tr as any).videoId.trim();
+      }
+    }
+  }
+  if (typeof val === "object") {
+    for (const v of Object.values(val)) {
+      if (typeof (v as any)?.videoId === "string" && (v as any).videoId.trim()) {
+        return (v as any).videoId.trim();
+      }
+    }
+  }
+  return null;
+}
+
+function extractVideoIdFromGroup(grp: any): string | null {
+  if (!grp) return null;
+  if (grp.videoId) return grp.videoId;
+  if (Array.isArray(grp.entries)) {
+    for (const e of grp.entries) {
+      const vid = extractVideoId(e.value);
+      if (vid) return vid;
+    }
+  }
+  return null;
+}
+
 function normalizeCacheGroups(
   items: Record<string, any>,
   activeContext?: { videoId?: string | null; songKey?: string | null },
 ) {
   const grouped = new Map();
-
-  const extractVideoId = (val: any): string | null => {
-    if (!val) return null;
-    if (typeof val.videoId === "string" && val.videoId.trim()) {
-      return val.videoId.trim();
-    }
-    if (typeof val.tracks === "object" && val.tracks) {
-      for (const tr of Object.values(val.tracks)) {
-        if (typeof (tr as any)?.videoId === "string" && (tr as any).videoId.trim()) {
-          return (tr as any).videoId.trim();
-        }
-      }
-    }
-    if (typeof val === "object") {
-      for (const v of Object.values(val)) {
-        if (typeof (v as any)?.videoId === "string" && (v as any).videoId.trim()) {
-          return (v as any).videoId.trim();
-        }
-      }
-    }
-    return null;
-  };
 
   const currentStoreSong = useAppStore.getState().songInfo;
   const storeSongKey = currentStoreSong
@@ -330,19 +342,54 @@ function normalizeCacheGroups(
     }
   });
 
-  return Array.from(grouped.values())
+  // Merge groups that share the same non-null videoId
+  const videoIdToGroup = new Map<string, any>();
+  const finalGroups: any[] = [];
+
+  for (const group of grouped.values()) {
+    if (group.videoId) {
+      if (videoIdToGroup.has(group.videoId)) {
+        const primary = videoIdToGroup.get(group.videoId);
+        primary.entries.push(...group.entries);
+        if (!primary.altIds) {
+          primary.altIds = [primary.id];
+        }
+        primary.altIds.push(group.id);
+
+        // If the current group matches active songKey, prioritize its title/id
+        if (
+          (storeSongKey &&
+            group.id.toLowerCase().replace(/[^a-z0-9]/g, "") ===
+              storeSongKey.toLowerCase().replace(/[^a-z0-9]/g, "")) ||
+          (activeContext?.songKey &&
+            group.id.toLowerCase().replace(/[^a-z0-9]/g, "") ===
+              activeContext.songKey.toLowerCase().replace(/[^a-z0-9]/g, ""))
+        ) {
+          primary.title = group.title;
+          primary.id = group.id;
+        }
+        continue;
+      } else {
+        group.altIds = [group.id];
+        videoIdToGroup.set(group.videoId, group);
+      }
+    }
+    finalGroups.push(group);
+  }
+
+  return finalGroups
     .map((group: any) => ({
       ...group,
       totalBytes: group.entries.reduce(
-        (sum, entry) => sum + entry.sizeBytes,
+        (sum: number, entry: any) => sum + entry.sizeBytes,
         0,
       ),
       latestTimestamp: group.entries.reduce(
-        (latest, entry) => Math.max(latest, entry.timestamp || 0),
+        (latest: number, entry: any) => Math.max(latest, entry.timestamp || 0),
         0,
       ),
-      entries: group.entries.sort((a, b) => {
-        const priority = {
+      entries: group.entries.sort((a: any, b: any) => {
+        const priority: Record<string, number> = {
           "primary-cache": 0,
           "source-cache": 1,
           versions: 2,
@@ -353,7 +400,7 @@ function normalizeCacheGroups(
         );
       }),
     }))
-    .sort((a, b) => (b.latestTimestamp || 0) - (a.latestTimestamp || 0));
+    .sort((a: any, b: any) => (b.latestTimestamp || 0) - (a.latestTimestamp || 0));
 }
 
 const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
@@ -498,21 +545,174 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
     });
   };
 
-  const deleteEntry = async (key) => {
+  const removeOffsetsForSong = async ({
+    videoId,
+    songKey,
+    altSongKeys,
+    sourceId,
+  }: {
+    videoId?: string | null;
+    songKey?: string | null;
+    altSongKeys?: string[] | null;
+    sourceId?: string | null;
+  }) => {
+    try {
+      const targetVid = videoId?.trim();
+      const targetSong = songKey?.trim();
+      const targetSource = sourceId?.trim();
+      const allTargetSongs = Array.from(
+        new Set([targetSong, ...(altSongKeys || [])].filter(Boolean) as string[]),
+      );
+
+      const [localData, syncData] = await Promise.all([
+        chrome.storage.local.get("songOffsets"),
+        chrome.storage.sync.get("songOffsets"),
+      ]);
+
+      const cleanOffsets = (offsetsObj: Record<string, any> | undefined) => {
+        if (!offsetsObj || typeof offsetsObj !== "object") return offsetsObj;
+        const next = { ...offsetsObj };
+        let changed = false;
+
+        for (const key of Object.keys(next)) {
+          let shouldRemove = false;
+
+          if (targetSource && targetVid) {
+            // Specific source offset deletion for a known video
+            const sourceMatch =
+              targetSource === "musixmatch" || targetSource === "musixmatch-richsync"
+                ? key.includes("musixmatch")
+                : key.includes(`_${targetSource}`);
+            if (key.includes(targetVid) && sourceMatch) {
+              shouldRemove = true;
+            }
+          } else if (targetVid) {
+            // Entire video / song group offset deletion
+            if (key.includes(targetVid)) {
+              shouldRemove = true;
+            }
+          }
+
+          // Check if key matches songKey / artist__title
+          if (!shouldRemove && allTargetSongs.length > 0) {
+            const normKeyClean = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+            for (const s of allTargetSongs) {
+              const normSong = s.toLowerCase().replace(/[^a-z0-9]/g, "");
+              if (
+                normKeyClean.includes(normSong) ||
+                key.includes(s) ||
+                key.includes(s.replace(/_/g, "__"))
+              ) {
+                if (targetSource) {
+                  const sourceMatch =
+                    targetSource === "musixmatch" || targetSource === "musixmatch-richsync"
+                      ? key.includes("musixmatch")
+                      : key.includes(`_${targetSource}`);
+                  if (sourceMatch) shouldRemove = true;
+                } else {
+                  shouldRemove = true;
+                }
+                break;
+              }
+            }
+          }
+
+          if (shouldRemove) {
+            delete next[key];
+            changed = true;
+          }
+        }
+
+        return changed ? next : offsetsObj;
+      };
+
+      const newLocalOffsets = cleanOffsets(localData?.songOffsets);
+      const newSyncOffsets = cleanOffsets(syncData?.songOffsets);
+
+      const saves: Promise<any>[] = [];
+      if (newLocalOffsets !== localData?.songOffsets) {
+        saves.push(chrome.storage.local.set({ songOffsets: newLocalOffsets }));
+      }
+      if (newSyncOffsets !== syncData?.songOffsets) {
+        saves.push(chrome.storage.sync.set({ songOffsets: newSyncOffsets }));
+      }
+
+      if (saves.length > 0) {
+        await Promise.all(saves);
+      }
+
+      // If this song/video is currently active in the player, reset the live offset
+      const currentSong = useAppStore.getState().songInfo;
+      const currentVid =
+        currentSong?.videoId ||
+        (typeof window !== "undefined" && window.location?.search
+          ? new URLSearchParams(window.location.search).get("v")
+          : null);
+
+      const isCurrentVideo =
+        (targetVid && currentVid === targetVid) ||
+        (targetSong &&
+          currentSong &&
+          `${currentSong.artist}_${currentSong.title}`
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "") ===
+            targetSong.toLowerCase().replace(/[^a-z0-9]/g, ""));
+
+      if (isCurrentVideo) {
+        const currentSource = useAppStore.getState().lyricsSource;
+        if (!targetSource || targetSource === currentSource) {
+          useAppStore.getState().setOffset(-0.45, 0);
+        }
+      }
+    } catch (err) {
+      console.warn("[CacheEditor] Failed to clean up song offsets:", err);
+    }
+  };
+
+  const deleteEntry = async (entryOrKey: any, group?: any) => {
+    const key = typeof entryOrKey === "string" ? entryOrKey : entryOrKey?.key;
+    if (!key) return;
+
     await chrome.storage.local.remove(key);
+
+    const entry = typeof entryOrKey === "object" ? entryOrKey : null;
+    const vid =
+      extractVideoId(entry?.value) ||
+      group?.videoId ||
+      extractVideoIdFromGroup(group) ||
+      null;
+    const songKey = entry?.songKey || group?.id || null;
+    const sourceId = entry?.sourceId || null;
+
+    await removeOffsetsForSong({
+      videoId: vid,
+      songKey,
+      sourceId,
+    });
+
     await refreshCache();
   };
 
-  const deleteSongGroup = async (group) => {
+  const deleteSongGroup = async (group: any) => {
     const allStorage = await chrome.storage.local.get(null);
+    const targetIds: string[] =
+      group.altIds && group.altIds.length > 0 ? group.altIds : [group.id];
     const keysToRemove = Object.keys(allStorage).filter((key) =>
-      key.includes(group.id),
+      targetIds.some((id) => key.includes(id)),
     );
     await chrome.storage.local.remove(
       keysToRemove.length > 0
         ? keysToRemove
-        : group.entries.map((entry) => entry.key),
+        : group.entries.map((entry: any) => entry.key),
     );
+
+    const vid = extractVideoIdFromGroup(group);
+    await removeOffsetsForSong({
+      videoId: vid,
+      songKey: group.id,
+      altSongKeys: group.altIds,
+    });
+
     await refreshCache();
   };
 
@@ -977,7 +1177,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                 </button>
                                 <button
                                   type="button"
-                                  onClick={() => deleteEntry(entry.key)}
+                                  onClick={() => deleteEntry(entry, group)}
                                   style={{
                                     width: "34px",
                                     height: "34px",
