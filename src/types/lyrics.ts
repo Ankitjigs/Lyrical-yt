@@ -25,6 +25,7 @@ export interface SongInfo {
   album?: string;
   duration?: number;
   videoId?: string;
+  isAd?: boolean;
 }
 
 export interface LyricalLyricPart {

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useAppStore } from "../store";
 import {
@@ -428,7 +428,7 @@ const FallbackInstrumentalLine: React.FC<FallbackInstrumentalLineProps> = ({
       if (!video) return;
 
       const isPlaying = !video.paused && !video.ended && video.readyState > 2;
-      const mediaTime = video.currentTime + offset;
+      const mediaTime = video.currentTime - offset;
       const elapsedMs = (mediaTime - lineTime) * 1000;
       const clampedElapsedMs = Math.min(Math.max(0, elapsedMs), durationMs);
 
@@ -845,6 +845,292 @@ const ImperativeLyricsHost = React.memo(
     prev.resetKey === next.resetKey && prev.rootId === next.rootId,
 );
 
+const getAlbumArtMotion = (
+  transition: "shuffle" | "flip" | "push" | "crossfade" | "none",
+  reduceAnimations: boolean,
+) => {
+  if (reduceAnimations || transition === "none") {
+    return {
+      initial: { opacity: 1 },
+      animate: { opacity: 1 },
+      exit: { opacity: 1 },
+      transition: { duration: 0 },
+    };
+  }
+
+  switch (transition) {
+    case "shuffle":
+      return {
+        initial: { x: "100%", y: "-100%", scale: 0.82, rotate: 6, opacity: 0 },
+        animate: { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 },
+        exit: { x: "-100%", y: "100%", scale: 0.82, rotate: -6, opacity: 0 },
+        transition: { type: "spring" as const, stiffness: 360, damping: 28, mass: 0.85 },
+      };
+    case "flip":
+      return {
+        initial: { rotateY: 90, opacity: 0, scale: 0.92 },
+        animate: { rotateY: 0, opacity: 1, scale: 1 },
+        exit: { rotateY: -90, opacity: 0, scale: 0.92 },
+        transition: { duration: 0.35, ease: [0.22, 1, 0.36, 1] as const },
+      };
+    case "push":
+      return {
+        initial: { x: "100%", opacity: 0 },
+        animate: { x: 0, opacity: 1 },
+        exit: { x: "-100%", opacity: 0 },
+        transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] as const },
+      };
+    case "crossfade":
+    default:
+      return {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.25, ease: "easeInOut" as const },
+      };
+  }
+};
+
+const getTitleMotion = (
+  transition: "spring" | "push" | "crossfade" | "none",
+  reduceAnimations: boolean,
+) => {
+  if (reduceAnimations || transition === "none") {
+    return {
+      initial: { opacity: 1 },
+      animate: { opacity: 1 },
+      exit: { opacity: 1 },
+      transition: { duration: 0 },
+    };
+  }
+
+  switch (transition) {
+    case "spring":
+      return {
+        initial: { y: 16, opacity: 0 },
+        animate: { y: 0, opacity: 1 },
+        exit: { y: -16, opacity: 0 },
+        transition: { type: "spring" as const, stiffness: 380, damping: 26 },
+      };
+    case "push":
+      return {
+        initial: { x: 28, opacity: 0 },
+        animate: { x: 0, opacity: 1 },
+        exit: { x: -28, opacity: 0 },
+        transition: { duration: 0.24, ease: [0.22, 1, 0.36, 1] as const },
+      };
+    case "crossfade":
+    default:
+      return {
+        initial: { opacity: 0 },
+        animate: { opacity: 1 },
+        exit: { opacity: 0 },
+        transition: { duration: 0.2 },
+      };
+  }
+};
+
+const ScrollingTitle: React.FC<{
+  title: string;
+  isCompact: boolean;
+  scrollLongTitles: boolean;
+  reduceAnimations: boolean;
+  titleTransition: "spring" | "push" | "crossfade" | "none";
+}> = ({
+  title,
+  isCompact,
+  scrollLongTitles,
+  reduceAnimations,
+  titleTransition,
+}) => {
+  const h2Ref = useRef<HTMLHeadingElement>(null);
+  const measureRef = useRef<HTMLSpanElement>(null);
+  const [overflowDistance, setOverflowDistance] = useState(0);
+
+  useEffect(() => {
+    const check = () => {
+      if (h2Ref.current) {
+        const clientW = h2Ref.current.clientWidth;
+        const scrollW = h2Ref.current.scrollWidth;
+        const measureW = measureRef.current
+          ? Math.ceil(measureRef.current.getBoundingClientRect().width)
+          : 0;
+        const trueTextW = Math.max(scrollW, measureW);
+        if (clientW > 0 && trueTextW > clientW + 4) {
+          setOverflowDistance(trueTextW - clientW);
+        } else {
+          setOverflowDistance(0);
+        }
+      }
+    };
+
+    check();
+    const rafId = requestAnimationFrame(check);
+    const t1 = setTimeout(check, 100);
+    const t2 = setTimeout(check, 400);
+
+    let ro: ResizeObserver | null = null;
+    if (h2Ref.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => check());
+      ro.observe(h2Ref.current);
+    }
+
+    window.addEventListener("resize", check);
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      if (ro) ro.disconnect();
+      window.removeEventListener("resize", check);
+    };
+  }, [title, isCompact, scrollLongTitles]);
+
+  const shouldScroll = Boolean(
+    (scrollLongTitles ?? true) && overflowDistance > 0 && !reduceAnimations,
+  );
+  const duration = Math.max(6, Math.min(18, overflowDistance / 18 + 4));
+  const motionProps = getTitleMotion(titleTransition, reduceAnimations);
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        maxWidth: "100%",
+        minWidth: 0,
+        overflow: "hidden",
+        scrollbarWidth: "none",
+        msOverflowStyle: "none",
+      }}
+    >
+      {/* Hidden unconstrained measurement span */}
+      <span
+        ref={measureRef}
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          top: 0,
+          left: 0,
+          visibility: "hidden",
+          pointerEvents: "none",
+          whiteSpace: "nowrap",
+          fontSize: isCompact ? "15px" : "16px",
+          fontWeight: isCompact ? "700" : "600",
+          letterSpacing: isCompact ? "0.2px" : "normal",
+          fontFamily:
+            "var(--lyrical-lyrics-font-stack, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif)",
+          zIndex: -9999,
+        }}
+      >
+        {title}
+      </span>
+
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={title}
+          {...motionProps}
+          style={{
+            display: "block",
+            width: "100%",
+            maxWidth: "100%",
+            overflow: "hidden",
+            scrollbarWidth: "none",
+            msOverflowStyle: "none",
+          }}
+        >
+          <h2
+            ref={h2Ref}
+            className="songTitle"
+            style={{
+              fontSize: isCompact ? "15px" : "16px",
+              fontWeight: isCompact ? "700" : "600",
+              letterSpacing: isCompact ? "0.2px" : "normal",
+              margin: "0 0 4px 0",
+              paddingLeft: "1px",
+              paddingRight: shouldScroll ? "6px" : "0",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: shouldScroll ? "clip" : "ellipsis",
+              maxWidth: "100%",
+              textAlign: isCompact ? "left" : "center",
+              position: "relative",
+              maskImage: shouldScroll
+                ? "linear-gradient(to right, black 0%, black calc(100% - 14px), transparent 100%)"
+                : "none",
+              WebkitMaskImage: shouldScroll
+                ? "linear-gradient(to right, black 0%, black calc(100% - 14px), transparent 100%)"
+                : "none",
+            }}
+          >
+            {shouldScroll ? (
+              <span
+                key={`scroll-text-${title}-${overflowDistance}`}
+                style={{
+                  display: "inline-block",
+                  whiteSpace: "nowrap",
+                  animation: `lyricalTitleMarquee ${duration}s ease-in-out infinite alternate`,
+                  animationDelay: "1.2s",
+                  ["--marquee-distance" as any]: `-${overflowDistance + 8}px`,
+                  willChange: "transform",
+                }}
+              >
+                {title}
+              </span>
+            ) : (
+              title
+            )}
+          </h2>
+        </motion.div>
+      </AnimatePresence>
+    </div>
+  );
+};
+
+const MiniProgressBar: React.FC = () => {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    let rafId: number;
+    const update = () => {
+      const video = document.querySelector("video");
+      if (video && video.duration && !isNaN(video.duration) && video.duration > 0) {
+        setProgress(Math.min(1, Math.max(0, video.currentTime / video.duration)));
+      }
+    };
+
+    const loop = () => {
+      update();
+      rafId = requestAnimationFrame(loop);
+    };
+    rafId = requestAnimationFrame(loop);
+
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: "2.5px",
+        background: "rgba(255, 255, 255, 0.12)",
+        borderRadius: "2px",
+        overflow: "hidden",
+        marginTop: "4px",
+      }}
+    >
+      <div
+        style={{
+          width: `${(progress * 100).toFixed(2)}%`,
+          height: "100%",
+          background: "var(--lyrical-accent, #3ea6ff)",
+          borderRadius: "2px",
+          transition: "width 0.1s linear",
+        }}
+      />
+    </div>
+  );
+};
+
 const LyricsPanel = () => {
   const {
     songInfo,
@@ -873,6 +1159,10 @@ const LyricsPanel = () => {
     displayMode,
     themeId,
     customThemes,
+    albumArtTransition,
+    titleTransition,
+    scrollLongTitles,
+    showProgressBar,
   } = useAppStore(
     useShallow((state) => ({
       songInfo: state.songInfo,
@@ -891,6 +1181,7 @@ const LyricsPanel = () => {
       userOffset: state.userOffset,
       isLoading: state.isLoading,
       isProcessingLyrics: state.isProcessingLyrics,
+      isAdPlaying: state.isAdPlaying,
       compactMode: state.compactMode,
       isKaraokeMode: state.isKaraokeMode,
       lyricsSizePreset: state.lyricsSizePreset,
@@ -901,8 +1192,13 @@ const LyricsPanel = () => {
       displayMode: state.displayMode,
       themeId: state.themeId,
       customThemes: state.customThemes,
+      albumArtTransition: state.albumArtTransition,
+      titleTransition: state.titleTransition,
+      scrollLongTitles: state.scrollLongTitles,
+      showProgressBar: state.showProgressBar,
     })),
   );
+  const isAdPlaying = useAppStore((state) => state.isAdPlaying);
   const themeVars = getThemeCssVariables(themeId, customThemes);
   const lyricsTypography = getLyricsTypography(lyricsSizePreset, compactMode);
   const alignedRomanizedLyrics = useMemo(
@@ -961,7 +1257,7 @@ const LyricsPanel = () => {
   };
   const getAdjustedVideoTime = () => {
     const video = document.querySelector("video");
-    return video ? video.currentTime + offset : null;
+    return video ? video.currentTime - offset : null;
   };
 
   // Floating panel dragging
@@ -1254,7 +1550,10 @@ const LyricsPanel = () => {
   }, []);
 
   const engineResetKey = useMemo(() => {
-    const videoId = new URLSearchParams(window.location.search).get("v") || "";
+    const videoId =
+      new URLSearchParams(window.location.search).get("v") ||
+      (songInfo as any)?.videoId ||
+      "";
     const title = songInfo?.title || "";
     const artist = songInfo?.artist || "";
     return `${lyricsSource || "none"}|${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
@@ -1262,6 +1561,7 @@ const LyricsPanel = () => {
     lyricsSource,
     songInfo?.artist,
     songInfo?.title,
+    (songInfo as any)?.videoId,
     reduceAnimations,
     videoSessionKey,
     lyricsAnimationStyle,
@@ -2138,18 +2438,48 @@ const LyricsPanel = () => {
                 ) : (
                   `♪ ${songInfo?.title || t("lyricsPanel_loaded")}`
                 )
-              ) : headerText && headerText.toLowerCase().includes("search") ? (
-                <ShinyText
-                  text={headerText}
-                  disabled={reduceAnimations}
-                  speed={3}
-                  className="lyrical-searching-text-header"
-                  color="var(--lyrical-text-primary)"
-                  shineColor="var(--lyrical-text-secondary)"
-                  spread={120}
-                />
               ) : (
-                headerText || "Lyrical"
+                <span
+                  style={{
+                    display: "inline-flex",
+                    position: "relative",
+                    overflow: "hidden",
+                    verticalAlign: "middle",
+                  }}
+                >
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.span
+                      key={isAdPlaying ? "ad-header" : headerText}
+                      initial={
+                        reduceAnimations ? { opacity: 0 } : { opacity: 0, y: 12 }
+                      }
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={
+                        reduceAnimations ? { opacity: 0 } : { opacity: 0, y: -12 }
+                      }
+                      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                      style={{ display: "inline-block" }}
+                    >
+                      {isAdPlaying ? (
+                        <span style={{ color: "#eab308", fontWeight: "600" }}>
+                          Ad in progress...
+                        </span>
+                      ) : headerText && headerText.toLowerCase().includes("search") ? (
+                        <ShinyText
+                          text={headerText}
+                          disabled={reduceAnimations}
+                          speed={3}
+                          className="lyrical-searching-text-header"
+                          color="var(--lyrical-text-primary)"
+                          shineColor="var(--lyrical-text-secondary)"
+                          spread={120}
+                        />
+                      ) : (
+                        headerText || "Lyrical"
+                      )}
+                    </motion.span>
+                  </AnimatePresence>
+                </span>
               )}
             </span>
           </div>
@@ -2244,6 +2574,8 @@ const LyricsPanel = () => {
                     ? "0 4px 14px rgba(0,0,0,0.35)"
                     : "0 8px 24px rgba(0,0,0,0.5)",
                   flexShrink: 0,
+                  position: "relative",
+                  perspective: "600px",
                   transition: [
                     "width 0.45s cubic-bezier(0.22, 1, 0.36, 1)",
                     "height 0.45s cubic-bezier(0.22, 1, 0.36, 1)",
@@ -2253,33 +2585,49 @@ const LyricsPanel = () => {
                   ].join(", "),
                 }}
               >
-                {songInfo?.artwork ? (
-                  <img
-                    src={songInfo.artwork}
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.div
+                    key={songInfo?.artwork || "fallback-art"}
+                    {...getAlbumArtMotion(albumArtTransition, reduceAnimations)}
                     style={{
+                      position: "absolute",
+                      inset: 0,
                       width: "100%",
                       height: "100%",
-                      objectFit: "cover",
-                    }}
-                    alt={t("lyricsPanel_albumArt")}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: "100%",
-                      height: "100%",
-                      background: "var(--lyrical-album-fallback)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
+                      borderRadius: "inherit",
+                      overflow: "hidden",
                     }}
                   >
-                    <Music
-                      size={compactMode ? 24 : 40}
-                      color="var(--lyrical-text-subtle)"
-                    />
-                  </div>
-                )}
+                    {songInfo?.artwork ? (
+                      <img
+                        src={songInfo.artwork}
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          objectFit: "cover",
+                          display: "block",
+                        }}
+                        alt={t("lyricsPanel_albumArt")}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          width: "100%",
+                          height: "100%",
+                          background: "var(--lyrical-album-fallback)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <Music
+                          size={compactMode ? 24 : 40}
+                          color="var(--lyrical-text-subtle)"
+                        />
+                      </div>
+                    )}
+                  </motion.div>
+                </AnimatePresence>
               </div>
 
               {/* Info */}
@@ -2288,6 +2636,8 @@ const LyricsPanel = () => {
                   textAlign: compactMode ? "left" : "center",
                   flex: compactMode ? 1 : "initial",
                   minWidth: 0,
+                  maxWidth: compactMode ? "calc(100% - 76px)" : "100%",
+                  width: compactMode ? "auto" : "100%",
                   transition: [
                     "flex 0.35s cubic-bezier(0.4, 0, 0.2, 1) 0.08s",
                   ].join(", "),
@@ -2298,23 +2648,13 @@ const LyricsPanel = () => {
                 }}
               >
                 <Tooltip content={songInfo?.title || headerText}>
-                  <h2
-                    className="songTitle"
-                    style={{
-                      fontSize: compactMode ? "15px" : "16px",
-                      fontWeight: compactMode ? "700" : "600",
-                      letterSpacing: compactMode ? "0.2px" : "normal",
-                      margin: "0 0 4px 0",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      maxWidth: "100%",
-                      transition:
-                        "font-size 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.08s, letter-spacing 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.08s",
-                    }}
-                  >
-                    {songInfo?.title || headerText}
-                  </h2>
+                  <ScrollingTitle
+                    title={songInfo?.title || headerText}
+                    isCompact={compactMode}
+                    scrollLongTitles={scrollLongTitles ?? true}
+                    reduceAnimations={reduceAnimations}
+                    titleTransition={titleTransition}
+                  />
                 </Tooltip>
                 <Tooltip
                   content={songInfo?.artist || t("lyricsPanel_playSong")}
@@ -2337,6 +2677,11 @@ const LyricsPanel = () => {
                     {songInfo?.artist || t("lyricsPanel_playSong")}
                   </p>
                 </Tooltip>
+                {showProgressBar && (
+                  <div style={{ width: "100%", marginTop: "4px" }}>
+                    <MiniProgressBar />
+                  </div>
+                )}
               </div>
             </div>
             <LyricsDock
@@ -2645,59 +2990,163 @@ const LyricsPanel = () => {
                         justifyContent: "center",
                       }}
                     >
-                      {isLoading ? (
-                        <>
-                          {/* <div
+                      <div
                         style={{
-                          width: "24px",
-                          height: "24px",
-                          border: "3px solid rgba(255,255,255,0.1)",
-                          borderTopColor: "#3ea6ff",
-                          borderRadius: "50%",
-                          animation: "spin 0.8s linear infinite",
+                          position: "relative",
+                          overflow: "hidden",
+                          minHeight: "56px",
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
                         }}
-                      ></div> */}
-                          <ShinyText
-                            text={t("lyricsPanel_searching")}
-                            disabled={reduceAnimations}
-                            speed={2.4}
-                            className="lyrical-searching-text"
-                            color="var(--lyrical-text-secondary)"
-                            shineColor="var(--lyrical-text-primary)"
-                            spread={115}
-                          />
-                          <style>{`
+                      >
+                        <AnimatePresence mode="wait" initial={false}>
+                          {isAdPlaying ? (
+                            <motion.div
+                              key="ad-in-progress"
+                              initial={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: 18 }
+                              }
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: -18 }
+                              }
+                              transition={{
+                                duration: 0.35,
+                                ease: [0.22, 1, 0.36, 1],
+                              }}
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "10px",
+                                textAlign: "center",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "6px",
+                                  padding: "5px 12px",
+                                  borderRadius: "8px",
+                                  background: "rgba(234, 179, 8, 0.15)",
+                                  border: "1px solid rgba(234, 179, 8, 0.3)",
+                                  color: "#eab308",
+                                  fontSize: "12px",
+                                  fontWeight: "700",
+                                  letterSpacing: "0.5px",
+                                  textTransform: "uppercase",
+                                }}
+                              >
+                                <span>Ad in progress</span>
+                              </div>
+                              <ShinyText
+                                text="Lyrics will load when video begins"
+                                disabled={reduceAnimations}
+                                speed={2.4}
+                                className="lyrical-searching-text"
+                                color="var(--lyrical-text-secondary)"
+                                shineColor="var(--lyrical-text-primary)"
+                                spread={115}
+                              />
+                            </motion.div>
+                          ) : isLoading ? (
+                            <motion.div
+                              key="searching-lyrics"
+                              initial={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: 18 }
+                              }
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: -18 }
+                              }
+                              transition={{
+                                duration: 0.35,
+                                ease: [0.22, 1, 0.36, 1],
+                              }}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                textAlign: "center",
+                              }}
+                            >
+                              <ShinyText
+                                text={t("lyricsPanel_searching")}
+                                disabled={reduceAnimations}
+                                speed={2.4}
+                                className="lyrical-searching-text"
+                                color="var(--lyrical-text-secondary)"
+                                shineColor="var(--lyrical-text-primary)"
+                                spread={115}
+                              />
+                            </motion.div>
+                          ) : (
+                            <motion.div
+                              key="no-lyrics"
+                              initial={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: 18 }
+                              }
+                              animate={{ opacity: 1, y: 0 }}
+                              exit={
+                                reduceAnimations
+                                  ? { opacity: 0 }
+                                  : { opacity: 0, y: -18 }
+                              }
+                              transition={{
+                                duration: 0.35,
+                                ease: [0.22, 1, 0.36, 1],
+                              }}
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: "12px",
+                                textAlign: "center",
+                              }}
+                            >
+                              <div style={{ opacity: 0.5 }}>
+                                <svg
+                                  width="32"
+                                  height="32"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <path d="M9 18V5l12-2v13" />
+                                  <circle cx="6" cy="18" r="3" />
+                                  <circle cx="18" cy="16" r="3" />
+                                </svg>
+                              </div>
+                              <p style={{ margin: 0, fontSize: "14px" }}>
+                                {headerText || t("lyricsPanel_noLyricsFound")}
+                              </p>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                      <style>{`
                         .lyrical-searching-text {
                           font-size: 14px;
                           font-weight: 500;
                           margin: 0;
                         }
                       `}</style>
-                        </>
-                      ) : (
-                        <>
-                          <div style={{ opacity: 0.5 }}>
-                            <svg
-                              width="32"
-                              height="32"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            >
-                              <path d="M9 18V5l12-2v13" />
-                              <circle cx="6" cy="18" r="3" />
-                              <circle cx="18" cy="16" r="3" />
-                              <line x1="2" y1="2" x2="22" y2="22" />
-                            </svg>
-                          </div>
-                          <p style={{ fontSize: "14px", margin: 0 }}>
-                            {t("lyricsPanel_noLyrics")}
-                          </p>
-                        </>
-                      )}
                     </div>
                   )}
                 </>

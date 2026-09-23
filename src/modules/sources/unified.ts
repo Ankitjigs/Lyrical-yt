@@ -191,7 +191,7 @@ function parseTtmlLyrics(raw: string | null) {
   try {
     return parseTTML(raw);
   } catch (error) {
-    console.warn("[Lyrical] TTML parse failed:", error);
+    console.debug("[Lyrical] TTML parse failed:", error);
     return null;
   }
 }

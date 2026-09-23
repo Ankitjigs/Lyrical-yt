@@ -29,6 +29,7 @@ import CustomThemeModal from "./CustomThemeModal";
 import ThemeImportExportModal from "./ThemeImportExportModal";
 import LanguageExclusionsModal from "./LanguageExclusionsModal";
 import CacheEditorView from "./CacheEditorView";
+import FloatingLyricsModal from "./FloatingLyricsModal";
 import { AVAILABLE_LANGUAGES } from "../utils/languages";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
@@ -96,6 +97,7 @@ const SettingsContent = () => {
   const [isThemeImportModalOpen, setIsThemeImportModalOpen] = useState(false);
   const [isExclusionsModalOpen, setIsExclusionsModalOpen] = useState(false);
   const [isCacheEditorOpen, setIsCacheEditorOpen] = useState(false);
+  const [isFloatingLyricsModalOpen, setIsFloatingLyricsModalOpen] = useState(false);
   const [editingCustomThemeId, setEditingCustomThemeId] = useState(null);
   const [customThemeRecords, setCustomThemeRecords] = useState([]);
   const [customThemes, setCustomThemes] = useState([]);
@@ -121,6 +123,7 @@ const SettingsContent = () => {
     karaokeFontSize: "medium",
     karaokeAnimationStyle: "classic",
     isVocalMuted: false,
+    showMiniCompanion: true,
   });
   const [cacheInfo, setCacheInfo] = useState({ bytes: 0, songCount: 0 });
   const themeId = settings.themeId || DEFAULT_THEME_ID;
@@ -229,6 +232,11 @@ const SettingsContent = () => {
         karaokeFontSize: "medium",
         karaokeAnimationStyle: "classic",
         isVocalMuted: false,
+        albumArtTransition: "shuffle",
+        titleTransition: "spring",
+        scrollLongTitles: true,
+        showProgressBar: true,
+        reopenFloatingLyricsAutomatically: false,
       },
       (items) => {
         setSettings({
@@ -253,6 +261,7 @@ const SettingsContent = () => {
           karaokeFontSize: items.karaokeFontSize || "medium",
           karaokeAnimationStyle: items.karaokeAnimationStyle || "classic",
           isVocalMuted: Boolean(items.isVocalMuted),
+          showMiniCompanion: items.showMiniCompanion ?? true,
         });
         const nextCustomThemeRecords = items[CUSTOM_THEMES_STORAGE_KEY] || [];
         const nextCustomThemes = resolveCustomThemes(nextCustomThemeRecords);
@@ -282,13 +291,20 @@ const SettingsContent = () => {
           karaokeFontSize: items.karaokeFontSize || "medium",
           karaokeAnimationStyle: items.karaokeAnimationStyle || "classic",
           isVocalMuted: Boolean(items.isVocalMuted),
+          albumArtTransition: items.albumArtTransition || "shuffle",
+          titleTransition: items.titleTransition || "spring",
+          scrollLongTitles: items.scrollLongTitles ?? true,
+          showProgressBar: items.showProgressBar ?? true,
+          reopenFloatingLyricsAutomatically:
+            items.reopenFloatingLyricsAutomatically ?? false,
+          showMiniCompanion: items.showMiniCompanion ?? true,
         });
 
         // Load source preferences if saved
         if (items.sourcePreferences) {
-          useAppStore.getState().setSettings({
-            sourcePreferences: items.sourcePreferences,
-          });
+          useAppStore
+            .getState()
+            .setSourcePreferences(items.sourcePreferences);
         }
       },
     );
@@ -378,6 +394,71 @@ const SettingsContent = () => {
         const nextVocalMuted = Boolean(changes.isVocalMuted.newValue);
         setSettings((prev) => ({ ...prev, isVocalMuted: nextVocalMuted }));
         useAppStore.getState().setVocalMuted(nextVocalMuted);
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "albumArtTransition")
+      ) {
+        const nextArt = changes.albumArtTransition.newValue || "shuffle";
+        useAppStore.setState({ albumArtTransition: nextArt });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "titleTransition")
+      ) {
+        const nextTitle = changes.titleTransition.newValue || "spring";
+        useAppStore.setState({ titleTransition: nextTitle });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "scrollLongTitles")
+      ) {
+        const nextScroll =
+          changes.scrollLongTitles.newValue !== undefined
+            ? Boolean(changes.scrollLongTitles.newValue)
+            : true;
+        useAppStore.setState({ scrollLongTitles: nextScroll });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "showProgressBar")
+      ) {
+        const nextProgress =
+          changes.showProgressBar.newValue !== undefined
+            ? Boolean(changes.showProgressBar.newValue)
+            : true;
+        useAppStore.setState({ showProgressBar: nextProgress });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(
+          changes,
+          "reopenFloatingLyricsAutomatically",
+        )
+      ) {
+        const nextReopen = Boolean(
+          changes.reopenFloatingLyricsAutomatically.newValue,
+        );
+        useAppStore.setState({
+          reopenFloatingLyricsAutomatically: nextReopen,
+        });
+      }
+
+      if (
+        namespace === "sync" &&
+        Object.prototype.hasOwnProperty.call(changes, "showMiniCompanion")
+      ) {
+        const nextShow =
+          changes.showMiniCompanion.newValue !== undefined
+            ? Boolean(changes.showMiniCompanion.newValue)
+            : true;
+        setSettings((prev) => ({ ...prev, showMiniCompanion: nextShow }));
+        useAppStore.setState({ showMiniCompanion: nextShow });
       }
     };
 
@@ -1273,6 +1354,82 @@ const SettingsContent = () => {
                     </div>
                   )}
                 </div>
+
+                <div style={dividerStyle} />
+
+                {/* Floating lyrics window Modal Trigger */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "14px",
+                    padding: "4px 0",
+                  }}
+                >
+                  <div>
+                    <div
+                      style={{
+                        fontSize: "14px",
+                        fontWeight: "600",
+                        color: "var(--lyrical-text-primary)",
+                        marginBottom: "3px",
+                      }}
+                    >
+                      Header & Transition Animations
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted)",
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      Album art & title transitions, progress bar, and scrolling title
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsFloatingLyricsModalOpen(true)}
+                    style={{
+                      background: "var(--lyrical-card-bg-elevated)",
+                      color: "var(--lyrical-text-primary)",
+                      border: "1px solid var(--lyrical-border)",
+                      padding: "7px 14px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      flexShrink: 0,
+                      transition: "all 0.18s ease",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background =
+                        "var(--lyrical-panel-surface, rgba(255,255,255,0.1))";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background =
+                        "var(--lyrical-card-bg-elevated, #27272a)";
+                    }}
+                  >
+                    Customize
+                  </button>
+                </div>
+
+                {/* Mini Companion Toggle */}
+                <div style={dividerStyle} />
+                <ToggleItem
+                  label="Mini Companion"
+                  checked={settings.showMiniCompanion ?? true}
+                  onChange={(checked) => {
+                    updateSetting("showMiniCompanion", checked);
+                    useAppStore.getState().setShowMiniCompanion(checked);
+                  }}
+                  desc="Show compact lyrics card above YouTube's miniplayer on homepage and search"
+                />
               </div>
 
               {/* ─── Karaoke Mode Section ─── */}
@@ -2533,6 +2690,10 @@ const SettingsContent = () => {
           updateSetting("romanizationExclusions", newExclusions.romanization);
           updateSetting("translationExclusions", newExclusions.translation);
         }}
+      />
+      <FloatingLyricsModal
+        isOpen={isFloatingLyricsModalOpen}
+        onClose={() => setIsFloatingLyricsModalOpen(false)}
       />
     </div>
   );

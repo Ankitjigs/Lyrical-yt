@@ -11,12 +11,195 @@ let isProcessingPlayerResponse = false;
 let lastProcessedSignature = null;
 let lastProcessedAt = 0;
 let networkHooksInstalled = false;
+let lastKnownPoToken = null;
+const cachedTimedTextByVideo = new Map();
+const pendingTimedTextResolvers = new Set();
+let currentVideoDetails = null;
+let currentTracks = null;
+let currentSelectedTrack = null;
 const MAX_EXTRACTION_ATTEMPTS = 8;
 const EXTRACTION_INTERVAL_MS = 1000;
 
+function ensureCaptionHiderStyle() {
+  if (document.getElementById("lyrical-caption-hider")) return;
+  try {
+    const style = document.createElement("style");
+    style.id = "lyrical-caption-hider";
+    style.textContent = `
+      .ytp-caption-window-bottom,
+      .caption-window,
+      .ytp-caption-window-rollup {
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+    `;
+    (document.head || document.documentElement).appendChild(style);
+  } catch {}
+}
+
+/**
+ * Disable YouTube's native CC rendering after Lyrical has extracted caption data.
+ * This prevents the CC button from lighting up and stops YouTube from showing
+ * its own caption overlay / switching tracks when Lyrical switches tracks.
+ */
+function disableNativeCaptions() {
+  try {
+    const player = document.getElementById("movie_player");
+    if (!player) return;
+    // Turn off active caption track display without unloading the module
+    if (typeof player.setOption === "function") {
+      player.setOption("captions", "track", {});
+    }
+  } catch (err) {
+    console.debug("[Lyrical Extractor] Could not disable native captions:", err);
+  }
+}
+
+function isHtmlOrBlockPage(text) {
+  if (!text || typeof text !== "string") return true;
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("<!doctype html") ||
+    lower.includes("<html") ||
+    lower.includes("<body") ||
+    lower.includes("automated queries") ||
+    lower.includes("unusual traffic") ||
+    lower.includes("we can't process your request") ||
+    lower.includes("our systems have detected") ||
+    lower.includes("google.com/sorry")
+  );
+}
+
+function handleInterceptedTimedText(text, url) {
+  if (!text || !text.trim()) return;
+
+  if (isHtmlOrBlockPage(text)) {
+    console.log("[Lyrical Extractor] Ignored timedtext response: HTML or bot-block page detected");
+    return;
+  }
+
+  const player = document.getElementById("movie_player");
+  if (isAdPlaying(player)) {
+    console.log("[Lyrical Extractor] Ignored timedtext response: ad is currently playing");
+    return;
+  }
+
+  const currentVideoId = getVideoId();
+  try {
+    const u = new URL(url, window.location.origin);
+    const timedTextVideoId = u.searchParams.get("v");
+    if (timedTextVideoId && currentVideoId && timedTextVideoId !== currentVideoId) {
+      console.log(
+        "[Lyrical Extractor] Ignored timedtext for different/ad video:",
+        timedTextVideoId,
+        "current main video:",
+        currentVideoId,
+      );
+      return;
+    }
+  } catch {}
+
+  // Capture and remember any runtime PO token from the player's request URL
+  try {
+    const u = new URL(url, window.location.origin);
+    const pot = u.searchParams.get("pot");
+    if (pot) {
+      lastKnownPoToken = pot;
+      console.log("[Lyrical Extractor] Captured PO Token from player request");
+    }
+  } catch {}
+
+  const lyrics = parseCaptionPayload(text);
+  if (!lyrics || lyrics.length === 0) return;
+
+  console.log(
+    "[Lyrical Extractor] Intercepted timedtext response: parsed",
+    lyrics.length,
+    "lines",
+  );
+
+  let interceptedLang = "";
+  let interceptedVss = "";
+  try {
+    const u = new URL(url, window.location.origin);
+    interceptedLang = (u.searchParams.get("tlang") || u.searchParams.get("lang") || "").toLowerCase();
+    interceptedVss = (u.searchParams.get("vss_id") || "").toLowerCase();
+  } catch {}
+
+  if (currentVideoId) {
+    if (interceptedVss) cachedTimedTextByVideo.set(`${currentVideoId}:${interceptedVss}`, lyrics);
+    if (interceptedLang) cachedTimedTextByVideo.set(`${currentVideoId}:${interceptedLang}`, lyrics);
+    cachedTimedTextByVideo.set(`${currentVideoId}:latest`, lyrics);
+  }
+
+  // Resolve matching pending wait promises
+  for (const item of Array.from(pendingTimedTextResolvers)) {
+    const targetClean = (item.targetLang || "").split("-")[0];
+    const interClean = (interceptedLang || "").split("-")[0];
+    const langMatch =
+      !item.targetLang ||
+      !interceptedLang ||
+      item.targetLang === interceptedLang ||
+      (targetClean && targetClean === interClean);
+    const vssMatch = !item.targetVss || !interceptedVss || item.targetVss === interceptedVss;
+    if (langMatch || vssMatch) {
+      try {
+        item.resolver(lyrics);
+      } catch {}
+      pendingTimedTextResolvers.delete(item);
+    }
+  }
+
+  // If we haven't successfully posted lyrics for this video yet, post now!
+  if (!postedCaptionsForCurrentVideo && currentVideoId) {
+    const player = document.getElementById("movie_player");
+    const tracks = currentTracks || getTracksFromPlayer(player) || [];
+    const selectedTrack = currentSelectedTrack || selectBestTrack(tracks);
+
+    postCaptionData({
+      tracks,
+      selectedTrack,
+      lyrics,
+      videoDetails: currentVideoDetails,
+      videoId: currentVideoId,
+      phase: "lyrics",
+    });
+    postedCaptionsForCurrentVideo = true;
+    extractionAttempts = 0;
+    clearExtractionTimer();
+  }
+}
+
 function getVideoId() {
+  try {
+    const player = document.getElementById("movie_player");
+    const playerV = player?.getVideoData?.()?.video_id;
+    if (playerV) return playerV;
+  } catch {}
+
   const params = new URLSearchParams(window.location.search);
-  return params.get("v");
+  const v = params.get("v");
+  if (v) return v;
+
+  try {
+    const miniLink = document.querySelector(
+      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']"
+    );
+    if (miniLink && miniLink.href) {
+      const match = miniLink.href.match(/[?&]v=([^&]+)/);
+      if (match && match[1]) return match[1];
+    }
+  } catch {}
+
+  try {
+    const titleLink = document.querySelector(".ytp-title-link");
+    if (titleLink && titleLink.href) {
+      const match = titleLink.href.match(/[?&]v=([^&]+)/);
+      if (match && match[1]) return match[1];
+    }
+  } catch {}
+
+  return null;
 }
 
 function getTrackVssId(track) {
@@ -74,12 +257,35 @@ function isTranslatedEnglishTrack(track) {
 
 function cleanCaptionText(text) {
   if (!text) return "";
-  let words = String(text).replace(/\n/g, " ").trim();
-  const notes = ["♪", "♫", "🎵", "🎶"];
-  for (const note of notes) {
-    if (words.startsWith(note)) words = words.slice(1).trim();
-    if (words.endsWith(note)) words = words.slice(0, -1).trim();
-  }
+  let words = decodeXmlEntities(String(text)).replace(/\r?\n/g, " ").trim();
+
+  // 1. Remove YouTube speaker change markers (e.g. ">> ", ">>> ", "> ")
+  words = words.replace(/^(?:>{1,3}|&gt;{1,3})\s*/i, "");
+
+  // 2. Remove musical notes
+  words = words.replace(/[♪♫🎵🎶]/g, "").trim();
+
+  // 3. Remove sound effect annotations at start and end
+  words = words.replace(
+    /^\s*\[(?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^\]]*\]\s*/gi,
+    "",
+  );
+  words = words.replace(
+    /^\s*\((?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^)]*\)\s*/gi,
+    "",
+  );
+  words = words.replace(
+    /\s*\[(?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^\]]*\]\s*$/gi,
+    "",
+  );
+  words = words.replace(
+    /\s*\((?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^)]*\)\s*$/gi,
+    "",
+  );
+
+  // 4. Normalize multiple spaces
+  words = words.replace(/\s+/g, " ");
+
   return words.trim();
 }
 
@@ -144,6 +350,7 @@ function parseXmlTimeToSeconds(value, preferMsHeuristic = false) {
 
 function parseCaptionPayload(text) {
   if (!text || !text.trim()) return null;
+  if (isHtmlOrBlockPage(text)) return null;
 
   // JSON (fmt=json3)
   if (text.startsWith("{") || text.startsWith("[")) {
@@ -153,12 +360,24 @@ function parseCaptionPayload(text) {
       const lyrics = events
         .filter((event) => Array.isArray(event?.segs) && event.segs.length > 0)
         .map((event) => {
+          let firstWordOffsetMs = 0;
+          for (const seg of event.segs) {
+            const t = cleanCaptionText(seg?.utf8 || "");
+            if (t.length > 0) {
+              firstWordOffsetMs = Number(seg?.tOffsetMs) || 0;
+              break;
+            }
+          }
+
           const words = cleanCaptionText(
             event.segs.map((seg) => seg?.utf8 || "").join(""),
           );
           return {
-            time: (event.tStartMs || 0) / 1000,
-            duration: (event.dDurationMs || 0) / 1000,
+            time: ((event.tStartMs || 0) + firstWordOffsetMs) / 1000,
+            duration: Math.max(
+              0.2,
+              ((event.dDurationMs || 0) - firstWordOffsetMs) / 1000,
+            ),
             text: words,
           };
         })
@@ -212,6 +431,12 @@ function parseCaptionPayload(text) {
           const pEnd = readAttr(pAttrs, "end");
           const pDur = readAttr(pAttrs, "dur");
 
+          // CRITICAL: A valid TTML caption line MUST have timing attributes (begin, start, or t).
+          // An HTML <p> tag from an error page has no timing attributes and must be rejected!
+          if (!pStart && !pAttrs.includes("t=") && !pAttrs.includes("begin=") && !pAttrs.includes("start=")) {
+            continue;
+          }
+
           let lineText = "";
           const sNodeRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
           let sMatch;
@@ -253,6 +478,107 @@ function parseCaptionPayload(text) {
   return null;
 }
 
+async function requestPlayerCaptionTrack(track) {
+  const player = document.getElementById("movie_player");
+  if (!player) return null;
+
+  ensureCaptionHiderStyle();
+
+  const currentVideoId = getVideoId();
+  const targetLang = (getTrackLang(track) || "").toLowerCase();
+  const targetVss = (getTrackVssId(track) || "").toLowerCase();
+
+  if (currentVideoId) {
+    if (targetVss && cachedTimedTextByVideo.has(`${currentVideoId}:${targetVss}`)) {
+      return cachedTimedTextByVideo.get(`${currentVideoId}:${targetVss}`);
+    }
+    if (targetLang && cachedTimedTextByVideo.has(`${currentVideoId}:${targetLang}`)) {
+      return cachedTimedTextByVideo.get(`${currentVideoId}:${targetLang}`);
+    }
+    const cleanLang = (targetLang || "").split("-")[0];
+    if (cleanLang && cachedTimedTextByVideo.has(`${currentVideoId}:${cleanLang}`)) {
+      return cachedTimedTextByVideo.get(`${currentVideoId}:${cleanLang}`);
+    }
+    if (cachedTimedTextByVideo.has(`${currentVideoId}:latest`)) {
+      return cachedTimedTextByVideo.get(`${currentVideoId}:latest`);
+    }
+  }
+
+  try {
+    if (typeof player.loadModule === "function") {
+      try {
+        player.loadModule("captions");
+      } catch {}
+    }
+
+    // Set up a promise that resolves when /api/timedtext for this specific language is intercepted
+    let resolverObj = null;
+    const interceptedPromise = new Promise((resolve) => {
+      resolverObj = {
+        resolver: resolve,
+        targetLang,
+        targetVss,
+      };
+      setTimeout(() => {
+        pendingTimedTextResolvers.delete(resolverObj);
+        resolve(null);
+      }, 4000);
+    });
+
+    pendingTimedTextResolvers.add(resolverObj);
+
+    // Find matching track from player's internal tracklist
+    const playerTracks = player.getOption?.("captions", "tracklist") || [];
+
+    let matchingTrack = playerTracks.find(
+      (t) =>
+        (targetVss && (getTrackVssId(t) || "").toLowerCase() === targetVss) ||
+        (targetLang && (getTrackLang(t) || "").toLowerCase() === targetLang),
+    );
+
+    const trackObj = matchingTrack || {
+      languageCode: targetLang || "en",
+      vss_id: targetVss || undefined,
+    };
+
+    console.log(
+      "[Lyrical Extractor] Triggering player to load caption track:",
+      trackObj,
+    );
+
+    if (typeof player.setOption === "function") {
+      const activeTrack = player.getOption?.("captions", "track");
+      const isActiveSame =
+        activeTrack &&
+        ((targetLang && (getTrackLang(activeTrack) || "").toLowerCase() === targetLang) ||
+          (targetVss && (getTrackVssId(activeTrack) || "").toLowerCase() === targetVss));
+
+      if (isActiveSame) {
+        try {
+          player.setOption("captions", "reload", true);
+        } catch {}
+        try {
+          player.setOption("captions", "track", {});
+          await new Promise((r) => setTimeout(r, 60));
+          player.setOption("captions", "track", trackObj);
+        } catch {}
+      } else {
+        player.setOption("captions", "track", trackObj);
+      }
+    }
+
+    const lyrics = await interceptedPromise;
+    // After extracting caption data, disable YouTube's native CC display
+    disableNativeCaptions();
+    if (lyrics && lyrics.length > 0) {
+      return lyrics;
+    }
+  } catch (err) {
+    console.debug("[Lyrical Extractor] Error requesting player caption track:", err);
+  }
+  return null;
+}
+
 async function fetchLyricsForTrack(track) {
   const player = document.getElementById("movie_player");
   const rawTrackUrl = getTrackUrl(track, player);
@@ -265,47 +591,72 @@ async function fetchLyricsForTrack(track) {
     if (track?.kind === "asr" && !u1.searchParams.has("kind")) {
       u1.searchParams.set("kind", "asr");
     }
+    if (lastKnownPoToken && !u1.searchParams.has("pot")) {
+      u1.searchParams.set("pot", lastKnownPoToken);
+    }
     candidateUrls.push(u1.toString());
   } catch {}
 
   try {
     const u2 = new URL(rawTrackUrl);
     u2.searchParams.set("fmt", "srv3");
+    if (lastKnownPoToken && !u2.searchParams.has("pot")) {
+      u2.searchParams.set("pot", lastKnownPoToken);
+    }
     candidateUrls.push(u2.toString());
+  } catch {}
+
+  try {
+    // Try candidate with exp=xpe removed
+    const u3 = new URL(rawTrackUrl);
+    if (u3.searchParams.has("exp")) {
+      u3.searchParams.delete("exp");
+      u3.searchParams.set("fmt", "json3");
+      if (track?.kind === "asr" && !u3.searchParams.has("kind")) {
+        u3.searchParams.set("kind", "asr");
+      }
+      candidateUrls.push(u3.toString());
+    }
   } catch {}
 
   if (!candidateUrls.includes(rawTrackUrl)) {
     candidateUrls.push(rawTrackUrl);
   }
 
-  const maxAttempts = track?.kind === "asr" ? 4 : 2;
-  const retryBaseDelayMs = track?.kind === "asr" ? 250 : 180;
+  const maxAttempts = track?.kind === "asr" ? 3 : 2;
+  const retryBaseDelayMs = track?.kind === "asr" ? 200 : 150;
 
+  let hitBotBlock = false;
   for (const url of candidateUrls) {
+    if (hitBotBlock) break;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const res = await fetch(url, {
           credentials: "include",
         });
-        if (!res.ok) break;
+        if (!res.ok) {
+          if (res.status === 429) {
+            console.log(
+              "[Lyrical Extractor] Timedtext returned 429 — falling back to player API",
+            );
+            hitBotBlock = true;
+          }
+          break;
+        }
 
         const text = await res.text();
 
-        // HARD GUARD: YouTube sometimes returns HTML instead of captions
-        if (text.startsWith("<!DOCTYPE html") || text.startsWith("<html")) {
+        // HARD GUARD: If response is HTML or Google bot-block page, stop direct fetch immediately
+        if (isHtmlOrBlockPage(text)) {
           console.log(
-            "[Lyrical Extractor] Timedtext returned HTML — retrying warm",
+            "[Lyrical Extractor] Timedtext returned HTML or bot-block page — falling back to player API",
           );
-          await new Promise((r) => setTimeout(r, 1000));
-          continue;
+          hitBotBlock = true;
+          break;
         }
         if (!text || !text.trim()) {
-          if (attempt < maxAttempts) {
-            await new Promise((resolve) =>
-              setTimeout(resolve, retryBaseDelayMs * attempt),
-            );
-          }
-          continue;
+          // Empty body (e.g. 200 OK with 0 chars due to missing PO token)
+          break; // Don't waste time repeating same URL if empty
         }
 
         const lyrics = parseCaptionPayload(text);
@@ -318,7 +669,7 @@ async function fetchLyricsForTrack(track) {
           return lyrics;
         }
       } catch (err) {
-        console.warn("[Lyrical Extractor] Fetch timedtext error:", err);
+        console.debug("[Lyrical Extractor] Fetch timedtext error:", err);
       }
       if (attempt < maxAttempts) {
         await new Promise((resolve) =>
@@ -328,7 +679,12 @@ async function fetchLyricsForTrack(track) {
     }
   }
 
-  return null;
+  // If direct fetch didn't yield captions (e.g. PO token required by server),
+  // fallback to having the YouTube player itself fetch the track!
+  console.log(
+    "[Lyrical Extractor] Direct fetch yielded no captions, requesting via YouTube player...",
+  );
+  return await requestPlayerCaptionTrack(track);
 }
 
 function selectBestTrack(tracks) {
@@ -379,6 +735,21 @@ function resetTrackingForVideo(videoId) {
   isProcessingPlayerResponse = false;
   lastProcessedSignature = null;
   lastProcessedAt = 0;
+  cachedTimedTextByVideo.clear();
+  pendingTimedTextResolvers.clear();
+  currentVideoDetails = null;
+  currentTracks = null;
+  currentSelectedTrack = null;
+
+  try {
+    window.postMessage(
+      {
+        type: "LYRICAL_CLEAR_CAPTIONS",
+        videoId,
+      },
+      "*",
+    );
+  } catch {}
 }
 
 function isPlayerResponseUrl(url) {
@@ -491,6 +862,11 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
   if (!currentVideoId) return false;
 
   const response = resolvePlayerResponsePayload(payload);
+  const responseVideoId = response?.videoDetails?.videoId;
+  if (responseVideoId && responseVideoId !== currentVideoId) {
+    return false;
+  }
+
   const tracks =
     response?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
   if (!tracks || tracks.length === 0) return false;
@@ -510,6 +886,13 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
   }
 
   if (isProcessingPlayerResponse) return true;
+
+  const player = document.getElementById("movie_player");
+  if (isAdPlaying(player)) {
+    console.log("[Lyrical Extractor] Ignored playerResponse payload: ad is playing");
+    return false;
+  }
+
   isProcessingPlayerResponse = true;
   try {
     console.log(
@@ -518,6 +901,10 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
       "tracks:",
       tracks.length,
     );
+
+    currentVideoDetails = response?.videoDetails;
+    currentTracks = tracks;
+    currentSelectedTrack = selectedTrack;
 
     // Phase 1: send tracks immediately so content script knows captions exist.
     postCaptionData({
@@ -565,6 +952,8 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
       postedCaptionsForCurrentVideo = true;
       extractionAttempts = 0;
       clearExtractionTimer();
+      // After Lyrical has the data, turn off YouTube's native CC
+      disableNativeCaptions();
     } else {
       console.log("[Lyrical Extractor] Captions not ready yet — will retry");
       postedCaptionsForCurrentVideo = false;
@@ -578,10 +967,90 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
   }
 }
 
+function isAdPlaying(player) {
+  if (!player) return false;
+  try {
+    // 1. Check if movie_player itself has ad-showing or ad-interrupting class
+    const hasAdClass =
+      player.classList?.contains("ad-showing") ||
+      player.classList?.contains("ad-interrupting") ||
+      document.querySelector(".ad-showing, .ad-interrupting") !== null;
+
+    // 2. Check if the player's internal video-ads module has active child elements
+    const adModule = player.querySelector(".video-ads.ytp-ad-module");
+    const hasAdModuleChildren = Boolean(adModule && adModule.children.length > 0);
+
+    // 3. Check for active video ad overlay elements inside the player
+    const hasAdOverlay = Boolean(
+      player.querySelector(
+        ".ytp-ad-player-overlay, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-ad-preview-container, .ytp-ad-text",
+      ),
+    );
+
+    // 4. Check player API for ad state
+    const adState = typeof player.getAdState === "function" ? player.getAdState() : null;
+    const isAdApi = adState !== null && adState !== 0 && adState !== -1;
+    const isAdPlayingMethod = typeof player.isAdPlaying === "function" ? player.isAdPlaying() : false;
+
+    if (hasAdClass || hasAdModuleChildren || hasAdOverlay || isAdApi || isAdPlayingMethod) {
+      return true;
+    }
+  } catch {}
+  return false;
+}
+
+function observeAdState(player) {
+  if (!player || player.__lyricalAdObserverAttached) return;
+  player.__lyricalAdObserverAttached = true;
+
+  try {
+    let wasAdShowing = isAdPlaying(player);
+    if (wasAdShowing) {
+      window.postMessage({ type: "LYRICAL_AD_STATE_CHANGED", isAd: true }, "*");
+    }
+
+    const observer = new MutationObserver(() => {
+      const isNowAd = isAdPlaying(player);
+      if (wasAdShowing !== isNowAd) {
+        window.postMessage(
+          { type: "LYRICAL_AD_STATE_CHANGED", isAd: isNowAd },
+          "*",
+        );
+      }
+      if (wasAdShowing && !isNowAd) {
+        console.log(
+          "[Lyrical Extractor] Ad finished — restarting extraction for main video",
+        );
+        extractionAttempts = 0;
+        postedCaptionsForCurrentVideo = false;
+        lastProcessedSignature = null;
+        const currentVid = getVideoId();
+        if (currentVid) {
+          cachedTimedTextByVideo.delete(currentVid);
+        }
+        window.postMessage(
+          { type: "LYRICAL_CLEAR_AD_CAPTIONS", videoId: currentVid },
+          "*",
+        );
+        scheduleExtraction(300);
+      }
+      wasAdShowing = isNowAd;
+    });
+
+    observer.observe(player, {
+      attributes: true,
+      attributeFilter: ["class"],
+      childList: true,
+      subtree: true,
+    });
+  } catch {}
+}
+
 function attachPlayerListeners(player) {
   if (!player || player.__lyricalListenersAttached) return;
 
   player.__lyricalListenersAttached = true;
+  observeAdState(player);
 
   try {
     player.addEventListener("onApiChange", () => {
@@ -589,6 +1058,13 @@ function attachPlayerListeners(player) {
         "[Lyrical Extractor] onApiChange fired — rechecking captions",
       );
       scheduleExtraction(300);
+    });
+  } catch {}
+
+  try {
+    player.addEventListener("onVideoDataChange", () => {
+      console.log("[Lyrical Extractor] onVideoDataChange fired — video changed");
+      onVideoChange();
     });
   } catch {}
 
@@ -610,7 +1086,11 @@ function attachPlayerListeners(player) {
 
   try {
     player.addEventListener("onStateChange", (e) => {
-      if (e === 1 || e === 3) {
+      const currentVid = getVideoId();
+      if (currentVid && currentVid !== currentTrackedVideoId) {
+        console.log("[Lyrical Extractor] onStateChange detected video ID change:", currentVid);
+        onVideoChange();
+      } else if (e === 1 || e === 3) {
         // playing or buffering
         scheduleExtraction(400);
       }
@@ -633,6 +1113,16 @@ async function extractCaptions() {
 
     const player = document.getElementById("movie_player");
     attachPlayerListeners(player);
+    observeAdState(player);
+
+    if (isAdPlaying(player)) {
+      console.log(
+        "[Lyrical Extractor] Ad is playing — pausing extraction until ad finishes",
+      );
+      window.postMessage({ type: "LYRICAL_AD_STATE_CHANGED", isAd: true }, "*");
+      scheduleExtraction(1500);
+      return;
+    }
 
     if (!player) {
       extractionAttempts++;
@@ -684,7 +1174,7 @@ async function extractCaptions() {
       }
     }
   } catch (e) {
-    console.error("[Lyrical Extractor] Error:", e);
+    console.debug("[Lyrical Extractor] Error:", e);
     scheduleExtraction(2000);
   }
 }
@@ -700,7 +1190,17 @@ function installNetworkInterceptors() {
       try {
         const req = args[0];
         const url = typeof req === "string" ? req : req?.url;
-        if (isPlayerResponseUrl(url)) {
+        if (typeof url === "string" && url.includes("/api/timedtext")) {
+          const clone = response.clone();
+          clone
+            .text()
+            .then((text) => {
+              if (text && text.trim().length > 0) {
+                handleInterceptedTimedText(text, url);
+              }
+            })
+            .catch(() => {});
+        } else if (isPlayerResponseUrl(url)) {
           const clone = response.clone();
           clone
             .text()
@@ -724,7 +1224,7 @@ function installNetworkInterceptors() {
       return response;
     };
   } catch (e) {
-    console.warn("[Lyrical Extractor] Failed to install fetch interceptor", e);
+    console.debug("[Lyrical Extractor] Failed to install fetch interceptor", e);
   }
 
   try {
@@ -739,7 +1239,16 @@ function installNetworkInterceptors() {
     XMLHttpRequest.prototype.send = function (...args) {
       try {
         const url = this.__lyricalUrl;
-        if (isPlayerResponseUrl(url)) {
+        if (typeof url === "string" && url.includes("/api/timedtext")) {
+          this.addEventListener("load", () => {
+            try {
+              const text = this.responseText;
+              if (text && text.trim().length > 0) {
+                handleInterceptedTimedText(text, url);
+              }
+            } catch {}
+          });
+        } else if (isPlayerResponseUrl(url)) {
           this.addEventListener("load", () => {
             try {
               const text = this.responseText;
@@ -757,22 +1266,41 @@ function installNetworkInterceptors() {
       return originalSend.apply(this, args);
     };
   } catch (e) {
-    console.warn("[Lyrical Extractor] Failed to install XHR interceptor", e);
+    console.debug("[Lyrical Extractor] Failed to install XHR interceptor", e);
   }
 }
 
 function onVideoChange() {
   const currentVideoId = getVideoId();
-  if (currentVideoId) {
+  if (currentVideoId && currentVideoId !== currentTrackedVideoId) {
     console.log("[Lyrical Extractor] New video:", currentVideoId);
     resetTrackingForVideo(currentVideoId);
-    scheduleExtraction(800);
+    scheduleExtraction(500);
   }
 }
 
-// Listen for YouTube navigation
+// Listen for YouTube navigation and miniplayer events
 document.addEventListener("yt-navigate-finish", onVideoChange);
 document.addEventListener("yt-page-data-updated", onVideoChange);
+
+// Observe miniplayer for in-place track switching
+let miniplayerTrackingInstalled = false;
+function setupMiniplayerTracking() {
+  if (miniplayerTrackingInstalled) return;
+  const mini = document.querySelector("ytd-miniplayer");
+  if (mini) {
+    miniplayerTrackingInstalled = true;
+    const observer = new MutationObserver(() => {
+      const currentVid = getVideoId();
+      if (currentVid && currentVid !== currentTrackedVideoId) {
+        console.log("[Lyrical Extractor] Miniplayer video change detected:", currentVid);
+        onVideoChange();
+      }
+    });
+    observer.observe(mini, { childList: true, subtree: true, attributes: true });
+  }
+}
+setInterval(setupMiniplayerTracking, 1000);
 
 installNetworkInterceptors();
 // Initial check
@@ -830,7 +1358,8 @@ window.addEventListener("message", async (event) => {
       ) ||
       tracks.find(
         (t) => (getTrackLang(t) || "").split("-")[0].toLowerCase() === cleanTarget,
-      );
+      ) ||
+      tracks[0];
 
     if (!match) {
       window.postMessage(
@@ -841,6 +1370,8 @@ window.addEventListener("message", async (event) => {
     }
 
     const lyrics = await fetchLyricsForTrack(match);
+    // After fetching track data, disable YouTube's native CC to prevent it from switching
+    disableNativeCaptions();
     if (lyrics && lyrics.length > 0) {
       window.postMessage(
         {

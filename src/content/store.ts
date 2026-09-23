@@ -191,6 +191,13 @@ interface LyricalSettingsState {
   themeId: string;
   customThemes: CustomTheme[];
   sourcePreferences: SourcePreference[];
+  albumArtTransition: "shuffle" | "flip" | "push" | "crossfade" | "none";
+  titleTransition: "spring" | "push" | "crossfade" | "none";
+  scrollLongTitles: boolean;
+  showProgressBar: boolean;
+  reopenFloatingLyricsAutomatically: boolean;
+  showMiniCompanion: boolean;
+  miniCompanionCustomPosition: { top: number; left: number } | null;
 }
 
 interface LyricalAppState extends LyricalSettingsState {
@@ -209,6 +216,7 @@ interface LyricalAppState extends LyricalSettingsState {
   isLoading: boolean;
   isProcessingLyrics: boolean;
   headerText: string;
+  isAdPlaying: boolean;
   setSongInfo: (info: SongInfo | null) => void;
   setLyrics: (
     lyrics: LyricalLyricLine[],
@@ -228,6 +236,7 @@ interface LyricalAppState extends LyricalSettingsState {
   setLoading: (loading: boolean) => void;
   setIsProcessingLyrics: (processing: boolean) => void;
   setHeaderText: (text: string) => void;
+  setIsAdPlaying: (isAd: boolean) => void;
   setOffset: (offset: number, userOffset: number) => void;
   setRichsyncOffsetTrim: (val: number) => void;
   setLineOffsetTrim: (val: number) => void;
@@ -254,6 +263,15 @@ interface LyricalAppState extends LyricalSettingsState {
   setBoiduApiKey: (key: string) => void;
   setSourcePreferences: (prefs: unknown) => void;
   toggleSource: (id: LyricsSourceId) => void;
+  setAlbumArtTransition: (transition: "shuffle" | "flip" | "push" | "crossfade" | "none") => void;
+  setTitleTransition: (transition: "spring" | "push" | "crossfade" | "none") => void;
+  setScrollLongTitles: (scroll: boolean) => void;
+  setShowProgressBar: (show: boolean) => void;
+  setReopenFloatingLyricsAutomatically: (enabled: boolean) => void;
+  setShowMiniCompanion: (show: boolean) => void;
+  setMiniCompanionCustomPosition: (
+    pos: { top: number; left: number } | null,
+  ) => void;
   reset: () => void;
   resetLyricsOnly: () => void;
 }
@@ -281,6 +299,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
 
   isProcessingLyrics: false,
   headerText: "Waiting for music...",
+  isAdPlaying: false,
 
   // Settings (synced from storage/events)
   offset: -0.45, // Platform constant + user offset
@@ -313,6 +332,13 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   customThemes: [],
   richsyncOffsetTrim: 0,
   lineOffsetTrim: 0,
+  albumArtTransition: "shuffle",
+  titleTransition: "spring",
+  scrollLongTitles: true,
+  showProgressBar: true,
+  reopenFloatingLyricsAutomatically: false,
+  showMiniCompanion: true,
+  miniCompanionCustomPosition: null,
 
   // Source Preferences
 
@@ -381,6 +407,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   setIsProcessingLyrics: (processing) =>
     set({ isProcessingLyrics: processing }),
   setHeaderText: (text) => set({ headerText: text }),
+  setIsAdPlaying: (isAd) => set({ isAdPlaying: isAd }),
   setOffset: (offset, userOffset) => set({ offset, userOffset }),
   setRichsyncOffsetTrim: (val) => {
     const trimmed = Math.round(val * 10) / 10;
@@ -569,6 +596,72 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       return { sourcePreferences: newPrefs };
     }),
 
+  setAlbumArtTransition: (transition) => {
+    set({ albumArtTransition: transition });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ albumArtTransition: transition }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setTitleTransition: (transition) => {
+    set({ titleTransition: transition });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ titleTransition: transition }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setScrollLongTitles: (scroll) => {
+    set({ scrollLongTitles: scroll });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ scrollLongTitles: scroll }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setShowProgressBar: (show) => {
+    set({ showProgressBar: show });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ showProgressBar: show }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setReopenFloatingLyricsAutomatically: (enabled) => {
+    set({ reopenFloatingLyricsAutomatically: enabled });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set(
+        { reopenFloatingLyricsAutomatically: enabled },
+        () => {
+          void chrome.runtime?.lastError;
+        },
+      );
+    }
+  },
+
+  setShowMiniCompanion: (show) => {
+    set({ showMiniCompanion: show });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ showMiniCompanion: show }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
+  setMiniCompanionCustomPosition: (pos) => {
+    set({ miniCompanionCustomPosition: pos });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ miniCompanionCustomPosition: pos }, () => {
+        void chrome.runtime?.lastError;
+      });
+    }
+  },
+
   reset: () => {
     vocalRemover.reset();
     set({
@@ -586,7 +679,10 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       headerText: "Waiting for music...",
       isLoading: false,
       isProcessingLyrics: false,
+      isAdPlaying: false,
       lyricsLanguage: null,
+      offset: -0.45,
+      userOffset: 0,
     });
   },
 
@@ -605,5 +701,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       headerText: "No lyrics found",
       isLoading: false, // Ensure loading is off
       lyricsLanguage: null,
+      offset: -0.45,
+      userOffset: 0,
     }),
 }));

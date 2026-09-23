@@ -416,7 +416,7 @@ export function parseTTML(ttmlString) {
   try {
     const xmlDoc = new DOMParser().parseFromString(ttmlString, "text/xml");
     if (xmlDoc.querySelector("parsererror")) {
-      console.warn("[Boidu] TTML parser error");
+      console.debug("[Boidu] TTML parser error");
       return null;
     }
 
@@ -623,14 +623,14 @@ export async function fetchBoiduLyrics(songInfo, apiKey = null): Promise<any> {
 
     if (!response?.success) {
       if (response?.status !== 401 && response?.status !== 403 && response?.status !== 404) {
-        console.warn("[Boidu] Proxy API Error Status:", response?.status || "Unknown");
+        console.debug("[Boidu] Proxy API Error Status:", response?.status || "Unknown");
       }
       return null;
     }
 
     return parseBoiduResponse(response.data);
   } catch (error: any) {
-    console.warn("[Boidu] Fetch failed:", error?.message || error);
+    console.debug("[Boidu] Fetch failed:", error?.message || error);
     return null;
   }
 }

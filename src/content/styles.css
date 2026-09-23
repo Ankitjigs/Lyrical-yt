@@ -53,6 +53,15 @@
   font-family: var(--lyrical-lyrics-font-stack);
 }
 
+@keyframes lyricalTitleMarquee {
+  0%, 15% {
+    transform: translateX(0);
+  }
+  85%, 100% {
+    transform: translateX(var(--marquee-distance, -40px));
+  }
+}
+
 /* ─── Unified lyric font stack across every source ─── */
 :host {
   --lyrical-lyrics-font-stack:

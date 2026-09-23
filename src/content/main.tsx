@@ -3,6 +3,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import LyricsPanel from "./components/LyricsPanel";
 import KaraokeOverlay from "./components/KaraokeOverlay";
+import MiniCompanion from "./components/MiniCompanion";
 import { useAppStore, isRichsyncSourceId } from "./store";
 import { log, warn, error, setDebugMode } from "./utils/logger";
 import { fetchBoiduLyrics } from "../modules/sources/boidu";
@@ -20,7 +21,11 @@ import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
 import type { CaptionTrackInfo } from "../types/lyrics";
 import { vocalRemover } from "../modules/audio/vocalRemover";
-import { detectAutoSyncOffset } from "../modules/sync/autoSyncDetector";
+import {
+  detectAutoSyncOffset,
+  getFirstVocalLyricTime,
+  getLastVocalLyricTime,
+} from "../modules/sync/autoSyncDetector";
 import { detectNonCaptionIntroOffset } from "../modules/sync/sponsorBlockSync";
 import { normalizeLyricsPipeline } from "../modules/lyrics/lyricsNormalizer";
 
@@ -55,22 +60,69 @@ const KARAOKE_SHADOW_STYLES = [
 ].join("\n");
 
 // Helper keys for per-song and per-source offset storage
+function getSongVideoCacheKey(
+  songInfo?: any,
+  explicitVideoId?: string | null,
+): string {
+  const info = songInfo || currentSongInfo;
+  const v =
+    explicitVideoId ||
+    getCurrentVideoId(info) ||
+    "unknown_video";
+  const title = (info?.title || "").trim();
+  if (title) {
+    return `${title} - ${v}`;
+  }
+  return v;
+}
+
+function getSourceOffsetProp(sourceId?: string | null): string {
+  let s = (sourceId || useAppStore.getState().lyricsSource || "default").trim();
+  if (s === "musixmatch-richsync") s = "musixmatch_richsync";
+  else if (s === "musixmatch") s = "musixmatch";
+  else if (s === "musixmatch-synced") s = "musixmatch_synced";
+  else s = s.replace(/[^a-zA-Z0-9_]/g, "_").toLowerCase();
+
+  return s.endsWith("_offset") ? s : `${s}_offset`;
+}
+
+function parseSongKeyInfo(
+  songKeyOrSongId?: string | null,
+  sourceIdOverride?: string | null,
+): { songId: string; videoId: string; prop: string; flatKey: string } {
+  const currentSource =
+    sourceIdOverride || useAppStore.getState().lyricsSource || "default";
+  let extractedVideoId = getCurrentVideoId(currentSongInfo) || "unknown_video";
+  let extractedSource = currentSource;
+
+  if (songKeyOrSongId && songKeyOrSongId.startsWith("offset_")) {
+    const parts = songKeyOrSongId.slice("offset_".length).split("_");
+    if (parts.length >= 2) {
+      extractedVideoId = parts[0];
+      extractedSource = sourceIdOverride || parts.slice(1).join("_");
+    } else if (parts.length === 1) {
+      extractedVideoId = parts[0];
+    }
+  }
+
+  const songId = getSongVideoCacheKey(currentSongInfo, extractedVideoId);
+  const prop = getSourceOffsetProp(extractedSource);
+  const flatKey = `offset_${extractedVideoId}_${extractedSource}`;
+
+  return { songId, videoId: extractedVideoId, prop, flatKey };
+}
+
 function getSongOffsetKey(
   videoId: string | null | undefined,
   sourceId?: string | null | undefined,
 ): string {
-  const v =
-    videoId ||
-    new URLSearchParams(window.location.search).get("v") ||
-    "unknown_video";
-  let s = sourceId || useAppStore.getState().lyricsSource || "default";
-  if (s === "musixmatch-richsync") s = "musixmatch";
+  const v = videoId || getCurrentVideoId(currentSongInfo) || "unknown_video";
+  const s = sourceId || useAppStore.getState().lyricsSource || "default";
   return `offset_${v}_${s}`;
 }
 
 function getLegacySongOffsetKey(videoId: string | null | undefined): string {
-  const v =
-    videoId || new URLSearchParams(window.location.search).get("v");
+  const v = videoId || getCurrentVideoId(currentSongInfo);
   return v
     ? `offset_${v}`
     : `${currentSongInfo?.artist || "unknown"}__${currentSongInfo?.title || "unknown"}`;
@@ -93,12 +145,17 @@ useAppStore.subscribe((state, prevState) => {
     const trim = isRich
       ? state.richsyncOffsetTrim || 0
       : state.lineOffsetTrim || 0;
-    currentSyncOffset = (isCaptions ? 0 : PLATFORM_OFFSET) + userSongOffset + trim;
+    currentSyncOffset =
+      (isCaptions ? 0 : PLATFORM_OFFSET) + userSongOffset + trim;
 
     if (offsetChanged && currentSongInfo && !isCaptions) {
-      const videoId = new URLSearchParams(window.location.search).get("v");
-      const songKey = getSongOffsetKey(videoId, state.lyricsSource);
-      saveStoredSongOffset(songKey, userSongOffset).catch(() => {});
+      if (suppressNextOffsetPersistence) {
+        suppressNextOffsetPersistence = false;
+      } else {
+        const videoId = getCurrentVideoId(currentSongInfo);
+        const songKey = getSongOffsetKey(videoId, state.lyricsSource);
+        saveStoredSongOffset(songKey, userSongOffset).catch(() => {});
+      }
     }
   }
 
@@ -153,6 +210,11 @@ if (chrome.storage) {
       translationExclusions: [],
       [CUSTOM_THEMES_STORAGE_KEY]: [],
       sourcePreferences: null, // Default
+      albumArtTransition: "shuffle",
+      titleTransition: "spring",
+      scrollLongTitles: true,
+      showProgressBar: true,
+      reopenFloatingLyricsAutomatically: false,
     },
     (res) => {
       setDebugMode(res.showLogs); // Use logger utility
@@ -181,13 +243,19 @@ if (chrome.storage) {
         lyricsAnimationStyle: res.lyricsAnimationStyle || "better-lyrics",
         isKaraokeMode: Boolean(res.isKaraokeMode),
         karaokePosition: res.karaokePosition || "bottom",
-        karaokeCustomPosition: typeof res.karaokeCustomPosition === "number" ? res.karaokeCustomPosition : 80,
+        karaokeCustomPosition:
+          typeof res.karaokeCustomPosition === "number"
+            ? res.karaokeCustomPosition
+            : 80,
         karaokeFontSize: res.karaokeFontSize || "medium",
         karaokeAnimationStyle: res.karaokeAnimationStyle || "classic",
         isVocalMuted: Boolean(res.isVocalMuted),
-        vocalCutDepth: typeof res.vocalCutDepth === "number" ? res.vocalCutDepth : 1.0,
-        vocalBassCutoff: typeof res.vocalBassCutoff === "number" ? res.vocalBassCutoff : 160,
-        vocalBalanceTrim: typeof res.vocalBalanceTrim === "number" ? res.vocalBalanceTrim : 0,
+        vocalCutDepth:
+          typeof res.vocalCutDepth === "number" ? res.vocalCutDepth : 1.0,
+        vocalBassCutoff:
+          typeof res.vocalBassCutoff === "number" ? res.vocalBassCutoff : 160,
+        vocalBalanceTrim:
+          typeof res.vocalBalanceTrim === "number" ? res.vocalBalanceTrim : 0,
         vocalReverbDampening: Boolean(res.vocalReverbDampening),
         reduceAnimations: res.reduceAnimations,
         showCollapsedArtwork: res.showCollapsedArtwork ?? true,
@@ -198,6 +266,12 @@ if (chrome.storage) {
         translationExclusions: res.translationExclusions || [],
         customThemes: hydratedCustomThemes,
         themeId: res.themeId || DEFAULT_THEME_ID,
+        albumArtTransition: res.albumArtTransition || "shuffle",
+        titleTransition: res.titleTransition || "spring",
+        scrollLongTitles: res.scrollLongTitles ?? true,
+        showProgressBar: res.showProgressBar ?? true,
+        reopenFloatingLyricsAutomatically:
+          res.reopenFloatingLyricsAutomatically ?? false,
       };
 
       vocalRemover.updateSettings({
@@ -421,7 +495,8 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
 
   if (changes.karaokeAnimationStyle) {
     useAppStore.setState({
-      karaokeAnimationStyle: changes.karaokeAnimationStyle.newValue || "classic",
+      karaokeAnimationStyle:
+        changes.karaokeAnimationStyle.newValue || "classic",
     });
   }
 
@@ -482,9 +557,58 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
     changes.lineOffsetTrim &&
     typeof changes.lineOffsetTrim.newValue === "number"
   ) {
-    useAppStore
-      .getState()
-      .setLineOffsetTrim(changes.lineOffsetTrim.newValue);
+    useAppStore.getState().setLineOffsetTrim(changes.lineOffsetTrim.newValue);
+  }
+
+  // 15. Floating Window & Transition Settings
+  if (changes.albumArtTransition) {
+    useAppStore.setState({
+      albumArtTransition: changes.albumArtTransition.newValue || "shuffle",
+    });
+  }
+  if (changes.titleTransition) {
+    useAppStore.setState({
+      titleTransition: changes.titleTransition.newValue || "spring",
+    });
+  }
+  if (changes.scrollLongTitles) {
+    useAppStore.setState({
+      scrollLongTitles:
+        changes.scrollLongTitles.newValue !== undefined
+          ? Boolean(changes.scrollLongTitles.newValue)
+          : true,
+    });
+  }
+  if (changes.showProgressBar) {
+    useAppStore.setState({
+      showProgressBar:
+        changes.showProgressBar.newValue !== undefined
+          ? Boolean(changes.showProgressBar.newValue)
+          : true,
+    });
+  }
+  if (changes.reopenFloatingLyricsAutomatically) {
+    useAppStore.setState({
+      reopenFloatingLyricsAutomatically:
+        changes.reopenFloatingLyricsAutomatically.newValue !== undefined
+          ? Boolean(changes.reopenFloatingLyricsAutomatically.newValue)
+          : false,
+    });
+  }
+  if (changes.showMiniCompanion !== undefined) {
+    useAppStore.setState({
+      showMiniCompanion:
+        changes.showMiniCompanion.newValue !== undefined
+          ? Boolean(changes.showMiniCompanion.newValue)
+          : true,
+    });
+    checkAndManageMiniCompanion();
+  }
+  if (changes.miniCompanionCustomPosition !== undefined) {
+    useAppStore.setState({
+      miniCompanionCustomPosition:
+        changes.miniCompanionCustomPosition.newValue || null,
+    });
   }
 });
 
@@ -642,7 +766,7 @@ function lockCurrentFetchWinner(sourceId) {
 }
 
 function canDisplayCaptionsForCurrentFetch() {
-  const liveVideoId = new URLSearchParams(window.location.search).get("v");
+  const liveVideoId = getCurrentVideoId(currentSongInfo);
 
   if (
     currentFetchVideoId &&
@@ -655,6 +779,11 @@ function canDisplayCaptionsForCurrentFetch() {
       "current:",
       liveVideoId,
     );
+    return false;
+  }
+
+  if (useAppStore.getState().isAdPlaying) {
+    log("Cannot display captions while ad is playing");
     return false;
   }
 
@@ -685,10 +814,83 @@ function canDisplayCaptionsForCurrentFetch() {
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
 
+  if (
+    event.data?.type === "LYRICAL_CLEAR_CAPTIONS" ||
+    event.data?.type === "LYRICAL_CLEAR_AD_CAPTIONS"
+  ) {
+    log(
+      "[Lyrical] Clearing captions and resetting caption state for video:",
+      event.data?.videoId || "unknown",
+    );
+    availableCaptions = [];
+    pendingMainWorldCaptionLyrics = null;
+    pendingMainWorldCaptionTrack = null;
+    pendingMainWorldCaptionLanguage = null;
+    pendingMainWorldCaptionVideoId = null;
+    mainWorldCaptionTracksVideoId = null;
+    if (useAppStore.getState().lyricsSource === "captions") {
+      fetchedLyrics = null;
+      currentFetchWinningSourceId = null;
+      useAppStore.getState().resetLyricsOnly();
+    }
+    return;
+  }
+
+  if (event.data?.type === "LYRICAL_AD_STATE_CHANGED") {
+    const isAd = Boolean(event.data.isAd);
+    log("[Lyrical] Ad state changed:", isAd ? "Ad playing" : "Ad finished");
+    useAppStore.getState().setIsAdPlaying(isAd);
+
+    if (isAd) {
+      useAppStore.setState({
+        headerText: "Ad in progress...",
+      });
+      // Try to ensure we already have the real video title from the page DOM
+      const realInfo = window.getSongInfoFromPage?.();
+      if (
+        realInfo &&
+        realInfo.title &&
+        realInfo.title.toUpperCase() !== "UNLABELED"
+      ) {
+        updateSongInfo(realInfo);
+      }
+    } else {
+      // Ad finished! Clear any stale ad captions and re-hydrate for the real video
+      log("[Lyrical] Re-hydrating song info for real video after ad finished");
+      availableCaptions = [];
+      pendingMainWorldCaptionLyrics = null;
+      pendingMainWorldCaptionTrack = null;
+      pendingMainWorldCaptionLanguage = null;
+      pendingMainWorldCaptionVideoId = null;
+      mainWorldCaptionTracksVideoId = null;
+      if (useAppStore.getState().lyricsSource === "captions") {
+        fetchedLyrics = null;
+        currentFetchWinningSourceId = null;
+        useAppStore.getState().resetLyricsOnly();
+      }
+
+      hydrateSongInfoWithRetry(8, 250).then(() => {
+        const info = currentSongInfo || window.getSongInfoFromPage?.();
+        if (info && info.title && info.title.toUpperCase() !== "UNLABELED") {
+          updateSongInfo(info);
+          autoFetchLyrics(info, { reason: "ad finished" });
+        }
+      });
+    }
+    return;
+  }
+
   if (event.data.type === "LYRICAL_CAPTIONS_FOUND") {
+    if (useAppStore.getState().isAdPlaying) {
+      log(
+        "[Lyrical] Ignoring caption tracks/lyrics received while ad is playing",
+      );
+      return;
+    }
+
     const tracks = event.data.tracks || [];
     const eventVideoId = event.data.videoId || null;
-    const currentVideoId = new URLSearchParams(window.location.search).get("v");
+    const currentVideoId = getCurrentVideoId(currentSongInfo);
     if (eventVideoId && currentVideoId && eventVideoId !== currentVideoId) {
       log(
         "Ignoring caption payload for stale video:",
@@ -743,9 +945,7 @@ window.addEventListener("message", (event) => {
       if (currentVideoId && (!fetchedLyrics || fetchedLyrics.length === 0)) {
         log("Late MAIN-world captions arrived; triggering delayed recovery");
         setTimeout(() => {
-          const liveVideoId = new URLSearchParams(window.location.search).get(
-            "v",
-          );
+          const liveVideoId = getCurrentVideoId(currentSongInfo);
           if (liveVideoId !== currentVideoId) return;
           if (!canDisplayCaptionsForCurrentFetch()) return;
           tryDisplayCaptions().catch((err) => {
@@ -767,30 +967,63 @@ window.addEventListener("message", (event) => {
     // but the user hasn't set a manual offset yet, run auto-sync now that captions are here!
     const liveSyncVideoId =
       (typeof currentVideoId !== "undefined" && currentVideoId) ||
-      new URLSearchParams(window.location.search).get("v");
+      getCurrentVideoId(currentSongInfo);
     if (liveSyncVideoId) {
       const state = useAppStore.getState();
       if (state.lyricsSource !== "captions") {
         const activeLyrics = state.lyrics;
         if (Array.isArray(activeLyrics) && activeLyrics.length > 0) {
-          const activeSongKey = getSongOffsetKey(liveSyncVideoId, state.lyricsSource);
+          const activeSongKey = getSongOffsetKey(
+            liveSyncVideoId,
+            state.lyricsSource,
+          );
           const fallbackKey = getLegacySongOffsetKey(liveSyncVideoId);
-          getStoredSongOffset(activeSongKey, fallbackKey).then((stored) => {
-            if (stored === null) {
-              tryAutoDetectOffset(activeLyrics, activeSongKey).then((detected) => {
-                if (detected !== null && detected !== userSongOffset) {
-                  userSongOffset = detected;
-                  const isRich = isRichsyncSourceId(state.lyricsSource, activeLyrics);
-                  const trim = isRich
-                    ? state.richsyncOffsetTrim || 0
-                    : state.lineOffsetTrim || 0;
-                  currentSyncOffset = PLATFORM_OFFSET + userSongOffset + trim;
-                  useAppStore.getState().setOffset(currentSyncOffset, userSongOffset);
-                  log("[Lyrical Auto-Sync] ⚡ Applied late auto-detected offset:", detected, "s");
-                }
-              });
-            }
-          }).catch(() => {});
+          getStoredSongOffset(activeSongKey, fallbackKey)
+            .then((stored) => {
+              const lastVocalTime = getLastVocalLyricTime(activeLyrics);
+              const video = getActiveMediaVideoElement();
+              const videoDuration = video?.duration || 0;
+              const isInvalidStoredIntro =
+                stored !== null &&
+                stored >= 1.5 &&
+                lastVocalTime !== null &&
+                videoDuration > 0 &&
+                lastVocalTime + stored > videoDuration + 2.0;
+
+              const isZeroNonCaptionOffset =
+                stored !== null &&
+                Math.abs(stored) <= 0.05 &&
+                state.lyricsSource !== "captions";
+
+              if (stored === null || isInvalidStoredIntro || isZeroNonCaptionOffset) {
+                tryAutoDetectOffset(
+                  activeLyrics,
+                  activeSongKey,
+                  liveSyncVideoId,
+                ).then((detected) => {
+                  if (detected !== null && detected !== userSongOffset) {
+                    userSongOffset = detected;
+                    const isRich = isRichsyncSourceId(
+                      state.lyricsSource,
+                      activeLyrics,
+                    );
+                    const trim = isRich
+                      ? state.richsyncOffsetTrim || 0
+                      : state.lineOffsetTrim || 0;
+                    currentSyncOffset = PLATFORM_OFFSET + userSongOffset + trim;
+                    useAppStore
+                      .getState()
+                      .setOffset(currentSyncOffset, userSongOffset);
+                    log(
+                      "[Lyrical Auto-Sync] ⚡ Applied late auto-detected offset:",
+                      detected,
+                      "s",
+                    );
+                  }
+                });
+              }
+            })
+            .catch(() => {});
         }
       }
     }
@@ -819,19 +1052,23 @@ function cleanCaptionText(value: any): string {
   words = words.replace(/^(?:>{1,3}|&gt;{1,3})\s*/i, "");
 
   // 2. Remove musical notes
-  const notes = ["♪", "♫", "🎵", "🎶"];
-  for (const note of notes) {
-    if (words.startsWith(note)) words = words.slice(1).trim();
-    if (words.endsWith(note)) words = words.slice(0, -1).trim();
-  }
+  words = words.replace(/[♪♫🎵🎶]/g, "").trim();
 
-  // 3. Remove sound effect annotations at start
+  // 3. Remove sound effect annotations at start and end
   words = words.replace(
-    /^\s*\[(?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)\]\s*/gi,
+    /^\s*\[(?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^\]]*\]\s*/gi,
     "",
   );
   words = words.replace(
-    /^\s*\((?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)\)\s*/gi,
+    /^\s*\((?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^)]*\)\s*/gi,
+    "",
+  );
+  words = words.replace(
+    /\s*\[(?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^\]]*\]\s*$/gi,
+    "",
+  );
+  words = words.replace(
+    /\s*\((?:music|applause|laughter|cheering|chuckles|groans|sighs|gasp|screaming)[^)]*\)\s*$/gi,
     "",
   );
 
@@ -845,7 +1082,7 @@ function cleanCaptionText(value: any): string {
  * Fetch caption content from content script (ISOLATED world)
  * This is the same approach better-lyrics uses - their main script runs in ISOLATED world
  */
-async function fetchCaptionsFromContentScript(url) {
+async function fetchCaptionsFromContentScript(url, track = null) {
   const readAttr = (attrs, key) => {
     const match = attrs.match(
       new RegExp(`${key}\\s*=\\s*["']([^"']+)["']`, "i"),
@@ -880,157 +1117,261 @@ async function fetchCaptionsFromContentScript(url) {
     return n;
   };
 
+  const isAsr =
+    track?.kind === "asr" ||
+    track?.isAsr ||
+    String(track?.vssId || track?.name || "")
+      .toLowerCase()
+      .includes("auto");
+
+  const candidateUrls = [];
   try {
-    log("Fetching captions from content script:", url.substring(0, 100));
-
-    const response = await fetch(url, {
-      credentials: "include",
-    });
-
-    log("Caption fetch response status:", response.status);
-
-    if (!response.ok) {
-      log("Caption fetch failed:", response.status, response.statusText);
-      return null;
+    const u1 = new URL(url);
+    u1.searchParams.set("fmt", "json3");
+    if (isAsr && !u1.searchParams.has("kind")) {
+      u1.searchParams.set("kind", "asr");
     }
+    candidateUrls.push(u1.toString());
+  } catch {}
 
-    // Get as text FIRST to see what we actually received
-    const text = await response.text();
-    log("Caption response length:", text.length, "chars");
-    log("Caption response preview:", text.substring(0, 200));
-
-    if (!text || text.length === 0) {
-      log("Caption response is EMPTY");
-      return null;
+  try {
+    const u2 = new URL(url);
+    u2.searchParams.set("fmt", "srv3");
+    if (isAsr && !u2.searchParams.has("kind")) {
+      u2.searchParams.set("kind", "asr");
     }
+    candidateUrls.push(u2.toString());
+  } catch {}
 
-    // Try JSON parse first (fmt=json3)
-    if (text.startsWith("{") || text.startsWith("[")) {
-      try {
-        const captionData = JSON.parse(text);
-        log("Caption data events:", captionData.events?.length);
+  try {
+    const u3 = new URL(url);
+    if (u3.searchParams.has("exp")) {
+      u3.searchParams.delete("exp");
+      u3.searchParams.set("fmt", "json3");
+      if (isAsr && !u3.searchParams.has("kind")) {
+        u3.searchParams.set("kind", "asr");
+      }
+      candidateUrls.push(u3.toString());
+    }
+  } catch {}
 
-        if (!captionData.events) {
+  if (!candidateUrls.includes(url)) {
+    candidateUrls.push(url);
+  }
+
+  for (const fetchUrl of candidateUrls) {
+    try {
+      log("Fetching captions from content script:", fetchUrl.substring(0, 100));
+
+      const response = await fetch(fetchUrl, {
+        credentials: "include",
+      });
+
+      log("Caption fetch response status:", response.status);
+
+      if (!response.ok) {
+        log("Caption fetch failed:", response.status, response.statusText);
+        if (response.status === 429) {
+          log(
+            "Caption fetch returned 429 (Rate Limited) — stopping direct fetch candidates and falling back to player API",
+          );
           return null;
         }
-
-        // Parse events into lyrics array (same logic as better-lyrics)
-        const lyrics = captionData.events
-          .filter((event) => event.segs && event.segs.length > 0)
-          .map((event) => {
-            let words = "";
-            for (let seg of event.segs) {
-              words += seg.utf8 || "";
-            }
-            words = words.replace(/\n/g, " ").trim();
-
-            // Remove music notes
-            const musicNotes = ["♪", "♫", "🎵", "🎶"];
-            for (let note of musicNotes) {
-              if (words.startsWith(note)) words = words.substring(1).trim();
-              if (words.endsWith(note)) words = words.slice(0, -1).trim();
-            }
-
-            return {
-              time: (event.tStartMs || 0) / 1000,
-              text: cleanCaptionText(words),
-              duration: (event.dDurationMs || 0) / 1000,
-            };
-          })
-          .filter((lyric) => lyric.text.length > 0);
-
-        log("Parsed lyrics (JSON):", lyrics.length, "lines");
-        return lyrics;
-      } catch (e) {
-        log("JSON parse failed, trying XML...");
+        continue;
       }
-    }
 
-    // Fallback: Try XML / TTML parse (default format)
-    if (
-      text.includes("<text") ||
-      text.includes("<p") ||
-      text.includes("<s") ||
-      text.includes("<transcript") ||
-      text.includes("<?xml")
-    ) {
-      try {
-        const lyrics = [];
-        const textNodeRegex = /<text\b([^>]*)>([\s\S]*?)<\/text>/gi;
-        let match;
+      // Get as text FIRST to see what we actually received
+      const text = await response.text();
+      log("Caption response length:", text.length, "chars");
+      log("Caption response preview:", text.substring(0, 200));
 
-        while ((match = textNodeRegex.exec(text)) !== null) {
-          const attrs = match[1] || "";
-          const raw = decodeXmlEntities(match[2] || "");
-          const start = readAttr(attrs, "start");
-          const dur = readAttr(attrs, "dur");
-          const t = readAttr(attrs, "t");
-          const d = readAttr(attrs, "d");
-          const cleaned = cleanCaptionText(raw);
-          if (!cleaned) continue;
+      if (!text || text.length === 0) {
+        log("Caption response is EMPTY for", fetchUrl.substring(0, 80));
+        continue;
+      }
 
-          lyrics.push({
-            time: t
-              ? parseXmlTimeToSeconds(t, true)
-              : parseXmlTimeToSeconds(start, false),
-            duration: d
-              ? parseXmlTimeToSeconds(d, true)
-              : parseXmlTimeToSeconds(dur, false),
-            text: cleaned,
-          });
-        }
+      const lowerText = text.toLowerCase();
+      if (
+        lowerText.includes("<!doctype html") ||
+        lowerText.includes("<html") ||
+        lowerText.includes("<body") ||
+        lowerText.includes("automated queries") ||
+        lowerText.includes("unusual traffic") ||
+        lowerText.includes("we can't process your request") ||
+        lowerText.includes("our systems have detected") ||
+        lowerText.includes("google.com/sorry")
+      ) {
+        log(
+          "Caption response is HTML / Google bot-block page, stopping direct fetch candidates",
+        );
+        break; // Stop spamming candidate URLs directly, fallback to MAIN world player API
+      }
 
-        // TTML fallback: parse <p begin/end/dur> blocks with optional <s> children.
-        if (lyrics.length === 0) {
-          const pNodeRegex = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
-          while ((match = pNodeRegex.exec(text)) !== null) {
-            const pAttrs = match[1] || "";
-            const pBody = match[2] || "";
-            const pStart =
-              readAttr(pAttrs, "begin") || readAttr(pAttrs, "start");
-            const pEnd = readAttr(pAttrs, "end");
-            const pDur = readAttr(pAttrs, "dur");
+      // Try JSON parse first (fmt=json3)
+      if (text.startsWith("{") || text.startsWith("[")) {
+        try {
+          const captionData = JSON.parse(text);
+          log("Caption data events:", captionData.events?.length);
 
-            let lineText = "";
-            const sNodeRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
-            let sMatch;
-            while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
-              lineText += `${decodeXmlEntities(sMatch[1] || "")} `;
+          if (Array.isArray(captionData.events) && captionData.events.length > 0) {
+            const lyrics: Array<{ time: number; text: string; duration: number }> = [];
+
+            for (const event of captionData.events) {
+              if (!event) continue;
+
+              let words = "";
+              if (Array.isArray(event.segs)) {
+                for (const seg of event.segs) {
+                  if (typeof seg === "string") {
+                    words += seg;
+                  } else if (seg && typeof seg === "object") {
+                    words += seg.utf8 || seg.text || seg.content || "";
+                  }
+                }
+              }
+              if (!words) {
+                words = event.text || event.utf8 || event.content || "";
+              }
+
+              const cleaned = cleanCaptionText(words);
+              if (!cleaned) continue;
+
+              const time = (event.tStartMs || 0) / 1000;
+              const duration = (event.dDurationMs || 0) / 1000;
+
+              if (cleaned.includes("\n")) {
+                const subLines = cleaned.split("\n").map((s) => s.trim()).filter(Boolean);
+                for (let i = 0; i < subLines.length; i++) {
+                  lyrics.push({
+                    time: time + (i * 0.5),
+                    duration: Math.max(0.5, duration / subLines.length),
+                    text: subLines[i],
+                  });
+                }
+              } else {
+                lyrics.push({
+                  time,
+                  duration,
+                  text: cleaned,
+                });
+              }
             }
 
-            if (!lineText.trim()) {
-              lineText = decodeXmlEntities(pBody.replace(/<[^>]+>/g, " "));
-            }
-
-            const cleaned = cleanCaptionText(lineText);
-            if (!cleaned) continue;
-
-            const startTime = parseXmlTimeToSeconds(pStart, false);
-            let duration = parseXmlTimeToSeconds(pDur, false);
-            if (!duration && pEnd) {
-              duration = Math.max(
-                0,
-                parseXmlTimeToSeconds(pEnd, false) - startTime,
+            log("Parsed lyrics (JSON):", lyrics.length, "lines");
+            if (lyrics.length >= 3) {
+              return lyrics;
+            } else if (lyrics.length > 0) {
+              log(
+                "Parsed JSON only yielded",
+                lyrics.length,
+                "lines; continuing to XML fallback for complete track",
               );
             }
-
-            lyrics.push({ time: startTime, duration, text: cleaned });
           }
+        } catch (e) {
+          log("JSON parse failed, trying XML...");
         }
-
-        log("Parsed lyrics (XML):", lyrics.length, "lines");
-        return lyrics.length > 0 ? lyrics : null;
-      } catch (e) {
-        log("XML parse also failed:", e);
       }
-    }
 
-    log("Could not parse caption response as JSON or XML");
-    return null;
-  } catch (err) {
-    console.error("[Lyrical] Caption fetch error:", err);
-    return null;
+      // Fallback: Try XML / TTML parse (default format)
+      if (
+        text.includes("<text") ||
+        text.includes("<p") ||
+        text.includes("<s") ||
+        text.includes("<transcript") ||
+        text.includes("<?xml")
+      ) {
+        try {
+          const lyrics = [];
+          const textNodeRegex = /<text\b([^>]*)>([\s\S]*?)<\/text>/gi;
+          let match;
+
+          while ((match = textNodeRegex.exec(text)) !== null) {
+            const attrs = match[1] || "";
+            const raw = decodeXmlEntities(match[2] || "");
+            const start = readAttr(attrs, "start");
+            const dur = readAttr(attrs, "dur");
+            const t = readAttr(attrs, "t");
+            const d = readAttr(attrs, "d");
+            const cleaned = cleanCaptionText(raw);
+            if (!cleaned) continue;
+
+            lyrics.push({
+              time: t
+                ? parseXmlTimeToSeconds(t, true)
+                : parseXmlTimeToSeconds(start, false),
+              duration: d
+                ? parseXmlTimeToSeconds(d, true)
+                : parseXmlTimeToSeconds(dur, false),
+              text: cleaned,
+            });
+          }
+
+          // TTML fallback: parse <p begin/end/dur> blocks with optional <s> children.
+          if (lyrics.length === 0) {
+            const pNodeRegex = /<p\b([^>]*)>([\s\S]*?)<\/p>/gi;
+            while ((match = pNodeRegex.exec(text)) !== null) {
+              const pAttrs = match[1] || "";
+              const pBody = match[2] || "";
+              const pStart =
+                readAttr(pAttrs, "begin") || readAttr(pAttrs, "start");
+              const pEnd = readAttr(pAttrs, "end");
+              const pDur = readAttr(pAttrs, "dur");
+
+              // CRITICAL: A valid TTML caption line MUST have timing attributes (begin, start, or t).
+              // An HTML <p> tag from an error page has no timing attributes and must be rejected!
+              if (
+                !pStart &&
+                !pAttrs.includes("t=") &&
+                !pAttrs.includes("begin=") &&
+                !pAttrs.includes("start=")
+              ) {
+                continue;
+              }
+
+              let lineText = "";
+              const sNodeRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
+              let sMatch;
+              while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
+                lineText += `${decodeXmlEntities(sMatch[1] || "")} `;
+              }
+
+              if (!lineText.trim()) {
+                lineText = decodeXmlEntities(pBody.replace(/<[^>]+>/g, " "));
+              }
+
+              const cleaned = cleanCaptionText(lineText);
+              if (!cleaned) continue;
+
+              const startTime = parseXmlTimeToSeconds(pStart, false);
+              let duration = parseXmlTimeToSeconds(pDur, false);
+              if (!duration && pEnd) {
+                duration = Math.max(
+                  0,
+                  parseXmlTimeToSeconds(pEnd, false) - startTime,
+                );
+              }
+
+              lyrics.push({ time: startTime, duration, text: cleaned });
+            }
+          }
+
+          if (lyrics.length > 0) {
+            log("Parsed lyrics (XML):", lyrics.length, "lines");
+            return lyrics;
+          }
+        } catch (e) {
+          log("XML parse also failed:", e);
+        }
+      }
+
+      log("Could not parse caption response as JSON or XML");
+    } catch (err) {
+      console.error("[Lyrical] Caption fetch error:", err);
+    }
   }
+
+  return null;
 }
 // Panel state
 let lyricsPanel = null;
@@ -1047,134 +1388,293 @@ let activeFetchSessionId = 0; // Prevent stale concurrent runs from clobbering s
 // Sync optimization
 const PLATFORM_OFFSET = -0.45; // YouTube's systemic delay (constant)
 let userSongOffset = 0; // Per-song correction from slider
+// Prevent an uncertain auto-sync result (or unknown -> 0 fallback) from being persisted.
+let suppressNextOffsetPersistence = false;
 let currentSyncOffset = PLATFORM_OFFSET; // Live offset (platform + user correction)
 
 async function getStoredSongOffset(
   songKey: string,
   fallbackKey?: string,
+  sourceIdOverride?: string | null,
 ): Promise<number | null> {
-  const isPortato = songKey.includes("portato");
-  const isMusixmatch = songKey.endsWith("_musixmatch");
+  const { songId, videoId, prop, flatKey } = parseSongKeyInfo(
+    songKey,
+    sourceIdOverride,
+  );
 
-  const isValidOffset = (key: string, val: any): boolean => {
+  const isValidOffset = (val: any): boolean => {
     if (typeof val !== "number" || !Number.isFinite(val)) return false;
     // Discard the known corrupt repetitive-line jump offset (~ -19.2s) on Attention (nfs8NYg7yQM)
-    // so the new monotonic auto-sync engine can calculate the true in-sync -10.8s offset!
-    if (key.includes("nfs8NYg7yQM") && Math.abs(val - (-19.2)) <= 0.25) {
+    if (songId.includes("nfs8NYg7yQM") && Math.abs(val - -19.2) <= 0.25) {
       return false;
     }
     return true;
   };
 
-  try {
-    const local = await chrome.storage.local.get("songOffsets");
-    const offsets = local?.songOffsets || {};
+  const checkStorage = (offsets: Record<string, any>): number | null => {
+    if (!offsets || typeof offsets !== "object") return null;
 
-    if (isValidOffset(songKey, offsets[songKey])) {
-      return offsets[songKey];
-    }
-    // Backward compatibility for legacy Musixmatch RichSync key
-    if (isMusixmatch) {
-      const legacyRichKey = songKey + "-richsync";
-      if (isValidOffset(legacyRichKey, offsets[legacyRichKey])) {
-        return offsets[legacyRichKey];
+    // 1. Primary check: check structured object {"Title - videoId": {"source_offset": ...}}
+    if (offsets[songId] && typeof offsets[songId] === "object") {
+      if (isValidOffset(offsets[songId][prop])) {
+        return offsets[songId][prop];
       }
     }
-    // Only fall back to generic legacy video offset if it is a meaningful NON-ZERO offset (> 0.05s)
-    // AND NOT Portato! Portato must not inherit a generic western video offset because QQ Music masters
-    // have independent pre-roll/intro timing. Portato must auto-detect its own timing.
-    if (
-      !isPortato &&
-      fallbackKey &&
-      isValidOffset(fallbackKey, offsets[fallbackKey]) &&
-      Math.abs(offsets[fallbackKey]) > 0.05
-    ) {
-      return offsets[fallbackKey];
+
+    // 2. Secondary check: check structured object by videoId {"videoId": {"source_offset": ...}}
+    if (videoId && offsets[videoId] && typeof offsets[videoId] === "object") {
+      if (isValidOffset(offsets[videoId][prop])) {
+        return offsets[videoId][prop];
+      }
     }
+
+    // 3. Fallback to direct flat key (e.g. "offset_videoId_source") for backward compatibility
+    if (isValidOffset(offsets[flatKey])) {
+      return offsets[flatKey];
+    }
+    if (isValidOffset(offsets[songKey])) {
+      return offsets[songKey];
+    }
+
+    // Legacy Musixmatch alias keys
+    if (prop.startsWith("musixmatch")) {
+      const legacyRichKey = `offset_${videoId}_musixmatch-richsync`;
+      const legacyWordKey = `offset_${videoId}_musixmatch`;
+      if (isValidOffset(offsets[legacyRichKey])) return offsets[legacyRichKey];
+      if (isValidOffset(offsets[legacyWordKey])) return offsets[legacyWordKey];
+    }
+
+    // 4. Fallback key if explicitly provided and sourceId matches
+    if (fallbackKey && isValidOffset(offsets[fallbackKey]) && Math.abs(offsets[fallbackKey]) > 0.05) {
+      // Do not allow fallbackKey to cross contaminate across different sources!
+      const currentSource = sourceIdOverride || useAppStore.getState().lyricsSource || "default";
+      if (fallbackKey.includes(currentSource)) {
+        return offsets[fallbackKey];
+      }
+    }
+
+    return null;
+  };
+
+  try {
+    const local = await chrome.storage.local.get("songOffsets");
+    const val = checkStorage(local?.songOffsets);
+    if (val !== null) return val;
   } catch {}
 
   try {
     const sync = await chrome.storage.sync.get("songOffsets");
-    const offsets = sync?.songOffsets || {};
-
-    if (isValidOffset(songKey, offsets[songKey])) {
-      return offsets[songKey];
-    }
-    if (isMusixmatch) {
-      const legacyRichKey = songKey + "-richsync";
-      if (isValidOffset(legacyRichKey, offsets[legacyRichKey])) {
-        return offsets[legacyRichKey];
-      }
-    }
-    if (
-      !isPortato &&
-      fallbackKey &&
-      isValidOffset(fallbackKey, offsets[fallbackKey]) &&
-      Math.abs(offsets[fallbackKey]) > 0.05
-    ) {
-      return offsets[fallbackKey];
-    }
+    const val = checkStorage(sync?.songOffsets);
+    if (val !== null) return val;
   } catch {}
 
   return null;
 }
 
-async function saveStoredSongOffset(songKey: string, offset: number): Promise<void> {
+async function saveStoredSongOffset(
+  songKey: string,
+  offset: number,
+  sourceIdOverride?: string | null,
+): Promise<void> {
+  const { songId, videoId, prop, flatKey } = parseSongKeyInfo(
+    songKey,
+    sourceIdOverride,
+  );
+
   try {
     const local = (await chrome.storage.local.get("songOffsets")) || {};
     const songOffsets = local.songOffsets || {};
-    songOffsets[songKey] = offset;
-    if (songKey.endsWith("_musixmatch")) {
-      songOffsets[songKey + "-richsync"] = offset;
+
+    // 1. Save in structured object: "We dont talk anymore - w12236": { "musixmatch_richsync_offset": 0.34 }
+    if (!songOffsets[songId] || typeof songOffsets[songId] !== "object") {
+      songOffsets[songId] = {};
     }
+    songOffsets[songId][prop] = offset;
+
+    // 2. Also keep flat key so legacy readers continue to find it
+    songOffsets[flatKey] = offset;
+    songOffsets[songKey] = offset;
+
+    if (flatKey.endsWith("_musixmatch")) {
+      songOffsets[flatKey + "-richsync"] = offset;
+    }
+
     await chrome.storage.local.set({ songOffsets });
+    log(
+      `[Lyrical Sync] 💾 Saved offset for "${songId}" [${prop}]: ${offset > 0 ? "+" : ""}${offset}s`,
+    );
   } catch (e) {
-    console.warn("[Lyrical Sync] Failed to save offset to local:", e);
+    warn("[Lyrical Sync] Failed to save offset to local:", e);
   }
 
   try {
     const sync = (await chrome.storage.sync.get("songOffsets")) || {};
     const songOffsets = sync.songOffsets || {};
-    songOffsets[songKey] = offset;
-    if (songKey.endsWith("_musixmatch")) {
-      songOffsets[songKey + "-richsync"] = offset;
+
+    if (!songOffsets[songId] || typeof songOffsets[songId] !== "object") {
+      songOffsets[songId] = {};
     }
+    songOffsets[songId][prop] = offset;
+    songOffsets[flatKey] = offset;
+    songOffsets[songKey] = offset;
+
+    if (flatKey.endsWith("_musixmatch")) {
+      songOffsets[flatKey + "-richsync"] = offset;
+    }
+
     await chrome.storage.sync.set({ songOffsets });
   } catch {}
 }
 
-async function getAvailableCaptionLines(): Promise<Array<{ time: number; duration?: number; text: string }> | null> {
-  // 1. Try to fetch the video's original/native language track (e.g. English ASR or matching song language)
+function requestCaptionTrackFromMainWorld(
+  track: any,
+): Promise<any[] | null> {
+  return new Promise((resolve) => {
+    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const timer = setTimeout(() => {
+      window.removeEventListener("message", handler);
+      resolve(null);
+    }, 4500);
+
+    const handler = (event: MessageEvent) => {
+      if (
+        event.source !== window ||
+        event.data?.type !== "LYRICAL_FETCH_TRACK_RESPONSE"
+      )
+        return;
+      if (event.data?.requestId !== requestId) return;
+      clearTimeout(timer);
+      window.removeEventListener("message", handler);
+      if (
+        event.data.success &&
+        Array.isArray(event.data.lyrics) &&
+        event.data.lyrics.length > 0
+      ) {
+        resolve(event.data.lyrics);
+      } else {
+        resolve(null);
+      }
+    };
+
+    window.addEventListener("message", handler);
+    const lang = String(track?.languageCode || track?.lang || "");
+    const vss = String(track?.vssId || track?.vss_id || "");
+    const isAsr = Boolean(
+      track?.isAsr || track?.kind === "asr" || vss.startsWith("a."),
+    );
+    window.postMessage(
+      {
+        type: "LYRICAL_FETCH_TRACK_REQUEST",
+        requestId,
+        trackId: vss,
+        languageCode: lang,
+        isAsr,
+      },
+      "*",
+    );
+  });
+}
+
+async function getAvailableCaptionLines(): Promise<Array<{
+  time: number;
+  duration?: number;
+  text: string;
+}> | null> {
+  const currentVid = getCurrentVideoId(currentSongInfo);
+
+  // 1. FAST PATH: Check if MAIN world already extracted captions from the player for this video
+  if (
+    Array.isArray(pendingMainWorldCaptionLyrics) &&
+    pendingMainWorldCaptionLyrics.length >= 3 &&
+    (!pendingMainWorldCaptionVideoId ||
+      pendingMainWorldCaptionVideoId === currentVid)
+  ) {
+    log(
+      `[Lyrical Auto-Sync] ⚡ Using player-extracted captions (${pendingMainWorldCaptionLyrics.length} lines)`,
+    );
+    return pendingMainWorldCaptionLyrics;
+  }
+
+  // 2. Candidate tracks from availableCaptions
   if (Array.isArray(availableCaptions) && availableCaptions.length > 0) {
-    const storeLang = (useAppStore.getState().lyricsLanguage || "").toLowerCase().split("-")[0];
+    const storeLang = (useAppStore.getState().lyricsLanguage || "")
+      .toLowerCase()
+      .split("-")[0];
 
-    const track =
-      availableCaptions.find((t: any) => {
-        const lang = String(t?.languageCode || t?.lang || "").toLowerCase();
-        const name = String(t?.name || "").toLowerCase();
-        return !name.includes("translated") && (lang === storeLang || lang.startsWith(storeLang));
-      }) ||
-      availableCaptions.find((t: any) => {
-        const name = String(t?.name || "").toLowerCase();
-        return !name.includes("translated");
-      }) ||
-      availableCaptions[0];
+    const candidateTracks: Array<{ track: any; priority: number }> = [];
+    for (const t of availableCaptions) {
+      if (!t) continue;
+      const lang = String(t?.languageCode || t?.lang || "").toLowerCase();
+      const name = String(t?.name?.simpleText || t?.name || "").toLowerCase();
+      const vss = String(t?.vssId || "").toLowerCase();
+      const isTranslated = name.includes("translated");
+      const isMatchLang = Boolean(
+        storeLang && (lang === storeLang || lang.startsWith(storeLang)),
+      );
+      const isEnglish = lang === "en" || lang.startsWith("en");
+      const isAsr =
+        name.includes("auto") || vss.startsWith("a.") || vss.includes("asr");
 
-    const trackUrl = track?.baseUrl || track?.url;
-    if (trackUrl) {
+      let priority = 10;
+      if (isMatchLang && !isAsr && !isTranslated) priority = 1;
+      else if (isEnglish && !isAsr && !isTranslated) priority = 2;
+      else if (isMatchLang && isAsr) priority = 3;
+      else if (isEnglish && isAsr) priority = 4;
+      else if (!isTranslated && !isAsr) priority = 5;
+      else priority = 6;
+
+      candidateTracks.push({ track: t, priority });
+    }
+
+    candidateTracks.sort((a, b) => a.priority - b.priority);
+
+    // Try direct fetch first on candidate tracks (up to 3 tracks)
+    for (const { track } of candidateTracks.slice(0, 3)) {
+      const trackUrl = track?.baseUrl || track?.url;
+      if (!trackUrl) continue;
       try {
-        const fetched = await fetchCaptionsFromContentScript(trackUrl);
-        if (Array.isArray(fetched) && fetched.length > 0) {
+        const fetched = await fetchCaptionsFromContentScript(trackUrl, track);
+        if (Array.isArray(fetched) && fetched.length >= 3) {
+          log(
+            `[Lyrical Auto-Sync] Selected caption track "${track?.name?.simpleText || track?.name || track?.languageCode || "captions"}" (${fetched.length} lines)`,
+          );
           return fetched;
         }
       } catch (err) {
-        console.warn("[Lyrical Auto-Sync] Could not fetch caption track for auto-sync:", err);
+        warn("[Lyrical Auto-Sync] Candidate direct caption fetch failed:", err);
+      }
+    }
+
+    // 3. Fallback: If direct fetch failed (e.g. YouTube returned 0 bytes / empty body due to PO token / session),
+    // request the top candidate track directly from the MAIN World extractor via the player API!
+    const bestCandidate = candidateTracks[0]?.track;
+    if (bestCandidate) {
+      try {
+        log(
+          `[Lyrical Auto-Sync] Direct fetch returned no lines; requesting "${bestCandidate?.name?.simpleText || bestCandidate?.languageCode || "captions"}" from Main World player API...`,
+        );
+        const mainWorldFetched =
+          await requestCaptionTrackFromMainWorld(bestCandidate);
+        if (Array.isArray(mainWorldFetched) && mainWorldFetched.length >= 3) {
+          log(
+            `[Lyrical Auto-Sync] Successfully received captions from Main World player (${mainWorldFetched.length} lines)`,
+          );
+          return mainWorldFetched;
+        }
+      } catch (err) {
+        warn("[Lyrical Auto-Sync] Main World track request failed:", err);
       }
     }
   }
 
-  // 2. Fallback to active player caption track (whatever is currently active on the player)
-  if (Array.isArray(pendingMainWorldCaptionLyrics) && pendingMainWorldCaptionLyrics.length > 0) {
+  // 4. Final check: if pendingMainWorldCaptionLyrics arrived while waiting
+  if (
+    Array.isArray(pendingMainWorldCaptionLyrics) &&
+    pendingMainWorldCaptionLyrics.length >= 3
+  ) {
+    log(
+      `[Lyrical Auto-Sync] Using player-extracted captions fallback (${pendingMainWorldCaptionLyrics.length} lines)`,
+    );
     return pendingMainWorldCaptionLyrics;
   }
 
@@ -1184,114 +1684,351 @@ async function getAvailableCaptionLines(): Promise<Array<{ time: number; duratio
 async function tryAutoDetectOffset(
   lyrics: any[],
   songKey: string,
+  explicitVideoId?: string | null,
 ): Promise<number | null> {
-  if (!Array.isArray(lyrics) || lyrics.length === 0) return null;
-
-  // Never auto-detect on native YouTube captions: they are already 1:1 synced to the video
-  const currentSource = useAppStore.getState().lyricsSource;
-  if (currentSource === "captions") {
-    log("[Lyrical Auto-Sync] Active source is YouTube Captions; offset is locked to 0.0s");
+  // 1. Immediate Ad Guard
+  if (useAppStore.getState().isAdPlaying || isYouTubeAdPlaying()) {
+    log("[Lyrical Auto-Sync] Skipping auto-sync while ad is playing");
     return null;
   }
 
-  const videoId = new URLSearchParams(window.location.search).get("v") || "";
-  let sponsorBlockResult: { offset: number; source: string; description?: string } | null = null;
-  let captionsResult: { detectedOffset: number; confidence: number; matchedLyricText: string; matchedCaptionText: string } | null = null;
+  if (!Array.isArray(lyrics) || lyrics.length === 0) return null;
+
+  const currentSource = useAppStore.getState().lyricsSource;
+  if (currentSource === "captions") {
+    log(
+      "[Lyrical Auto-Sync] Active source is YouTube Captions; offset is locked to 0.0s",
+    );
+    return null;
+  }
+
+  // Unless this run proves the offset strongly enough to persist, the next
+  // store update from this auto-sync attempt must not save a guessed 0/SponsorBlock value.
+  suppressNextOffsetPersistence = true;
+
+  const videoId = explicitVideoId || getCurrentVideoId(currentSongInfo) || "";
+
+  type SponsorEvidence = {
+    offset: number;
+    source: string;
+    description?: string;
+    outroStart?: number;
+  } | null;
+
+  let sponsorBlockResult: SponsorEvidence = null;
+  let captionsResult: ReturnType<typeof detectAutoSyncOffset> = null;
 
   try {
-    // 1. Check non-caption intro indicators (SponsorBlock 'music_offtopic' + YouTube chapters)
-    if (videoId) {
-      sponsorBlockResult = await detectNonCaptionIntroOffset(videoId);
-    }
+    // Run both evidence sources independently. Neither one is allowed to
+    // overwrite the other before the final fusion decision.
+    const [sbResult, captionLines] = await Promise.all([
+      videoId ? detectNonCaptionIntroOffset(videoId) : Promise.resolve(null),
+      getAvailableCaptionLines(),
+    ]);
 
-    // 2. Cross-correlate with native YouTube caption cues if available
-    const captionLines = await getAvailableCaptionLines();
+    sponsorBlockResult = sbResult;
+
     if (captionLines && captionLines.length > 0) {
       captionsResult = detectAutoSyncOffset(lyrics, captionLines);
     }
 
-    // Find the timestamp of the first actual sung vocal line in this source
-    const firstVocalLine = lyrics.find(
-      (l) => !l.isInstrumental && (l.text || "").trim().length > 0,
-    );
-    const firstVocalTime =
-      firstVocalLine && typeof firstVocalLine.time === "number"
-        ? firstVocalLine.time
-        : 0;
+    const sbOffset =
+      sponsorBlockResult && Number.isFinite(sponsorBlockResult.offset)
+        ? sponsorBlockResult.offset
+        : null;
 
-    // 📊 Log statement showing SponsorBlock offset, Captions offset, and first vocal line
-    const sbLogStr =
-      sponsorBlockResult && sponsorBlockResult.offset > 0
-        ? `+${sponsorBlockResult.offset}s (${sponsorBlockResult.source})`
-        : "0.0s (No non-music intro)";
-
-    const capLogStr =
-      captionsResult && captionsResult.confidence >= 0.68
-        ? `${captionsResult.detectedOffset > 0 ? "+" : ""}${captionsResult.detectedOffset}s (confidence: ${captionsResult.confidence})`
-        : "Inconclusive / None";
+    const captionOffset =
+      captionsResult && Number.isFinite(captionsResult.detectedOffset)
+        ? captionsResult.detectedOffset
+        : null;
 
     console.groupCollapsed?.(
       `[Lyrical Auto-Sync] 📊 Sync Analysis for "${currentSongInfo?.title || videoId}" (${currentSource || "source"})`,
     );
-    console.log(`🎬 SponsorBlock Intro Offset: ${sbLogStr}`);
-    console.log(`💬 Captions Auto-Sync Offset: ${capLogStr}`);
-    console.log(`🎵 First Vocal Time in Source: ${firstVocalTime.toFixed(2)}s`);
+
+    console.log(
+      "🎬 SponsorBlock evidence:",
+      sbOffset !== null
+        ? `${sbOffset > 0 ? "+" : ""}${sbOffset.toFixed(2)}s`
+        : "None",
+      sponsorBlockResult?.source || "",
+    );
+
+    console.log(
+      "💬 Caption evidence:",
+      captionsResult
+        ? {
+            offset: captionOffset,
+            rawOffset: captionsResult.rawOffset,
+            confidence: captionsResult.confidence,
+            matches: captionsResult.matchCount,
+            regions: captionsResult.regionCount,
+            spread: captionsResult.offsetSpread,
+            similarity: captionsResult.medianSimilarity,
+          }
+        : "None",
+    );
 
     let chosenOffset: number | null = null;
-    let chosenSource = "Default In-Sync";
+    let chosenConfidence = 0;
+    let chosenSource = "Unknown";
+    let shouldPersist = false;
 
-    // PRIORITY 1: High-confidence Captions Cross-Correlation
-    // Captions compare the actual spoken words in YouTube audio to the lyrics text of THIS source.
-    // If it confidently finds an offset (even 0.0s), it represents the true ground truth for this source.
-    if (captionsResult && captionsResult.confidence >= 0.68) {
-      chosenOffset = captionsResult.detectedOffset;
-      chosenSource = `Captions Cross-Correlation (${Math.round(captionsResult.confidence * 100)}% conf)`;
-    }
-    // PRIORITY 2: SponsorBlock / Chapter Intro Skip
-    // Only apply if the lyrics have NOT already factored in the video intro!
-    else if (sponsorBlockResult && sponsorBlockResult.offset > 0) {
-      const sbOffset = sponsorBlockResult.offset;
-      // If the first vocal line already begins AFTER the intro segment (with 1.5s tolerance),
-      // the lyrics were created specifically for the music video and are already synced!
-      if (firstVocalTime >= sbOffset - 1.5) {
-        console.log(
-          `🛡️ Source first vocal (${firstVocalTime.toFixed(1)}s) is >= intro skip (${sbOffset.toFixed(1)}s - 1.5s). Source appears already synced to video! Retaining 0.0s.`,
+    const CAPTION_STRONG = 0.72;
+    const CAPTION_MEDIUM = 0.6;
+    const CAPTION_LARGE_OFFSET_STRONG = 0.82;
+    const SPONSOR_AGREEMENT = 1.25;
+
+    const firstVocalTime = getFirstVocalLyricTime(lyrics);
+
+    if (captionsResult && captionOffset !== null) {
+      // Captions directly compare lyric text against the video's actual timed
+      // speech. Therefore they remain the primary source whenever validated.
+      let finalOffsetToUse = captionOffset;
+
+      // Calibration: captionOffset = (captionTime - lyricTime).
+      // 1. YouTube ASR subtitles appear ~0.35s before vocal articulation (lead time).
+      // 2. Playback engine subtracts PLATFORM_OFFSET (-0.45s) from userSongOffset.
+      // Calibrate captionOffset into userSongOffset space:
+      if (Math.abs(captionOffset) > 0.5) {
+        const ASR_VOCAL_LEAD = 0.35;
+        finalOffsetToUse = Number(
+          (captionOffset - PLATFORM_OFFSET + ASR_VOCAL_LEAD).toFixed(2),
         );
-        chosenOffset = 0.0;
-        chosenSource = `Pre-Synced to Video (SponsorBlock intro detected but bypassed)`;
+      }
+
+      // Deadband exception: If detector normalized to 0, but SponsorBlock and raw caption offset
+      // strongly agree on a micro-offset (e.g. +0.48s and +0.50s), use the agreed micro-offset!
+      if (
+        captionOffset === 0 &&
+        typeof captionsResult.rawOffset === "number" &&
+        captionsResult.rawOffset !== 0 &&
+        sbOffset !== null &&
+        Math.abs(captionsResult.rawOffset - sbOffset) <= 0.35 &&
+        captionsResult.confidence >= 0.7
+      ) {
+        finalOffsetToUse = captionsResult.rawOffset;
+        chosenConfidence = Math.min(0.99, captionsResult.confidence + 0.1);
+        chosenSource = `Captions + SponsorBlock agreement on micro-offset (${finalOffsetToUse}s)`;
       } else {
-        // Lyrics start before the music begins in the video -> Album-timed lyrics needing offset
-        chosenOffset = sbOffset;
-        chosenSource = `SponsorBlock (${sponsorBlockResult.source})`;
+        chosenConfidence = captionsResult.confidence;
+        chosenSource = `Captions (${Math.round(captionsResult.confidence * 100)}% validated)`;
+      }
+
+      chosenOffset = finalOffsetToUse;
+
+      if (sbOffset !== null) {
+        const difference = Math.abs(finalOffsetToUse - sbOffset);
+
+        if (difference <= SPONSOR_AGREEMENT) {
+          chosenConfidence = Math.min(0.99, chosenConfidence + 0.1);
+          chosenSource = `Captions + SponsorBlock agreement (${difference.toFixed(2)}s apart)`;
+        } else if (
+          Math.abs(finalOffsetToUse) <= 0.5 &&
+          firstVocalTime !== null &&
+          firstVocalTime >= sbOffset - 3.0
+        ) {
+          // Pre-synced lyrics (e.g. LRCLib video-synced):
+          // Captions validate near-zero offset (0.00s) because lyrics already start after the intro!
+          // SponsorBlock detects the video's intro segment, but the lyrics already account for it.
+          // This is NOT a disagreement; it confirms the lyrics are natively synced to the video.
+          chosenOffset = 0;
+          chosenConfidence = Math.max(0.85, captionsResult.confidence);
+          chosenSource = `Captions validated pre-synced lyrics (0.00s, intro ${sbOffset.toFixed(1)}s already included)`;
+        } else {
+          const isLargeCaptionOffset = Math.abs(finalOffsetToUse) > 30;
+          const largeOffsetEvidenceIsStrong =
+            !isLargeCaptionOffset ||
+            (captionsResult.confidence >= CAPTION_LARGE_OFFSET_STRONG &&
+              captionsResult.matchCount >= 5 &&
+              captionsResult.regionCount >= 3 &&
+              captionsResult.medianSimilarity >= 0.78 &&
+              captionsResult.offsetSpread <= 0.45);
+
+          // A large caption offset that strongly disagrees with an independent
+          // intro boundary is a common repeated-lyrics false match. Do not let
+          // it overwrite the source-specific timing unless the detector has
+          // unusually strong evidence for the large offset.
+          if (!largeOffsetEvidenceIsStrong) {
+            log(
+              "[Lyrical Auto-Sync] Rejecting suspicious large caption offset:",
+              {
+                captionOffset: finalOffsetToUse,
+                sponsorBlockOffset: sbOffset,
+                difference,
+                confidence: captionsResult.confidence,
+                matches: captionsResult.matchCount,
+                regions: captionsResult.regionCount,
+                similarity: captionsResult.medianSimilarity,
+                spread: captionsResult.offsetSpread,
+              },
+            );
+            chosenOffset = null;
+            chosenConfidence = 0;
+            chosenSource = "Suspicious large caption offset";
+          } else {
+            // Do NOT average conflicting evidence. SponsorBlock marks a segment
+            // boundary, not a lyric alignment, so it is secondary evidence.
+            log(
+              "[Lyrical Auto-Sync] SponsorBlock disagrees with validated captions:",
+              JSON.stringify({
+                captionOffset: finalOffsetToUse,
+                sponsorBlockOffset: sbOffset,
+                difference,
+              }),
+            );
+
+            if (captionsResult.confidence >= CAPTION_STRONG) {
+              chosenSource = `Captions only (SponsorBlock disagrees by ${difference.toFixed(2)}s)`;
+            } else if (captionsResult.confidence < CAPTION_MEDIUM) {
+              // Weak caption evidence + conflicting SponsorBlock is not safe enough.
+              chosenOffset = null;
+              chosenConfidence = 0;
+              chosenSource = "Conflicting weak evidence";
+            }
+          }
+        }
+      }
+
+      // If captions validated near-zero offset with multiple matches, persist 0.0s!
+      if (
+        chosenOffset !== null &&
+        Math.abs(chosenOffset) <= 0.5 &&
+        captionsResult.matchCount >= 2
+      ) {
+        chosenOffset = 0;
+        shouldPersist = true;
+      } else {
+        shouldPersist =
+          chosenOffset !== null && chosenConfidence >= CAPTION_STRONG;
+      }
+    } else if (sbOffset !== null) {
+      // Conservative SponsorBlock Fallback:
+      // Only use SponsorBlock if:
+      // 1. Captions are unavailable or unusable
+      // 2. The offset is within a sensible intro range (1.5s <= offset <= 60s)
+      // 3. User does not already have a stored custom offset
+      const isSensibleIntro = sbOffset >= 1.5 && sbOffset <= 60;
+      let hasStoredCustomOffset = false;
+      try {
+        const stored = await getStoredSongOffset(songKey);
+        hasStoredCustomOffset = stored !== null && Math.abs(stored) > 0.05;
+      } catch {}
+
+      if (isSensibleIntro && !hasStoredCustomOffset) {
+        const lastVocalTime = getLastVocalLyricTime(lyrics);
+        const video = getActiveMediaVideoElement();
+        const videoDuration =
+          video?.duration && Number.isFinite(video.duration) && video.duration > 0
+            ? video.duration
+            : (Number(currentSongInfo?.duration) || 0);
+
+        // Check if lyrics are already pre-synced to the video:
+        // Lyrics are pre-synced ONLY IF:
+        // 1. Adding sbOffset would overshoot the total video duration (+2s buffer), OR
+        // 2. A distinct outro segment exists AND the unshifted lyrics already reach the outro
+        //    (within 5s), AND adding sbOffset overshoots outroStart by a substantial margin (>= 5s or 70% of intro).
+        // 3. Pre-synced lyrics CANNOT have their first vocal before the intro skit ends (sbOffset - 1.5s).
+        const startsBeforeIntro =
+          firstVocalTime !== null &&
+          sbOffset >= 3.0 &&
+          firstVocalTime < sbOffset - 1.5;
+
+        const overshootsVideo =
+          lastVocalTime !== null &&
+          videoDuration > 0 &&
+          lastVocalTime + sbOffset > videoDuration + 2.0;
+
+        const outroStart = sponsorBlockResult?.outroStart;
+        const overshootsOutro =
+          !startsBeforeIntro &&
+          typeof outroStart === "number" &&
+          outroStart > 0 &&
+          lastVocalTime !== null &&
+          lastVocalTime >= outroStart - 5.0 &&
+          lastVocalTime + sbOffset > outroStart + Math.max(10.0, sbOffset * 0.85);
+
+        const wouldOvershoot =
+          !startsBeforeIntro && (overshootsVideo || overshootsOutro);
+
+        if (wouldOvershoot) {
+          // The lyrics already span the full video timeline; do not double-delay them.
+          chosenOffset = 0;
+          chosenConfidence = 0.7;
+          chosenSource = `Lyrics pre-synced to video (last vocal ${lastVocalTime?.toFixed(1)}s + intro ${sbOffset.toFixed(1)}s exceeds bounds)`;
+          shouldPersist = true;
+          log(
+            `[Lyrical Auto-Sync] 🎯 Lyrics span full video timeline. Locking offset to 0.00s.`,
+          );
+        } else {
+          chosenOffset = sbOffset;
+          chosenConfidence = 0.65;
+          chosenSource = `SponsorBlock fallback (${sponsorBlockResult?.source || "segment"})`;
+          shouldPersist = true;
+
+          console.log(
+            `🛡️ Applied SponsorBlock intro offset (+${sbOffset.toFixed(2)}s); album lyrics fit video music window.`,
+          );
+        }
+      } else {
+        console.log(
+          `🛡️ Skipping SponsorBlock offset (+${sbOffset}s): ${
+            hasStoredCustomOffset
+              ? "user/stored offset already exists"
+              : "offset outside sensible intro range (1.5s-60s)"
+          }`,
+        );
+        chosenOffset = null;
+        chosenConfidence = 0;
+        chosenSource = "Rejected SponsorBlock estimate";
       }
     }
-    // PRIORITY 3: Moderate captions confidence when supported by SponsorBlock
-    else if (
-      captionsResult &&
-      captionsResult.confidence >= 0.50 &&
-      sponsorBlockResult &&
-      sponsorBlockResult.offset > 0 &&
-      Math.abs(captionsResult.detectedOffset - sponsorBlockResult.offset) <= 2.5
-    ) {
-      chosenOffset = captionsResult.detectedOffset;
-      chosenSource = "Captions Cross-Correlation (confirmed by SponsorBlock)";
+
+    // 2. Exit Ad Guard: check if an ad started while async requests were resolving
+    if (useAppStore.getState().isAdPlaying || isYouTubeAdPlaying()) {
+      log(
+        "[Lyrical Auto-Sync] Aborting offset application: ad started during detection",
+      );
+      console.groupEnd?.();
+      suppressNextOffsetPersistence = false;
+      return null;
     }
 
     if (chosenOffset !== null) {
+      const safeOffset = Number(
+        Math.min(120, Math.max(-120, chosenOffset)).toFixed(2),
+      );
+
       console.log(
-        `🎯 Final Applied Offset: ${chosenOffset > 0 ? "+" : ""}${chosenOffset}s (via ${chosenSource})`,
+        `🎯 Final Applied Offset: ${safeOffset > 0 ? "+" : ""}${safeOffset}s via ${chosenSource}`,
+      );
+      console.log(
+        `💾 Persisted: ${shouldPersist ? "yes" : "no (temporary/uncertain)"}`,
       );
       console.groupEnd?.();
-      await saveStoredSongOffset(songKey, chosenOffset);
-      return chosenOffset;
+
+      if (shouldPersist) {
+        suppressNextOffsetPersistence = false;
+        await saveStoredSongOffset(songKey, safeOffset);
+      }
+
+      return safeOffset;
     }
 
-    console.log("🎯 Final Applied Offset: 0.00s (Default In-Sync)");
+    // IMPORTANT: unknown is NOT the same as confidently synced at 0s.
+    // Returning null allows late-caption recovery to try again.
+    console.log(
+      "🎯 No sufficiently validated offset. Leaving result unknown; no 0s guess saved.",
+    );
     console.groupEnd?.();
   } catch (err) {
-    console.warn("[Lyrical Auto-Sync] Auto-detection error:", err);
+    log("[Lyrical Auto-Sync] Auto-detection error:", err);
   }
 
+  // No offset was applied, so there is no store update for the suppression
+  // flag to consume. Clear it explicitly so it cannot affect a later manual
+  // or source change.
+  suppressNextOffsetPersistence = false;
   return null;
 }
 
@@ -1322,6 +2059,32 @@ function hasLocalStorageApi() {
 // VIDEO-DRIVEN INJECTION - The only stable signal on YouTube first load
 // YouTube's DOM is unstable on first load. The <video> element with readyState >= 2
 // is the only reliable indicator that the watch layout is finalized.
+export function getActiveMediaVideoElement(): HTMLVideoElement | null {
+  // 1. If in miniplayer, prefer the miniplayer's video
+  const miniVideo = document.querySelector<HTMLVideoElement>("ytd-miniplayer video");
+  if (miniVideo) return miniVideo;
+
+  // 2. Main YouTube watch video (exclude inline hover preview players)
+  const player = document.getElementById("movie_player");
+  if (player && !player.closest("ytd-inline-preview-player, #inline-preview-player")) {
+    const v = player.querySelector<HTMLVideoElement>("video");
+    if (v) return v;
+  }
+
+  const watchFlexyVideo = document.querySelector<HTMLVideoElement>("ytd-watch-flexy video");
+  if (watchFlexyVideo) return watchFlexyVideo;
+
+  // 3. Fallback: filter out any video elements belonging to inline previews or thumbnail hover cards
+  const allVideos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"));
+  for (const v of allVideos) {
+    if (!v.closest("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")) {
+      return v;
+    }
+  }
+
+  return document.querySelector("video");
+}
+
 let waitForVideoInProgress = false;
 function waitForStableVideo(callback) {
   if (waitForVideoInProgress) {
@@ -1335,8 +2098,8 @@ function waitForStableVideo(callback) {
 
   const check = () => {
     checkCount++;
-    const video = document.querySelector("video");
-    const secondary = document.querySelector("#secondary");
+    const video = getActiveMediaVideoElement();
+    const secondary = findVisibleSecondaryColumn() || document.querySelector("#secondary");
 
     // Log every 60 frames (~1 second) for debugging
     if (checkCount % 60 === 0) {
@@ -1445,6 +2208,321 @@ function ensureKaraokeOverlay() {
   log("✅ Karaoke overlay initialized and mounted");
 }
 
+let miniCompanionElement: HTMLElement | null = null;
+let miniplayerObserver: MutationObserver | null = null;
+let miniplayerPollInterval: any = null;
+let adObserver: MutationObserver | null = null;
+
+function isYouTubeAdPlaying(): boolean {
+  if (!window.location.hostname.includes("youtube.com")) return false;
+  const player = document.getElementById("movie_player");
+  if (!player) return false;
+  const hasAdClass =
+    player.classList?.contains("ad-showing") ||
+    player.classList?.contains("ad-interrupting");
+  const adModule = player.querySelector(".video-ads.ytp-ad-module");
+  const hasAdChildren = Boolean(adModule && adModule.children.length > 0);
+  const hasAdOverlay = Boolean(
+    player.querySelector(
+      ".ytp-ad-player-overlay, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-ad-preview-container",
+    ),
+  );
+  return Boolean(hasAdClass || (hasAdChildren && hasAdOverlay));
+}
+
+function setupAdObserver() {
+  if (adObserver) return;
+  const player = document.getElementById("movie_player");
+  if (!player) return;
+
+  let prevAdState = isYouTubeAdPlaying();
+  useAppStore.getState().setIsAdPlaying(prevAdState);
+
+  adObserver = new MutationObserver(() => {
+    const currentlyAd = isYouTubeAdPlaying();
+    if (currentlyAd !== prevAdState) {
+      prevAdState = currentlyAd;
+      useAppStore.getState().setIsAdPlaying(currentlyAd);
+      log(
+        `[Lyrical Ad Observer] Ad state changed: ${currentlyAd ? "AD PLAYING" : "AD ENDED"}`,
+      );
+      if (!currentlyAd) {
+        // Ad just finished! Automatically trigger lyrics fetch for real track
+        setTimeout(() => {
+          const info = window.getSongInfoFromPage?.();
+          if (info && !info.isAd && info.title) {
+            autoFetchLyrics(info, { reason: "ad finished" });
+          }
+        }, 400);
+      } else {
+        useAppStore.setState({
+          isLoading: true,
+          headerText: "Ad in progress...",
+        });
+      }
+    }
+  });
+
+  adObserver.observe(player, {
+    attributes: true,
+    attributeFilter: ["class"],
+    childList: true,
+    subtree: true,
+  });
+}
+
+function getCurrentVideoId(songInfo?: any): string | null {
+  const isWatchUrl =
+    window.location.hostname.includes("youtube.com") &&
+    window.location.pathname.includes("/watch");
+
+  if (isWatchUrl) {
+    const urlV = new URLSearchParams(window.location.search).get("v");
+    if (urlV) return urlV;
+  } else {
+    // On non-watch page (home feed, etc.), ONLY check miniplayer!
+    const miniLink = document.querySelector<HTMLAnchorElement>(
+      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']",
+    );
+    if (miniLink?.href) {
+      try {
+        const v = new URL(miniLink.href).searchParams.get("v");
+        if (v) return v;
+      } catch {}
+    }
+  }
+
+  if (songInfo?.videoId) return songInfo.videoId;
+  if (currentSongInfo?.videoId) return currentSongInfo.videoId;
+  const storeSongInfo = useAppStore.getState().songInfo;
+  if (storeSongInfo?.videoId) return storeSongInfo.videoId;
+
+  if (isWatchUrl) {
+    try {
+      const player = document.getElementById("movie_player") as any;
+      if (player && !player.closest?.("ytd-inline-preview-player, #inline-preview-player")) {
+        const playerV = player?.getVideoData?.()?.video_id;
+        if (playerV) return playerV;
+      }
+    } catch {}
+  }
+
+  return null;
+}
+
+function isMiniplayerActive(): boolean {
+  const isWatchUrl =
+    window.location.href.includes("/watch") &&
+    window.location.href.includes("v=");
+  if (isWatchUrl) return false;
+
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return false;
+
+  const hasActive = mini.hasAttribute("active");
+  const isVisible =
+    (mini as HTMLElement).offsetParent !== null ||
+    window.getComputedStyle(mini).display !== "none";
+  const hasVideo =
+    !!mini.querySelector("video") || !!document.querySelector("video");
+
+  return (hasActive || isVisible) && hasVideo;
+}
+
+function ensureMiniCompanion() {
+  const showMiniCompanion = useAppStore.getState().showMiniCompanion ?? true;
+  if (!showMiniCompanion) {
+    removeMiniCompanion();
+    return;
+  }
+
+  if (document.getElementById("lyrical-mini-companion-wrapper")) {
+    return;
+  }
+
+  // Ensure song info and lyrics are fetched if not present
+  const currentSongInfo = useAppStore.getState().songInfo;
+  const stateLyrics = useAppStore.getState().lyrics;
+  if (!currentSongInfo || !stateLyrics?.length) {
+    const info = window.getSongInfoFromPage?.();
+    if (info?.title && !info.isAd) {
+      autoFetchLyrics(info);
+    }
+  } else {
+    // If lyrics are already loaded, ensure lyrics timer is active on the miniplayer video
+    startLyricsTimer(stateLyrics);
+  }
+
+  const wrapper = document.createElement("div");
+  wrapper.id = "lyrical-mini-companion-wrapper";
+  wrapper.style.position = "fixed";
+  wrapper.style.inset = "0";
+  wrapper.style.width = "100%";
+  wrapper.style.height = "100%";
+  wrapper.style.pointerEvents = "none";
+  wrapper.style.zIndex = "2200";
+
+  const shadowRoot = wrapper.attachShadow({ mode: "open" });
+  const style = document.createElement("style");
+  style.textContent = KARAOKE_SHADOW_STYLES;
+  shadowRoot.appendChild(style);
+
+  const mountPoint = document.createElement("div");
+  mountPoint.id = "lyrical-mini-companion-root";
+  mountPoint.style.position = "absolute";
+  mountPoint.style.inset = "0";
+  mountPoint.style.pointerEvents = "none";
+  shadowRoot.appendChild(mountPoint);
+
+  const root = createRoot(mountPoint);
+  root.render(
+    <MiniCompanion
+      onDismiss={() => {
+        removeMiniCompanion(true);
+      }}
+    />,
+  );
+  (wrapper as any)._reactRoot = root;
+
+  document.body.appendChild(wrapper);
+  miniCompanionElement = wrapper;
+  log("✅ Mini Companion mounted above miniplayer");
+}
+
+let isMiniCompanionDismissed = false;
+let lastMiniplayerSongKey: string | null = null;
+let lastMiniplayerAdState: boolean | null = null;
+
+function removeMiniCompanion(isUserDismissed = false) {
+  if (isUserDismissed) {
+    isMiniCompanionDismissed = true;
+  }
+  const existing = document.getElementById("lyrical-mini-companion-wrapper");
+  if (existing) {
+    if ((existing as any)._reactRoot) {
+      (existing as any)._reactRoot.unmount();
+    }
+    existing.remove();
+  }
+  miniCompanionElement = null;
+}
+
+function checkAndManageMiniCompanion() {
+  const isWatchUrl =
+    window.location.href.includes("/watch") &&
+    window.location.href.includes("v=");
+
+  if (isWatchUrl) {
+    isMiniCompanionDismissed = false;
+    removeMiniCompanion();
+    ensureWatchPanelMounted();
+    return;
+  }
+
+  const showMiniCompanion = useAppStore.getState().showMiniCompanion ?? true;
+  if (!showMiniCompanion || isMiniCompanionDismissed) {
+    removeMiniCompanion();
+    return;
+  }
+
+  if (isMiniplayerActive()) {
+    ensureMiniCompanion();
+  } else {
+    removeMiniCompanion();
+  }
+}
+
+function checkMiniplayerSongChange() {
+  if (!isMiniplayerActive()) return;
+
+  // Check Ad state in miniplayer
+  const isAd = isYouTubeAdPlaying();
+  if (isAd !== lastMiniplayerAdState) {
+    lastMiniplayerAdState = isAd;
+    useAppStore.getState().setIsAdPlaying(isAd);
+    if (isAd) {
+      useAppStore.setState({
+        isLoading: true,
+        headerText: "Ad in progress...",
+      });
+    } else {
+      // Ad finished, fetch real track
+      setTimeout(() => {
+        const info = window.getSongInfoFromPage?.();
+        if (info && !info.isAd && info.title) {
+          autoFetchLyrics(info, { reason: "miniplayer ad ended" });
+        }
+      }, 350);
+    }
+  }
+
+  if (isAd) return;
+
+  const info = window.getSongInfoFromPage?.();
+  if (!info || !info.title) return;
+
+  // Guard: Validate against the actual miniplayer video to prevent hover-preview
+  // thumbnails from changing the lyrics. The miniplayer DOM always has an anchor
+  // with the real playing video's ID.
+  try {
+    const miniLink = document.querySelector<HTMLAnchorElement>(
+      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer .ytp-title-link[href*='watch?v=']",
+    );
+    if (miniLink?.href) {
+      const match = miniLink.href.match(/[?&]v=([^&]+)/);
+      const miniVideoId = match?.[1];
+      if (miniVideoId && info.videoId && miniVideoId !== info.videoId) {
+        // The info is from a hover preview, not the actual miniplayer video — skip
+        return;
+      }
+    }
+  } catch {}
+
+  const songKey = `${info.artist || ""}_${info.title || ""}`;
+  if (songKey && songKey !== lastMiniplayerSongKey) {
+    lastMiniplayerSongKey = songKey;
+    isMiniCompanionDismissed = false; // Reset dismissal on new track
+    log("[Lyrical Miniplayer] 🎵 New song detected in miniplayer:", songKey);
+    // Purge stale captions immediately to prevent cross-song desync
+    availableCaptions = [];
+    pendingMainWorldCaptionLyrics = null;
+    pendingMainWorldCaptionTrack = null;
+    pendingMainWorldCaptionLanguage = null;
+    pendingMainWorldCaptionVideoId = null;
+    mainWorldCaptionTracksVideoId = null;
+    autoFetchLyrics(info, { reason: "miniplayer song change" });
+  }
+}
+
+function setupMiniplayerObserver() {
+  if (miniplayerObserver) return;
+  const target =
+    document.querySelector("ytd-miniplayer") ||
+    document.querySelector("ytd-app") ||
+    document.body;
+
+  if (target) {
+    miniplayerObserver = new MutationObserver(() => {
+      checkAndManageMiniCompanion();
+      checkMiniplayerSongChange();
+    });
+
+    miniplayerObserver.observe(target, {
+      attributes: true,
+      attributeFilter: ["active", "hidden", "style", "class"],
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  if (!miniplayerPollInterval) {
+    miniplayerPollInterval = setInterval(() => {
+      checkAndManageMiniCompanion();
+      checkMiniplayerSongChange();
+    }, 800);
+  }
+}
+
 function findVisibleSecondaryColumn() {
   const secondaries = document.querySelectorAll("#secondary");
   for (const s of secondaries) {
@@ -1512,9 +2590,59 @@ function applyWrapperPlacement(wrapper = lyricsPanel) {
     wrapper.style.right = "auto";
 
     const secondary = findVisibleSecondaryColumn();
-    if (secondary && wrapper.parentElement !== secondary) {
-      secondary.insertBefore(wrapper, secondary.firstChild);
+    if (secondary) {
+      const targetContainer =
+        secondary.querySelector<HTMLElement>("#secondary-inner") || secondary;
+      if (wrapper.parentElement !== targetContainer || targetContainer.firstChild !== wrapper) {
+        targetContainer.insertBefore(wrapper, targetContainer.firstChild);
+      }
     }
+  }
+}
+
+let secondaryColumnObserver: MutationObserver | null = null;
+
+function ensureWatchPanelMounted() {
+  if (!isStandardYouTubeWatchPage()) return;
+  const state = useAppStore.getState();
+  const isFloatingAllowed = state.displayMode === "floating";
+  if (isFloatingAllowed) return;
+
+  const secondary = findVisibleSecondaryColumn();
+  if (!secondary) return;
+
+  const targetContainer =
+    secondary.querySelector<HTMLElement>("#secondary-inner") || secondary;
+  const existing = document.getElementById("lyrical-panel-wrapper");
+
+  if (!existing || !document.body.contains(existing)) {
+    log("[Lyrical Panel] Panel detached from watch layout, re-injecting...");
+    injectIntoYouTube();
+  } else if (existing.parentElement !== targetContainer || targetContainer.firstChild !== existing) {
+    log("[Lyrical Panel] Moving panel back to top of secondary container...");
+    targetContainer.insertBefore(existing, targetContainer.firstChild);
+  }
+
+  // Set up observer on targetContainer to survive playlist mounting/DOM churn
+  if (!secondaryColumnObserver && targetContainer) {
+    secondaryColumnObserver = new MutationObserver(() => {
+      if (!isStandardYouTubeWatchPage()) {
+        secondaryColumnObserver?.disconnect();
+        secondaryColumnObserver = null;
+        return;
+      }
+      const panel = document.getElementById("lyrical-panel-wrapper");
+      const currentContainer =
+        findVisibleSecondaryColumn()?.querySelector<HTMLElement>("#secondary-inner") ||
+        findVisibleSecondaryColumn();
+      if (currentContainer && (!panel || !document.body.contains(panel) || panel.parentElement !== currentContainer || currentContainer.firstChild !== panel)) {
+        ensureWatchPanelMounted();
+      }
+    });
+
+    secondaryColumnObserver.observe(targetContainer, {
+      childList: true,
+    });
   }
 }
 
@@ -2085,7 +3213,11 @@ async function persistLyricsVersions() {
         ? new URLSearchParams(window.location.search).get("v")
         : null) ||
       null;
-    if (currentVideoId && lyricsByVersion && typeof lyricsByVersion === "object") {
+    if (
+      currentVideoId &&
+      lyricsByVersion &&
+      typeof lyricsByVersion === "object"
+    ) {
       (lyricsByVersion as any).videoId = currentVideoId;
     }
     await chrome.storage.local.set({ [key]: lyricsByVersion });
@@ -2259,8 +3391,15 @@ function formatCaptionLanguageLabel(
   return isAsr ? `${fallback} (auto)` : fallback;
 }
 
-function isValidCachedTrackLyrics(cachedTrack: any, expectedLang: string): boolean {
-  if (!cachedTrack?.lyrics || !Array.isArray(cachedTrack.lyrics) || cachedTrack.lyrics.length === 0) {
+function isValidCachedTrackLyrics(
+  cachedTrack: any,
+  expectedLang: string,
+): boolean {
+  if (
+    !cachedTrack?.lyrics ||
+    !Array.isArray(cachedTrack.lyrics) ||
+    cachedTrack.lyrics.length === 0
+  ) {
     return false;
   }
   if (!expectedLang || expectedLang === "auto") return true;
@@ -2316,7 +3455,9 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
         const isAsr =
           extra.isAsr ??
           (String(extra.trackId || "").includes("asr") ||
-            String(extra.label || "").toLowerCase().includes("auto"));
+            String(extra.label || "")
+              .toLowerCase()
+              .includes("auto"));
         const trackId =
           extra.trackId ||
           `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
@@ -2338,11 +3479,14 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
           const oldIsAsr =
             Boolean(oldTrack.isAsr) ||
             String(key).includes("asr") ||
-            String(oldTrack.label || "").toLowerCase().includes("auto");
+            String(oldTrack.label || "")
+              .toLowerCase()
+              .includes("auto");
 
           // Clean up any historical corrupted entries where key is ja/japanese but language was saved as en
           if (
-            (key.toLowerCase().includes("ja") || key.toLowerCase().includes("japanese")) &&
+            (key.toLowerCase().includes("ja") ||
+              key.toLowerCase().includes("japanese")) &&
             (oldLang === "en" || oldLang.startsWith("en-"))
           ) {
             continue;
@@ -2365,9 +3509,7 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
           isAsr,
           lyrics,
           romanizedLyrics:
-            extra.romanizedLyrics ||
-            prevTracks[trackId]?.romanizedLyrics ||
-            [],
+            extra.romanizedLyrics || prevTracks[trackId]?.romanizedLyrics || [],
           translatedLyrics:
             extra.translatedLyrics ||
             prevTracks[trackId]?.translatedLyrics ||
@@ -2378,7 +3520,7 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
         tracksMap = updatedTracks;
       }
     } catch (e) {
-      console.warn("[Lyrical Panel] Error preparing captions track cache:", e);
+      warn("[Lyrical Panel] Error preparing captions track cache:", e);
     }
   }
 
@@ -2414,7 +3556,7 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     });
   } catch (err) {
     if (err?.message?.includes("Extension context invalidated")) return;
-    console.warn("[Lyrical Panel] Cache persist failed:", err);
+    warn("[Lyrical Panel] Cache persist failed:", err);
   }
 }
 
@@ -2454,8 +3596,11 @@ function restoreLyricsFromCacheEntry(
     }
   }
 
-  const isCaptionsSource = currentSource === "captions" || fallbackSourceId === "captions";
-  const cleanActiveLyrics = isCaptionsSource ? activeLyrics : normalizeLyrics(activeLyrics);
+  const isCaptionsSource =
+    currentSource === "captions" || fallbackSourceId === "captions";
+  const cleanActiveLyrics = isCaptionsSource
+    ? activeLyrics
+    : normalizeLyrics(activeLyrics);
 
   fetchedLyrics = cleanActiveLyrics;
   lyricsByVersion.default = {
@@ -2500,16 +3645,24 @@ function restoreLyricsFromCacheEntry(
           const isAsr =
             Boolean(t.isAsr) ||
             String(t.trackId || "").includes("asr") ||
-            String(t.label || "").toLowerCase().includes("auto");
-          const vssId = t.trackId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
+            String(t.label || "")
+              .toLowerCase()
+              .includes("auto");
+          const vssId =
+            t.trackId ||
+            `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
           const displayName = formatCaptionLanguageLabel(
             rawLang,
             isAsr,
             t.label || "",
             vssId,
           );
-          const dedupKey = t.trackId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
-          if (!dedupMap.has(dedupKey) || (t.lyrics?.length && !dedupMap.get(dedupKey)?.url)) {
+          const dedupKey =
+            t.trackId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
+          if (
+            !dedupMap.has(dedupKey) ||
+            (t.lyrics?.length && !dedupMap.get(dedupKey)?.url)
+          ) {
             dedupMap.set(dedupKey, {
               vssId,
               languageCode: rawLang.toLowerCase(),
@@ -2537,8 +3690,7 @@ function restoreLyricsFromCacheEntry(
         });
         useAppStore.setState({
           availableCaptionTracks: normalizedTracks,
-          selectedCaptionTrackId:
-            activeTrackId || normalizedTracks[0]?.vssId,
+          selectedCaptionTrackId: activeTrackId || normalizedTracks[0]?.vssId,
           captionLanguageLabel: (
             activeLang ||
             normalizedTracks[0]?.languageCode ||
@@ -2601,6 +3753,8 @@ async function tryRestoreCachedLyricsForSource(
     ),
   );
   if (sourceCacheKeys.length === 0) return false;
+  if (typeof chrome === "undefined" || !chrome?.storage?.local?.get)
+    return false;
 
   const cachedEntries = await chrome.storage.local.get(sourceCacheKeys);
   for (const cacheKeyForSource of sourceCacheKeys) {
@@ -2704,6 +3858,13 @@ function resetLyricsState(reason = "", options: any = {}) {
     videoEventListeners = null;
   }
 
+  // Always reset offset state to 0.0s for new song/video/source transitions
+  suppressNextOffsetPersistence = true;
+  userSongOffset = 0;
+  currentSyncOffset = PLATFORM_OFFSET;
+  useAppStore.getState().setOffset(PLATFORM_OFFSET, 0);
+  suppressNextOffsetPersistence = false;
+
   // UI Reset via Store
   if (reason === "source changed") {
     updateSecondaryLyricsState({
@@ -2754,7 +3915,11 @@ function setFetchedSourceLyrics({
 
   useAppStore
     .getState()
-    .setLyrics(cleanLyrics, sourceId, detectLyricsLanguage(cleanLyrics, language));
+    .setLyrics(
+      cleanLyrics,
+      sourceId,
+      detectLyricsLanguage(cleanLyrics, language),
+    );
 
   persistLyricsCache(currentSongInfo, sourceId, cleanLyrics, {
     label,
@@ -2764,12 +3929,18 @@ function setFetchedSourceLyrics({
 
   const inlineRomanized = cleanLyrics.map((line) => ({
     time: line.time,
-    romanized: line.isInstrumental ? "" : (line.romanized || line.romanization || ""),
-    timedRomanization: line.isInstrumental ? null : (line.timedRomanization || null),
+    romanized: line.isInstrumental
+      ? ""
+      : line.romanized || line.romanization || "",
+    timedRomanization: line.isInstrumental
+      ? null
+      : line.timedRomanization || null,
   }));
   const inlineTranslated = cleanLyrics.map((line) => ({
     time: line.time,
-    translated: line.isInstrumental ? "" : (line.translated || line.translation || ""),
+    translated: line.isInstrumental
+      ? ""
+      : line.translated || line.translation || "",
   }));
 
   if (
@@ -2945,7 +4116,7 @@ async function displayPrefetchedCaptions(lyrics, languageCode) {
   );
 
   fetchedLyrics = normalizeCaptionTiming(lyrics);
-  const currentVideoId = new URLSearchParams(window.location.search).get("v");
+  const currentVideoId = getCurrentVideoId(currentSongInfo);
   if (currentVideoId) {
     // MAIN world already resolved captions for this video.
     lastFetchedVideoId = currentVideoId;
@@ -3075,9 +4246,16 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
         .replace(/\(auto-gen\)/i, "")
         .replace(/\(auto\)/i, "")
         .trim() || rawName;
-    const vssId = t.vssId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
-    const displayName = formatCaptionLanguageLabel(rawLang, isAsr, cleanName, vssId);
-    const dedupKey = t.vssId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
+    const vssId =
+      t.vssId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
+    const displayName = formatCaptionLanguageLabel(
+      rawLang,
+      isAsr,
+      cleanName,
+      vssId,
+    );
+    const dedupKey =
+      t.vssId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
 
     trackDedupMap.set(dedupKey, {
       vssId,
@@ -3101,10 +4279,15 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
             const isAsr =
               Boolean(ct.isAsr) ||
               String(ct.trackId || "").includes("asr") ||
-              String(ct.label || "").toLowerCase().includes("auto");
+              String(ct.label || "")
+                .toLowerCase()
+                .includes("auto");
             const vssId =
-              ct.trackId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
-            const dedupKey = ct.trackId || `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
+              ct.trackId ||
+              `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}-${idx}`;
+            const dedupKey =
+              ct.trackId ||
+              `${rawLang.toLowerCase()}-${isAsr ? "asr" : "manual"}`;
 
             if (trackDedupMap.has(dedupKey)) {
               const existing = trackDedupMap.get(dedupKey)!;
@@ -3115,7 +4298,8 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
               const existingLiveMatch = Array.from(trackDedupMap.values()).find(
                 (lt) =>
                   lt.vssId === vssId ||
-                  (lt.languageCode === rawLang.toLowerCase() && lt.isAsr === isAsr),
+                  (lt.languageCode === rawLang.toLowerCase() &&
+                    lt.isAsr === isAsr),
               );
               if (existingLiveMatch) {
                 if (!existingLiveMatch.url && ct.url) {
@@ -3164,12 +4348,19 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
   });
   if (finalTracks.length > 0) {
     const currentSelected = useAppStore.getState().selectedCaptionTrackId;
-    const currentLabel = (useAppStore.getState().captionLanguageLabel || "").toLowerCase();
+    const currentLabel = (
+      useAppStore.getState().captionLanguageLabel || ""
+    ).toLowerCase();
     let activeId = currentSelected;
     if (!activeId || !finalTracks.some((t) => t.vssId === activeId)) {
       const match =
-        finalTracks.find((t) => currentLabel.includes(t.languageCode.toLowerCase()) && !t.isAsr) ||
-        finalTracks.find((t) => currentLabel.includes(t.languageCode.toLowerCase())) ||
+        finalTracks.find(
+          (t) =>
+            currentLabel.includes(t.languageCode.toLowerCase()) && !t.isAsr,
+        ) ||
+        finalTracks.find((t) =>
+          currentLabel.includes(t.languageCode.toLowerCase()),
+        ) ||
         finalTracks[0];
       activeId = match?.vssId || null;
     }
@@ -3204,7 +4395,7 @@ function isTranslatedEnglishTrack(track) {
  * - We use fetch + library fallback instead of direct API access
  */
 async function tryDisplayCaptions() {
-  const videoId = new URLSearchParams(window.location.search).get("v");
+  const videoId = getCurrentVideoId(currentSongInfo);
   if (!videoId) return false;
   if (!canDisplayCaptionsForCurrentFetch()) return false;
 
@@ -3230,7 +4421,31 @@ async function tryDisplayCaptions() {
     log("Using queued MAIN-world prefetched captions:", lyrics.length);
   }
 
-  // --- METHOD 1: Direct Fetch (Aligned with ytCaptions.ts approach) ---
+  // If we don't have availableCaptions or lyrics yet, wait briefly (up to 1000ms)
+  // for the MAIN world captions extractor to announce tracks or finish prefetching.
+  if (!lyrics && (!availableCaptions || availableCaptions.length === 0)) {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (
+        pendingMainWorldCaptionLyrics &&
+        pendingMainWorldCaptionLyrics.length > 0 &&
+        (!pendingMainWorldCaptionVideoId ||
+          pendingMainWorldCaptionVideoId === videoId)
+      ) {
+        lyrics = pendingMainWorldCaptionLyrics;
+        languageCode = pendingMainWorldCaptionLanguage || "auto";
+        selectedTrack = pendingMainWorldCaptionTrack;
+        methodUsed = "main-world-prefetch-delayed";
+        log("Captured late MAIN-world prefetched captions:", lyrics.length);
+        break;
+      }
+      if (availableCaptions && availableCaptions.length > 0) {
+        break;
+      }
+    }
+  }
+
+  // --- METHOD 1: Direct Fetch & MAIN-world Fallback ---
   if (!lyrics && availableCaptions && availableCaptions.length > 0) {
     log(
       "Available caption tracks:",
@@ -3258,9 +4473,35 @@ async function tryDisplayCaptions() {
     if (selectedTrack) {
       const selectedTrackUrl = getCaptionTrackUrl(selectedTrack);
       if (selectedTrackUrl) {
-        lyrics = await fetchCaptionsFromContentScript(selectedTrackUrl);
+        lyrics = await fetchCaptionsFromContentScript(
+          selectedTrackUrl,
+          selectedTrack,
+        );
         if (lyrics && lyrics.length > 0) {
           methodUsed = "direct";
+          languageCode = getCaptionTrackLang(selectedTrack) || languageCode;
+        }
+      }
+
+      // If direct fetch couldn't get lyrics (e.g. content script CORS/cookie restrictions),
+      // fallback to requesting via MAIN world which has direct YouTube player API access!
+      if (!lyrics) {
+        log(
+          "Direct fetch yielded no captions, requesting track via MAIN world...",
+        );
+        const mainWorldLyrics = await requestCaptionTrackFromMainWorld({
+          vssId: selectedTrack.vssId,
+          languageCode: getCaptionTrackLang(selectedTrack) || "en",
+          isAsr:
+            selectedTrack.kind === "asr" ||
+            String(selectedTrack.vssId || "").startsWith("a."),
+          url: selectedTrackUrl || "",
+          name: getCaptionTrackName(selectedTrack),
+          kind: selectedTrack.kind,
+        });
+        if (mainWorldLyrics && mainWorldLyrics.length > 0) {
+          lyrics = mainWorldLyrics;
+          methodUsed = "main-world-request";
           languageCode = getCaptionTrackLang(selectedTrack) || languageCode;
         }
       }
@@ -3305,7 +4546,7 @@ async function tryDisplayCaptions() {
     }
 
     fetchedLyrics = normalizeCaptionTiming(lyrics);
-    const currentVideoId = new URLSearchParams(window.location.search).get("v");
+    const currentVideoId = getCurrentVideoId(currentSongInfo);
     if (currentVideoId) {
       lastFetchedVideoId = currentVideoId;
     }
@@ -3476,12 +4717,18 @@ async function tryFetchBoidu(songInfo, sourceId = "lyrical") {
 
       const inlineRomanized = cleanLyrics.map((line) => ({
         time: line.time,
-        romanized: line.isInstrumental ? "" : (line.romanized || line.romanization || ""),
-        timedRomanization: line.isInstrumental ? null : (line.timedRomanization || null),
+        romanized: line.isInstrumental
+          ? ""
+          : line.romanized || line.romanization || "",
+        timedRomanization: line.isInstrumental
+          ? null
+          : line.timedRomanization || null,
       }));
       const inlineTranslated = cleanLyrics.map((line) => ({
         time: line.time,
-        translated: line.isInstrumental ? "" : (line.translated || line.translation || ""),
+        translated: line.isInstrumental
+          ? ""
+          : line.translated || line.translation || "",
       }));
 
       if (
@@ -3570,11 +4817,7 @@ async function tryFetchLRCLib(songInfo) {
         isTripleLineMode = false;
         useAppStore
           .getState()
-          .setLyrics(
-            cleanLyrics,
-            "lrclib",
-            detectLyricsLanguage(cleanLyrics),
-          );
+          .setLyrics(cleanLyrics, "lrclib", detectLyricsLanguage(cleanLyrics));
         persistLyricsCache(currentSongInfo, "lrclib", cleanLyrics, {
           label: "LRCLib",
         });
@@ -3630,6 +4873,7 @@ async function preScanAvailableCachedSources(
   }
 
   if (allKeysMap.size === 0) return;
+  if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) return;
   const keysArray = Array.from(allKeysMap.keys());
   try {
     const cachedEntries = await chrome.storage.local.get(keysArray);
@@ -3660,8 +4904,7 @@ async function backgroundPreScanAllSources(
 
   const isStale = () =>
     fetchSessionId !== activeFetchSessionId ||
-    currentFetchVideoId !==
-      new URLSearchParams(window.location.search).get("v");
+    currentFetchVideoId !== getCurrentVideoId(songInfo);
 
   const alreadyAvailable = new Set(
     useAppStore.getState().availableLyricsSources,
@@ -3684,6 +4927,7 @@ async function backgroundPreScanAllSources(
 
     try {
       // 1. Check if already cached in storage
+      if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) break;
       const lookupIds = getCacheLookupIdsForSource(source.id);
       let isCached = false;
       for (const subId of lookupIds) {
@@ -3817,8 +5061,25 @@ async function backgroundPreScanAllSources(
 async function autoFetchLyrics(songInfo, options: any = {}) {
   if (!songInfo || !songInfo.title) return;
 
-  // 🔥 Use videoId as source of truth (not title/artist)
-  const videoId = new URLSearchParams(window.location.search).get("v");
+  // 🛑 AD GUARD: Do not attempt lyrics search while an ad is playing
+  if (isYouTubeAdPlaying() || songInfo?.isAd) {
+    useAppStore.getState().setIsAdPlaying(true);
+    useAppStore.setState({
+      isLoading: true,
+      headerText: "Ad in progress...",
+    });
+    log(
+      "[Lyrical] Ad is currently playing — pausing lyrics search until ad ends",
+    );
+    return;
+  }
+
+  // 🔥 Use videoId as source of truth (from URL or miniplayer or songInfo)
+  const isWatchUrl =
+    window.location.href.includes("/watch") &&
+    window.location.href.includes("v=");
+
+  const videoId = getCurrentVideoId(songInfo);
   if (!videoId) return;
 
   if (videoId && !songInfo.videoId) {
@@ -3847,8 +5108,9 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   // Same video → do nothing
   if (videoId === lastFetchedVideoId) return;
 
-  // GUARD: Ensure panel is ready before updating
-  if (!lyricsPanel || !document.body.contains(lyricsPanel)) {
+  // GUARD: Ensure panel is ready before updating ONLY on watch page
+  // On homepage/search with miniplayer, lyricsPanel is not in the DOM
+  if (isWatchUrl && (!lyricsPanel || !document.body.contains(lyricsPanel))) {
     setTimeout(() => autoFetchLyrics(songInfo), 300);
     return;
   }
@@ -3864,20 +5126,49 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   currentFetchVideoId = videoId;
   captionSourceReachedForCurrentFetch = false;
   const { sourcePreferences } = useAppStore.getState();
-  const enabledSources = sourcePreferences.filter((s) => s.enabled);
+  const enabledSources = (sourcePreferences || []).filter((s) => s.enabled);
   resetCurrentFetchSourceGuard();
   log("New video detected:", videoId);
 
   const isStaleFetch = () =>
     fetchSessionId !== activeFetchSessionId ||
-    videoId !== new URLSearchParams(window.location.search).get("v");
+    (isWatchUrl &&
+      videoId !== new URLSearchParams(window.location.search).get("v"));
 
   // Reset state
   resetLyricsState(options.reason || "video changed", {
     preserveCaptionCacheForVideoId: videoId,
   });
+  // If ad is playing or title is UNLABELED, try to get real video info from page
+  if (
+    useAppStore.getState().isAdPlaying ||
+    songInfo?.title?.toUpperCase() === "UNLABELED"
+  ) {
+    const realInfo = window.getSongInfoFromPage?.();
+    if (
+      realInfo &&
+      !realInfo.isAd &&
+      realInfo.title &&
+      realInfo.title.toUpperCase() !== "UNLABELED"
+    ) {
+      songInfo = realInfo;
+    }
+  }
+
   currentSongInfo = songInfo;
   updateSongInfo(songInfo);
+
+  if (useAppStore.getState().isAdPlaying || isYouTubeAdPlaying()) {
+    log(
+      "[Lyrical] Ad is currently playing — pausing lyrics search until ad ends",
+    );
+    useAppStore.setState({
+      isLoading: true,
+      headerText: "Ad in progress...",
+    });
+    return;
+  }
+
   if (!songInfo?.artwork) {
     hydrateSongInfoWithRetry(8, 280).catch(() => {});
   }
@@ -3926,7 +5217,7 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
           try {
             found = await tryFetchBoidu(songInfo);
           } catch (e) {
-            console.error("Boidu fetch crashed loop", e);
+            warn("Boidu fetch crashed loop", e);
             found = false;
           }
           break;
@@ -3934,7 +5225,7 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
           try {
             found = await tryFetchBoidu(songInfo, "test-lyrical");
           } catch (e) {
-            console.error("Test Boidu fetch crashed loop", e);
+            warn("Test Boidu fetch crashed loop", e);
             found = false;
           }
           break;
@@ -4082,7 +5373,7 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
       });
     }
   } catch (error) {
-    console.error("[Lyrical Panel] Fetch error:", error);
+    warn("[Lyrical Panel] Fetch error:", error);
   } finally {
     useAppStore.setState({ isLoading: false });
   }
@@ -4097,6 +5388,12 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
     userSongOffset = 0;
     currentSyncOffset = 0;
     useAppStore.getState().setOffset(0, 0);
+  } else {
+    suppressNextOffsetPersistence = true;
+    userSongOffset = 0;
+    currentSyncOffset = PLATFORM_OFFSET;
+    useAppStore.getState().setOffset(PLATFORM_OFFSET, 0);
+    suppressNextOffsetPersistence = false;
   }
   const { sourcePreferences } = useAppStore.getState();
   const sourceObj = sourcePreferences.find((s) => s.id === sourceId) || {
@@ -4147,6 +5444,7 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
     case "legato-synced":
     case "musixmatch-synced":
       found = await tryFetchUnifiedSource(currentSongInfo, sourceId);
+      break;
     case "lrclib":
       found = await tryFetchLRCLib(currentSongInfo);
       break;
@@ -4158,46 +5456,18 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
 });
 
 
-function requestCaptionTrackFromMainWorld(track: CaptionTrackInfo): Promise<any[] | null> {
-  return new Promise((resolve) => {
-    const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const timer = setTimeout(() => {
-      window.removeEventListener("message", handler);
-      resolve(null);
-    }, 4500);
-
-    const handler = (event: MessageEvent) => {
-      if (event.source !== window || event.data?.type !== "LYRICAL_FETCH_TRACK_RESPONSE") return;
-      if (event.data?.requestId !== requestId) return;
-      clearTimeout(timer);
-      window.removeEventListener("message", handler);
-      if (event.data.success && Array.isArray(event.data.lyrics) && event.data.lyrics.length > 0) {
-        resolve(event.data.lyrics);
-      } else {
-        resolve(null);
-      }
-    };
-
-    window.addEventListener("message", handler);
-    window.postMessage({
-      type: "LYRICAL_FETCH_TRACK_REQUEST",
-      requestId,
-      trackId: track.vssId,
-      languageCode: track.languageCode,
-      isAsr: track.isAsr,
-    }, "*");
-  });
-}
 
 window.addEventListener("lyrical-select-caption-track", async (event: any) => {
   const track = event.detail?.track as CaptionTrackInfo;
   if (!track || (!track.url && !track.vssId && !track.languageCode)) return;
 
-  log("[Lyrical] User manually selected caption track:", track.name, track.languageCode);
+  log(
+    "[Lyrical] User manually selected caption track:",
+    track.name,
+    track.languageCode,
+  );
   useAppStore.setState({
     isLoading: true,
-    selectedCaptionTrackId: track.vssId,
-    captionLanguageLabel: track.languageCode.toUpperCase(),
   });
 
   try {
@@ -4220,15 +5490,25 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
             ));
 
         // Validate cachedTrack lyrics language
-        if (cachedTrack && !isValidCachedTrackLyrics(cachedTrack, track.languageCode)) {
-          log("[Lyrical] Cached track content is mismatched/corrupted for language:", track.name, track.languageCode);
+        if (
+          cachedTrack &&
+          !isValidCachedTrackLyrics(cachedTrack, track.languageCode)
+        ) {
+          log(
+            "[Lyrical] Cached track content is mismatched/corrupted for language:",
+            track.name,
+            track.languageCode,
+          );
           cachedTrack = null;
         }
 
         if (cachedTrack?.lyrics?.length > 0) {
-          log("[Lyrical] Restoring caption track directly from local cache:", track.name);
+          log(
+            "[Lyrical] Restoring caption track directly from local cache:",
+            track.name,
+          );
           fetchedLyrics = cachedTrack.lyrics;
-          const currentVideoId = new URLSearchParams(window.location.search).get("v");
+          const currentVideoId = getCurrentVideoId(currentSongInfo);
           if (currentVideoId) {
             lastFetchedVideoId = currentVideoId;
           }
@@ -4248,6 +5528,10 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
               "captions",
               detectLyricsLanguage(fetchedLyrics, track.languageCode),
             );
+          useAppStore.setState({
+            captionLanguageLabel: track.languageCode.toUpperCase(),
+            selectedCaptionTrackId: track.vssId,
+          });
 
           updateSecondaryLyricsState({
             romanizedLyrics: cachedTrack.romanizedLyrics || [],
@@ -4260,7 +5544,9 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
           entry.lyrics = fetchedLyrics;
           entry.language = track.languageCode;
           const genericKey = getLyricsCacheKey(currentSongInfo);
-          chrome.storage.local.set({ [sourceKey]: entry, [genericKey]: entry }).catch(() => {});
+          chrome.storage.local
+            .set({ [sourceKey]: entry, [genericKey]: entry })
+            .catch(() => {});
 
           startLyricsTimer(fetchedLyrics);
           if (window.initTranslationDropdown) window.initTranslationDropdown();
@@ -4272,7 +5558,7 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
           restoredFromCache = true;
         }
       } catch (cacheErr) {
-        console.warn("[Lyrical] Caption cache check failed:", cacheErr);
+        warn("[Lyrical] Caption cache check failed:", cacheErr);
       }
     }
 
@@ -4332,7 +5618,10 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
     }
 
     if (fetchUrl) {
-      log("[Lyrical] Fetching captions from live URL:", fetchUrl.substring(0, 100));
+      log(
+        "[Lyrical] Fetching captions from live URL:",
+        fetchUrl.substring(0, 100),
+      );
       const rawLyrics = await fetchCaptionsFromContentScript(fetchUrl);
       if (rawLyrics && rawLyrics.length > 0) {
         lyrics = rawLyrics;
@@ -4341,7 +5630,10 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
 
     // Secondary fallback: Request directly from Main World extractor via postMessage
     if (!lyrics || lyrics.length === 0) {
-      log("[Lyrical] Requesting caption track directly from Main World extractor:", track.name);
+      log(
+        "[Lyrical] Requesting caption track directly from Main World extractor:",
+        track.name,
+      );
       const mainWorldLyrics = await requestCaptionTrackFromMainWorld(track);
       if (mainWorldLyrics && mainWorldLyrics.length > 0) {
         lyrics = mainWorldLyrics;
@@ -4369,7 +5661,7 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
       }
 
       fetchedLyrics = normalizeCaptionTiming(cleaned);
-      const currentVideoId = new URLSearchParams(window.location.search).get("v");
+      const currentVideoId = getCurrentVideoId(currentSongInfo);
       if (currentVideoId) {
         lastFetchedVideoId = currentVideoId;
       }
@@ -4528,10 +5820,7 @@ async function autoProcessLyrics() {
               processingTimeoutMs,
             );
             if (data?.error) {
-              console.warn(
-                "[Lyrical Panel] Romanization error:",
-                data.error,
-              );
+              console.warn("[Lyrical Panel] Romanization error:", data.error);
               return [];
             }
             return data || [];
@@ -4579,10 +5868,7 @@ async function autoProcessLyrics() {
               processingTimeoutMs,
             );
             if (data?.error) {
-              console.warn(
-                "[Lyrical Panel] Translation error:",
-                data.error,
-              );
+              console.warn("[Lyrical Panel] Translation error:", data.error);
               return [];
             }
             return data || [];
@@ -4628,7 +5914,7 @@ async function autoProcessLyrics() {
 function stopLyricsTimer() {
   activeTimerSessionId++;
   if (videoEventListeners) {
-    const video = document.querySelector("video");
+    const video = getActiveMediaVideoElement();
     if (video && videoEventListeners.onTimeUpdate) {
       video.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
       if (videoEventListeners.onPause) {
@@ -4667,9 +5953,9 @@ async function startLyricsTimer(lyrics) {
     log("startLyricsTimer skipped: no parsed lyrics available");
     return;
   }
-  const video = document.querySelector("video");
+  const video = getActiveMediaVideoElement();
   if (!video) {
-    console.warn("[Lyrical Panel] Video element not found");
+    warn("[Lyrical Panel] Video element not found");
     return;
   }
 
@@ -4683,7 +5969,7 @@ async function startLyricsTimer(lyrics) {
   let currentIndex = -1;
 
   // PER-SONG OFFSET: Load stored correction for this specific song & source
-  const videoId = new URLSearchParams(window.location.search).get("v");
+  const videoId = getCurrentVideoId(currentSongInfo);
   const activeSource = useAppStore.getState().lyricsSource;
   const isCaptions = activeSource === "captions";
   const songKey = getSongOffsetKey(videoId, activeSource);
@@ -4700,10 +5986,69 @@ async function startLyricsTimer(lyrics) {
     );
   } else {
     try {
-      const stored = await getStoredSongOffset(songKey, legacyKey);
+      let stored = await getStoredSongOffset(songKey, legacyKey);
       if (timerSessionId !== activeTimerSessionId) return;
 
-      if (stored !== null) {
+      const firstVocalTime = getFirstVocalLyricTime(lyrics);
+
+      // Migration check 1: If stored offset is negative (legacy workaround for previous '+' bug)
+      // but an intro delay exists, re-detect so the unified positive offset is applied
+      if (stored !== null && stored < -1.0) {
+        log(
+          "[Lyrical Panel] Detected legacy negative offset:",
+          stored,
+          "- verifying with auto-sync",
+        );
+        const autoDetected = await tryAutoDetectOffset(
+          lyrics,
+          songKey,
+          videoId,
+        );
+        if (timerSessionId !== activeTimerSessionId) return;
+        if (autoDetected !== null && autoDetected > 0) {
+          stored = autoDetected;
+          songOffset = autoDetected;
+        }
+      }
+
+      // Migration check 2: If a positive intro offset was erroneously saved on PRE-SYNCED lyrics
+      // (e.g. LRCLib saved 21.8s when lyrics already start at 28.2s, resulting in double-delay)
+      const lastVocalTime = getLastVocalLyricTime(lyrics);
+      const video = getActiveMediaVideoElement();
+      const videoDuration =
+        video?.duration && Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : (Number(currentSongInfo?.duration) || 0);
+
+      const isOvershootingStoredIntro =
+        stored !== null &&
+        stored >= 1.5 &&
+        lastVocalTime !== null &&
+        videoDuration > 0 &&
+        lastVocalTime + stored > videoDuration + 2.0;
+
+      if (isOvershootingStoredIntro) {
+        log(
+          "[Lyrical Panel] Detected invalid overshooting intro offset on pre-synced lyrics:",
+          stored,
+          `s (last vocal ${lastVocalTime.toFixed(1)}s + offset > duration ${videoDuration.toFixed(1)}s) - re-detecting`,
+        );
+        const autoDetected = await tryAutoDetectOffset(
+          lyrics,
+          songKey,
+          videoId,
+        );
+        if (timerSessionId !== activeTimerSessionId) return;
+        if (autoDetected !== null) {
+          stored = autoDetected;
+          songOffset = autoDetected;
+          await saveStoredSongOffset(songKey, autoDetected);
+        }
+      }
+
+      // If stored is non-zero (custom user offset), respect it.
+      // If stored is 0 baseline (or null) for a non-caption source, verify via auto-detect:
+      if (stored !== null && Math.abs(stored) > 0.05) {
         songOffset = stored;
         log(
           "[Lyrical Panel] 📝 Using stored offset for this song/source:",
@@ -4711,8 +6056,12 @@ async function startLyricsTimer(lyrics) {
           "s",
         );
       } else {
-        // ⚡ ADAPTIVE SYNC: If user has no saved offset, cross-correlate with YouTube captions
-        const autoDetected = await tryAutoDetectOffset(lyrics, songKey);
+        // ⚡ ADAPTIVE SYNC: If user has no saved offset (or baseline 0), cross-correlate with YouTube captions & SponsorBlock
+        const autoDetected = await tryAutoDetectOffset(
+          lyrics,
+          songKey,
+          videoId,
+        );
         if (timerSessionId !== activeTimerSessionId) return;
         if (autoDetected !== null) {
           songOffset = autoDetected;
@@ -4731,7 +6080,7 @@ async function startLyricsTimer(lyrics) {
         );
         return;
       }
-      console.warn("[Lyrical Panel] Could not load song offset:", err);
+      warn("[Lyrical Panel] Could not load song offset:", err);
     }
 
     // FINAL OFFSET: Platform + Song-specific + Sync-type trim (set globally for live updates)
@@ -4776,12 +6125,13 @@ async function startLyricsTimer(lyrics) {
   );
 
   const onTimeUpdate = () => {
-    // 🔒 SYNC ENGINE: Captions use video.currentTime directly (0 default, or manual userSongOffset)
+    // 🔒 SYNC ENGINE: Unified subtractive timing (video.currentTime - currentSyncOffset)
+    // matching ArchiveTuneStrategy (Musixmatch-richsync), ImperativeBetterStrategy (Portato), and KaraokeOverlay
     const adjustedTime = isCaptions
-      ? video.currentTime +
-        userSongOffset +
+      ? video.currentTime -
+        userSongOffset -
         (useAppStore.getState().lineOffsetTrim || 0)
-      : video.currentTime + currentSyncOffset;
+      : video.currentTime - currentSyncOffset;
     const newIndex = findLyricIndex(lyrics, adjustedTime);
 
     if (newIndex !== currentIndex && newIndex >= 0) {
@@ -4932,19 +6282,22 @@ async function initialize() {
 
       log("YouTube navigation detected");
 
-      // � FIX: Use URL-based check instead of isYouTubeWatchPage() which requires DOM elements
+      // 🔴 If NOT on watch page → remove watch panel and check mini companion
       const isWatchUrl =
         window.location.href.includes("/watch") &&
         window.location.href.includes("v=");
 
-      // �🔴 If NOT on watch page → remove panel
       if (!isWatchUrl) {
         if (lyricsPanel) {
           lyricsPanel.remove();
           lyricsPanel = null;
           log("Left watch page — panel removed");
         }
+        checkAndManageMiniCompanion();
+        setupMiniplayerObserver();
         return;
+      } else {
+        removeMiniCompanion();
       }
 
       // ✅ On watch page → reset state and use video-driven injection
@@ -4953,11 +6306,51 @@ async function initialize() {
       );
       lyricsRendered = false;
       lastInjectedVideoId = null; // Reset to allow reinjection
+      waitForVideoInProgress = false; // Reset waiting flag for fresh navigation
+
+      // Re-hydrate floating & transition settings from storage to ensure perfect sync across video navigations
+      if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+        chrome.storage.sync.get(
+          {
+            albumArtTransition: "shuffle",
+            titleTransition: "spring",
+            scrollLongTitles: true,
+            showProgressBar: true,
+            reopenFloatingLyricsAutomatically: false,
+            showMiniCompanion: true,
+            miniCompanionCustomPosition: null,
+          },
+          (res) => {
+            useAppStore.setState({
+              albumArtTransition: res.albumArtTransition || "shuffle",
+              titleTransition: res.titleTransition || "spring",
+              scrollLongTitles: res.scrollLongTitles ?? true,
+              showProgressBar: res.showProgressBar ?? true,
+              reopenFloatingLyricsAutomatically:
+                res.reopenFloatingLyricsAutomatically ?? false,
+              showMiniCompanion: res.showMiniCompanion ?? true,
+              miniCompanionCustomPosition:
+                res.miniCompanionCustomPosition || null,
+            });
+          },
+        );
+      }
 
       waitForStableVideo(() => {
         injectIntoYouTube();
+        setupAdObserver();
+        ensureWatchPanelMounted();
         const info = window.getSongInfoFromPage?.();
-        if (info) autoFetchLyrics(info);
+        if (info && !info.isAd) {
+          // Guard against stale hover preview metadata:
+          // Ensure info.videoId matches current URL videoId if on watch page
+          const urlV = new URLSearchParams(window.location.search).get("v");
+          if (urlV && info.videoId && info.videoId !== urlV) {
+            log("[Lyrical Panel] Detected stale hover preview info on navigation, correcting videoId:", urlV);
+            info.videoId = urlV;
+          }
+          autoFetchLyrics(info);
+        }
       });
     }
 
@@ -4984,13 +6377,16 @@ async function initialize() {
       );
       waitForStableVideo(() => {
         injectIntoYouTube();
+        setupAdObserver();
         const info = window.getSongInfoFromPage?.();
-        if (info) autoFetchLyrics(info);
+        if (info && !info.isAd) autoFetchLyrics(info);
       });
     } else {
       log(
-        "[Lyrical Panel] Not a watch URL on first load, skipping first-load injection",
+        "[Lyrical Panel] Not a watch URL on first load, checking mini companion",
       );
+      checkAndManageMiniCompanion();
+      setupMiniplayerObserver();
     }
   } else if (window.location.hostname.includes("spotify.com")) {
     log("Injecting into Spotify");

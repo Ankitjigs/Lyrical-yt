@@ -165,7 +165,7 @@ class CubeyProvider {
 
       return await res.json();
     } catch (e) {
-      console.warn("[Lyrical:Cubey] Fetch failed:", e.message);
+      console.debug("[Lyrical:Cubey] Fetch failed:", e.message);
       return null;
     }
   }
@@ -196,9 +196,48 @@ class CubeyProvider {
 
       return await res.json();
     } catch (e) {
-      console.warn("[Lyrical:Cubey] Unified fetch failed:", e.message);
+      console.debug("[Lyrical:Cubey] Unified fetch failed:", e.message);
       return null;
     }
+  }
+
+  resolveVideoId(songInfo) {
+    if (songInfo?.videoId) return songInfo.videoId;
+
+    try {
+      if (window.currentSongInfo?.videoId) return window.currentSongInfo.videoId;
+    } catch {}
+
+    try {
+      const player = document.getElementById("movie_player");
+      const pV = player?.getVideoData?.()?.video_id;
+      if (pV) return pV;
+    } catch {}
+
+    try {
+      const miniLink = document.querySelector(
+        "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']",
+      );
+      if (miniLink && miniLink.href) {
+        const match = miniLink.href.match(/[?&]v=([^&]+)/);
+        if (match && match[1]) return match[1];
+      }
+    } catch {}
+
+    try {
+      const titleLink = document.querySelector(".ytp-title-link");
+      if (titleLink && titleLink.href) {
+        const match = titleLink.href.match(/[?&]v=([^&]+)/);
+        if (match && match[1]) return match[1];
+      }
+    } catch {}
+
+    try {
+      const urlV = new URLSearchParams(window.location.search).get("v");
+      if (urlV) return urlV;
+    } catch {}
+
+    return "";
   }
 
   async callApi(jwt, songInfo) {
@@ -208,8 +247,8 @@ class CubeyProvider {
     url.searchParams.append("artist", songInfo.artist || "");
     url.searchParams.append("duration", songInfo.duration || "0");
 
-    // VideoID
-    const videoId = new URLSearchParams(window.location.search).get("v") || "";
+    // VideoID: metadata authoritative, URL last
+    const videoId = this.resolveVideoId(songInfo);
     url.searchParams.append("videoId", videoId);
 
     if (songInfo.album) url.searchParams.append("album", songInfo.album);
@@ -234,7 +273,7 @@ class CubeyProvider {
   }
 
   async callUnifiedApi(jwt, songInfo) {
-    const videoId = new URLSearchParams(window.location.search).get("v") || "";
+    const videoId = this.resolveVideoId(songInfo);
 
     this.log("Fetching unified lyrics via background...");
     const response = await chrome.runtime.sendMessage({

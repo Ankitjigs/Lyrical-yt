@@ -1,8 +1,15 @@
 /**
- * Auto-Sync Detection Engine
- * 
- * Automatically synchronizes rich lyrics to YouTube videos by cross-correlating
- * lyric line timestamps with YouTube's native captions (ASR / timedtext).
+ * Robust Auto-Sync Detection Engine
+ *
+ * Synchronizes externally sourced/rich lyrics against YouTube timed captions.
+ *
+ * Design goals:
+ * - Never assume the first lyric/caption pair is the correct pair.
+ * - Generate many independent offset candidates across the song.
+ * - Prefer a global consensus instead of a single lucky match.
+ * - Validate the winning offset against the original caption stream.
+ * - Keep 0s as a real detected result, not as the fallback for "unknown".
+ * - Return enough evidence for main.tsx to safely fuse with SponsorBlock.
  */
 
 import { isMetadataLine } from "../lyrics/lyricsNormalizer";
@@ -17,27 +24,62 @@ export interface LyricInputLine {
   time: number;
   duration?: number;
   text: string;
+  isInstrumental?: boolean;
 }
 
 export interface AutoSyncDetectionResult {
-  detectedOffset: number; // in seconds (positive means video audio started later / intro delay)
-  confidence: number;     // 0.0 to 1.0
+  detectedOffset: number;
+  rawOffset?: number;
+  confidence: number;
   matchedLyricText: string;
   matchedCaptionText: string;
+
+  /** Number of independent lyric/caption alignments supporting the result. */
+  matchCount: number;
+  /** Number of different time regions contributing evidence. */
+  regionCount: number;
+  /** Median absolute deviation of supporting offsets, in seconds. */
+  offsetSpread: number;
+  /** Median text similarity of the final supporting matches. */
+  medianSimilarity: number;
 }
 
-/**
- * Normalizes colloquialisms, slang verb endings (-in' -> -ing),
- * contractions and phonetic variations common in pop songs vs ASR captions.
- */
+export function getFirstVocalLyricTime(
+  lyrics: LyricInputLine[] | any[],
+): number | null {
+  if (!Array.isArray(lyrics) || !lyrics.length) return null;
+  for (const l of lyrics) {
+    if ((l as any).isInstrumental) continue;
+    if (isMetadataLine(l.text || "")) continue;
+    const clean = normalizeSyncText(l.text || "");
+    if (clean.length >= 1 && Number.isFinite(l.time) && l.time >= 0) {
+      return l.time;
+    }
+  }
+  return null;
+}
+
+export function getLastVocalLyricTime(
+  lyrics: LyricInputLine[] | any[],
+): number | null {
+  if (!Array.isArray(lyrics) || !lyrics.length) return null;
+  for (let i = lyrics.length - 1; i >= 0; i--) {
+    const l = lyrics[i];
+    if ((l as any).isInstrumental) continue;
+    if (isMetadataLine(l.text || "")) continue;
+    const clean = normalizeSyncText(l.text || "");
+    if (clean.length >= 1 && Number.isFinite(l.time) && l.time >= 0) {
+      return l.time;
+    }
+  }
+  return null;
+}
+
 export function normalizeSyncWord(raw: string): string {
   if (!raw) return "";
   let w = raw.toLowerCase().trim();
-
-  // 1. Remove quotes/apostrophes inside word if any remain (e.g. you've -> youve)
   w = w.replace(/['’‘"`]/g, "");
 
-  // 2. Common colloquial slang & phonetic mappings
   switch (w) {
     case "round":
       return "around";
@@ -73,7 +115,6 @@ export function normalizeSyncWord(raw: string): string {
       return "isnt";
   }
 
-  // 3. Slang verb endings: runnin -> running, throwin -> throwing, feelin -> feeling
   if (
     w.length >= 4 &&
     w.endsWith("in") &&
@@ -82,30 +123,24 @@ export function normalizeSyncWord(raw: string): string {
     !w.endsWith("ein") &&
     !w.endsWith("shin") &&
     !w.endsWith("chin") &&
-    w !== "twin" &&
-    w !== "spin" &&
-    w !== "skin" &&
-    w !== "thin" &&
-    w !== "grin" &&
-    w !== "join" &&
-    w !== "coin" &&
-    w !== "rain" &&
-    w !== "pain"
+    ![
+      "twin",
+      "spin",
+      "skin",
+      "thin",
+      "grin",
+      "join",
+      "coin",
+      "rain",
+      "pain",
+    ].includes(w)
   ) {
-    w = w + "g";
+    w += "g";
   }
 
   return w;
 }
 
-/**
- * Normalizes text for robust phonetic/word comparison:
- * - Strips music notes (♪, ♫, 🎵, 🎶)
- * - Removes bracketed meta annotations like [Verse 1], (Chorus)
- * - Strips apostrophes and quotation marks directly without adding extra space (you've -> youve)
- * - Removes other punctuation while preserving international unicode letters & numbers
- * - Converts to lowercase and normalizes whitespace
- */
 export function normalizeSyncText(raw: string): string {
   if (!raw) return "";
   return raw
@@ -118,145 +153,167 @@ export function normalizeSyncText(raw: string): string {
     .trim();
 }
 
-/**
- * Checks if a caption line is purely a music or sound effect indicator rather than sung/spoken words.
- * Handles international music indicators: [Music], [संगीत], [Musique], [Música], ♪, etc.
- */
 export function isMusicOrNoiseTag(text: string): boolean {
   if (!text) return true;
   const clean = text.trim();
   if (/^[♪♫🎵🎶\s.,!?:;—\-–()\[\]{}]+$/u.test(clean)) return true;
-  if (
-    /^[\[(（【][^\])）】]*(?:music|संगीत|musique|música|musik|musica|instrumental|applause|cheering|sound|noise|beat|intro)[^\])）】]*[\])）】]$/i.test(
-      clean,
-    )
-  ) {
-    return true;
-  }
-  return false;
+  return /^[\[(（【][^\])）】]*(?:music|संगीत|musique|música|musik|musica|instrumental|applause|cheering|sound|noise|beat|intro)[^\])）】]*[\])）】]$/i.test(
+    clean,
+  );
 }
 
-/**
- * Computes token-level Dice coefficient between two normalized strings with
- * colloquial stemming and fuzzy word tolerance.
- * Returns a value between 0.0 (no match) and 1.0 (exact match).
- */
 export function calculateTextSimilarity(strA: string, strB: string): number {
   const normA = normalizeSyncText(strA);
   const normB = normalizeSyncText(strB);
-
   if (!normA || !normB) return 0;
-  if (normA === normB) return 1.0;
+  if (normA === normB) return 1;
 
-  const rawWordsA = normA.split(" ").filter((w) => w.length > 0);
-  const rawWordsB = normB.split(" ").filter((w) => w.length > 0);
+  const wordsA = normA.split(" ").filter(Boolean).map(normalizeSyncWord);
+  const wordsB = normB.split(" ").filter(Boolean).map(normalizeSyncWord);
+  if (!wordsA.length || !wordsB.length) return 0;
 
-  if (rawWordsA.length === 0 || rawWordsB.length === 0) return 0;
-
-  const wordsA = rawWordsA.map(normalizeSyncWord);
-  const wordsB = rawWordsB.map(normalizeSyncWord);
-
-  const setB = new Set(wordsB);
   let matchedScore = 0;
+  const usedB = new Set<number>();
 
   for (const wa of wordsA) {
-    if (setB.has(wa)) {
-      matchedScore += 1.0;
-    } else {
-      // Fuzzy check: shared stem / prefix of >= 4 chars, or 1 edit distance
-      const isFuzzy = wordsB.some((wb) => {
-        if (wa.length >= 4 && wb.length >= 4) {
-          if (wa.startsWith(wb.slice(0, 4)) || wb.startsWith(wa.slice(0, 4))) {
-            return true;
-          }
+    let bestIndex = -1;
+    let bestScore = 0;
+
+    for (let i = 0; i < wordsB.length; i++) {
+      if (usedB.has(i)) continue;
+      const wb = wordsB[i];
+      let score = 0;
+
+      if (wa === wb) {
+        score = 1;
+      } else if (
+        wa.length >= 4 &&
+        wb.length >= 4 &&
+        (wa.startsWith(wb.slice(0, 4)) || wb.startsWith(wa.slice(0, 4)))
+      ) {
+        score = 0.85;
+      } else if (Math.abs(wa.length - wb.length) <= 1 && wa.length >= 5) {
+        let diff = 0;
+        const minLen = Math.min(wa.length, wb.length);
+        for (let k = 0; k < minLen; k++) {
+          if (wa[k] !== wb[k]) diff++;
+          if (diff > 1) break;
         }
-        if (Math.abs(wa.length - wb.length) <= 1 && wa.length >= 5) {
-          let diff = 0;
-          const minLen = Math.min(wa.length, wb.length);
-          for (let k = 0; k < minLen; k++) {
-            if (wa[k] !== wb[k]) diff++;
-            if (diff > 1) break;
-          }
-          return diff <= 1;
-        }
-        return false;
-      });
-      if (isFuzzy) {
-        matchedScore += 0.85;
+        if (diff <= 1) score = 0.85;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
       }
     }
+
+    if (bestIndex >= 0) {
+      matchedScore += bestScore;
+      usedB.add(bestIndex);
+    }
   }
 
-  // Also check containment ratio for long phrases
+  const dice = (2 * matchedScore) / (wordsA.length + wordsB.length);
   const joinedA = wordsA.join(" ");
   const joinedB = wordsB.join(" ");
+
   if (joinedA.length >= 10 && joinedB.length >= 10) {
-    if (joinedA.includes(joinedB)) {
-      return Math.max((2 * matchedScore) / (wordsA.length + wordsB.length), joinedB.length / joinedA.length);
-    }
-    if (joinedB.includes(joinedA)) {
-      return Math.max((2 * matchedScore) / (wordsA.length + wordsB.length), joinedA.length / joinedB.length);
-    }
+    if (joinedA.includes(joinedB))
+      return Math.max(dice, joinedB.length / joinedA.length);
+    if (joinedB.includes(joinedA))
+      return Math.max(dice, joinedA.length / joinedB.length);
   }
 
-  return (2 * matchedScore) / (wordsA.length + wordsB.length);
+  return Math.min(1, dice);
 }
 
-/**
- * Detects the time offset between rich lyrics and YouTube captions.
- *
- * @param lyrics Parsed lyrics from LRCLIB/Unison/etc.
- * @param captions Parsed captions from YouTube's native timedtext track.
- * @returns AutoSyncDetectionResult if confident, or null if no confident alignment found.
- */
-export function detectAutoSyncOffset(
-  lyrics: LyricInputLine[],
-  captions: CaptionLine[],
-): AutoSyncDetectionResult | null {
-  if (!Array.isArray(lyrics) || lyrics.length === 0) return null;
-  if (!Array.isArray(captions) || captions.length === 0) return null;
+interface CaptionWindow {
+  text: string;
+  time: number;
+  endTime: number;
+}
 
-  // 1. Pick the first 6 non-empty lyric lines within the first 90 seconds of the song
-  const candidateLyricLines = lyrics
-    .filter((l) => {
-      if ((l as any).isInstrumental) return false;
-      if (isMetadataLine(l.text || "")) return false;
-      const clean = normalizeSyncText(l.text || "");
-      // Skip empty, pure instrumental, or single short words
-      return clean.length >= 4 && l.time >= 0 && l.time <= 90;
-    })
-    .slice(0, 6);
+interface OffsetCandidate {
+  offset: number;
+  similarity: number;
+  lyricTime: number;
+  captionTime: number;
+  lyricText: string;
+  captionText: string;
+  lyricWordCount: number;
+}
 
-  if (candidateLyricLines.length === 0) return null;
+interface OffsetCluster {
+  samples: OffsetCandidate[];
+  weight: number;
+}
 
-  // 2. Filter candidate captions within the first 120 seconds of the video
-  const candidateCaptions = captions.filter(
-    (c) => c.time >= 0 && c.time <= 120 && normalizeSyncText(c.text || "").length >= 3,
-  );
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
 
-  if (candidateCaptions.length === 0) return null;
+function weightedMedian(samples: OffsetCandidate[]): number {
+  if (!samples.length) return 0;
+  const sorted = [...samples].sort((a, b) => a.offset - b.offset);
+  const total = sorted.reduce((sum, s) => sum + candidateWeight(s), 0);
+  let cumulative = 0;
+  for (const sample of sorted) {
+    cumulative += candidateWeight(sample);
+    if (cumulative >= total / 2) return sample.offset;
+  }
+  return sorted[sorted.length - 1].offset;
+}
 
-  // Build merged sliding windows (1 to 3 adjacent caption segments)
-  // because YouTube ASR often splits a single sentence across multiple tiny cue segments.
-  const captionWindows: Array<{ text: string; time: number }> = [];
-  for (let i = 0; i < candidateCaptions.length; i++) {
-    const c1 = candidateCaptions[i];
-    captionWindows.push({ text: c1.text, time: c1.time });
+function candidateWeight(sample: OffsetCandidate): number {
+  const wordBoost = Math.min(1.6, 0.7 + sample.lyricWordCount / 8);
+  return Math.max(0.05, sample.similarity * wordBoost);
+}
 
-    if (i + 1 < candidateCaptions.length) {
-      const c2 = candidateCaptions[i + 1];
-      if (c2.time - c1.time < 5.0) {
-        captionWindows.push({
+function buildCaptionWindows(captions: CaptionLine[]): CaptionWindow[] {
+  const source = captions
+    .filter((c) => Number.isFinite(c.time) && c.time >= 0 && c.time <= 240)
+    .filter((c) => normalizeSyncText(c.text || "").length >= 2)
+    .filter((c) => !isMusicOrNoiseTag(c.text || ""));
+
+  const windows: CaptionWindow[] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < source.length; i++) {
+    const c1 = source[i];
+    const d1 = Math.max(0.2, Number(c1.duration) || 0.2);
+    const key1 = `${i}:1`;
+    if (!seen.has(key1)) {
+      windows.push({ text: c1.text, time: c1.time, endTime: c1.time + d1 });
+      seen.add(key1);
+    }
+
+    if (i + 1 < source.length) {
+      const c2 = source[i + 1];
+      if (c2.time - c1.time <= 4.5) {
+        windows.push({
           text: `${c1.text} ${c2.text}`,
           time: c1.time,
+          endTime: Math.max(
+            c1.time + d1,
+            c2.time + Math.max(0.2, Number(c2.duration) || 0.2),
+          ),
         });
 
-        if (i + 2 < candidateCaptions.length) {
-          const c3 = candidateCaptions[i + 2];
-          if (c3.time - c2.time < 5.0) {
-            captionWindows.push({
+        if (i + 2 < source.length) {
+          const c3 = source[i + 2];
+          if (c3.time - c2.time <= 4.5) {
+            windows.push({
               text: `${c1.text} ${c2.text} ${c3.text}`,
               time: c1.time,
+              endTime: Math.max(
+                c1.time + d1,
+                c2.time + Math.max(0.2, Number(c2.duration) || 0.2),
+                c3.time + Math.max(0.2, Number(c3.duration) || 0.2),
+              ),
             });
           }
         }
@@ -264,192 +321,365 @@ export function detectAutoSyncOffset(
     }
   }
 
-  // 3. For each lyric candidate, find best matching caption window
-  interface MatchSample {
-    offset: number;
-    similarity: number;
-    lyricText: string;
-    captionText: string;
-    captionTime: number;
-    lyricTime: number;
-  }
+  return windows;
+}
 
-  const matches: MatchSample[] = [];
-  let lastMatchedCaptionTime = -1;
+function makeCandidate(
+  lyric: LyricInputLine,
+  window: CaptionWindow,
+  similarity: number,
+): OffsetCandidate | null {
+  const offset = window.time - lyric.time;
+  if (offset < -60 || offset > 120) return null;
 
-  for (let idx = 0; idx < candidateLyricLines.length; idx++) {
-    const lyricLine = candidateLyricLines[idx];
-    let bestScore = 0;
-    let bestWindow: { text: string; time: number } | null = null;
-    let bestRawSim = 0;
-
-    for (const win of captionWindows) {
-      // Monotonic constraint: line N+1 must not match a caption before line N (with 1.5s tolerance)
-      if (lastMatchedCaptionTime >= 0 && win.time < lastMatchedCaptionTime - 1.5) {
-        continue;
-      }
-
-      const sim = calculateTextSimilarity(lyricLine.text, win.text);
-      if (sim < 0.50) continue;
-
-      // Relative Cadence Disambiguation:
-      // If we have an anchor match, penalize windows whose relative elapsed time
-      // diverges significantly from the lyric elapsed time (preventing repeated chorus/verse jumps).
-      let cadenceScore = sim;
-      if (matches.length > 0) {
-        const anchor = matches[0];
-        const expectedCaptionTime = anchor.captionTime + (lyricLine.time - anchor.lyricTime);
-        const timeDiff = Math.abs(win.time - expectedCaptionTime);
-        if (timeDiff <= 2.0) {
-          cadenceScore += 0.25; // Bonus for consistent tempo/cadence
-        } else if (timeDiff > 6.0) {
-          cadenceScore -= 0.35; // Heavy penalty for matching wrong verse repetition
-        }
-      }
-
-      if (cadenceScore > bestScore) {
-        bestScore = cadenceScore;
-        bestRawSim = sim;
-        bestWindow = win;
-      }
-    }
-
-    // Require at least 65% token/content similarity
-    if (bestRawSim >= 0.65 && bestWindow) {
-      const offset = bestWindow.time - lyricLine.time;
-      // Sanity check: offset between -30s and +60s (typical MV intros or pre-gap)
-      if (offset >= -30 && offset <= 60) {
-        matches.push({
-          offset,
-          similarity: bestRawSim,
-          lyricText: lyricLine.text,
-          captionText: bestWindow.text,
-          captionTime: bestWindow.time,
-          lyricTime: lyricLine.time,
-        });
-        lastMatchedCaptionTime = bestWindow.time;
-      }
-    }
-  }
-
-  // 4. Cluster matches to find consensus offset (clustering with tolerance 1.0s)
-  if (matches.length > 0) {
-    const TOLERANCE = 1.0;
-    interface Cluster {
-      offsets: number[];
-      samples: MatchSample[];
-      totalWeight: number;
-    }
-
-    const clusters: Cluster[] = [];
-
-    for (const match of matches) {
-      let placed = false;
-      for (const cluster of clusters) {
-        const avg =
-          cluster.offsets.reduce((sum, val) => sum + val, 0) / cluster.offsets.length;
-        if (Math.abs(match.offset - avg) <= TOLERANCE) {
-          cluster.offsets.push(match.offset);
-          cluster.samples.push(match);
-          cluster.totalWeight += match.similarity;
-          placed = true;
-          break;
-        }
-      }
-      if (!placed) {
-        clusters.push({
-          offsets: [match.offset],
-          samples: [match],
-          totalWeight: match.similarity,
-        });
-      }
-    }
-
-    clusters.sort((a, b) => b.totalWeight - a.totalWeight);
-    const bestCluster = clusters[0];
-
-    if (bestCluster) {
-      const count = bestCluster.samples.length;
-      const topSample = bestCluster.samples.sort((a, b) => b.similarity - a.similarity)[0];
-      const wordCount = normalizeSyncText(topSample.lyricText).split(" ").length;
-
-      // Strict confidence requirements:
-      // Must have at least 2 lines agreeing, OR 1 line with >= 90% similarity and >= 5 words
-      if (count >= 2 || (topSample.similarity >= 0.90 && wordCount >= 5)) {
-        let finalOffset =
-          bestCluster.offsets.reduce((sum, o) => sum + o, 0) / bestCluster.offsets.length;
-
-        if (Math.abs(finalOffset) < 0.35) {
-          finalOffset = 0.0;
-        }
-
-        const confidence = count >= 2 ? Math.min(1.0, 0.85 + count * 0.05) : topSample.similarity * 0.9;
-
-        return {
-          detectedOffset: Number(finalOffset.toFixed(2)),
-          confidence: Number(confidence.toFixed(2)),
-          matchedLyricText: topSample.lyricText,
-          matchedCaptionText: topSample.captionText,
-        };
-      }
-    }
-  }
-
-  // 5. FALLBACK: Speech-Onset & Cadence Cross-Correlation (Language-Agnostic)
-  // When captions are in a different language/script (e.g. translated Hindi, Japanese, Spanish)
-  // or token comparison failed, we correlate the timestamp of speech onset and phrase rhythm.
-  const vocalCaptions = candidateCaptions.filter(
-    (c) => !isMusicOrNoiseTag(c.text) && normalizeSyncText(c.text).length >= 2,
-  );
-
-  if (vocalCaptions.length === 0 || candidateLyricLines.length === 0) {
-    return null;
-  }
-
-  const firstVocalLyric = candidateLyricLines[0];
-  const firstVocalCaption = vocalCaptions[0];
-  const onsetOffset = firstVocalCaption.time - firstVocalLyric.time;
-
-  // Realistic offset boundary (-30s to +60s)
-  if (onsetOffset < -30 || onsetOffset > 60) {
-    return null;
-  }
-
-  // Cadence verification: check if subsequent vocal interval matches
-  let cadenceMatched = false;
-  if (candidateLyricLines.length > 1 && vocalCaptions.length > 1) {
-    const lyricInterval = candidateLyricLines[1].time - candidateLyricLines[0].time;
-    for (let k = 1; k < Math.min(vocalCaptions.length, 5); k++) {
-      const captionInterval = vocalCaptions[k].time - firstVocalCaption.time;
-      if (Math.abs(captionInterval - lyricInterval) <= 1.8) {
-        cadenceMatched = true;
-        break;
-      }
-    }
-  }
-
-  const hasPrecedingMusicTag = candidateCaptions.some(
-    (c) => c.time < firstVocalCaption.time && isMusicOrNoiseTag(c.text),
-  );
-
-  let confidence = 0.65;
-  if (cadenceMatched) {
-    confidence = 0.82;
-  } else if (hasPrecedingMusicTag || firstVocalCaption.time >= 4.0) {
-    confidence = 0.72;
-  }
-
-  let finalOffset = onsetOffset;
-  // If the onset difference is small (< 2.0s), it is within standard YouTube ASR recognition latency,
-  // NOT a true video intro skit/dialogue. Default to 0.0s to preserve studio-synced lyrics!
-  if (Math.abs(finalOffset) < 2.0) {
-    finalOffset = 0.0;
-  }
+  const lyricText = normalizeSyncText(lyric.text || "");
+  const lyricWordCount = lyricText.split(" ").filter(Boolean).length;
+  if (lyricWordCount < 2) return null;
 
   return {
-    detectedOffset: Number(finalOffset.toFixed(2)),
-    confidence: Number(confidence.toFixed(2)),
-    matchedLyricText: firstVocalLyric.text,
-    matchedCaptionText: firstVocalCaption.text,
+    offset,
+    similarity,
+    lyricTime: lyric.time,
+    captionTime: window.time,
+    lyricText: lyric.text,
+    captionText: window.text,
+    lyricWordCount,
   };
+}
+
+function buildCandidates(
+  lyrics: LyricInputLine[],
+  windows: CaptionWindow[],
+): OffsetCandidate[] {
+  const candidates: OffsetCandidate[] = [];
+  const maxLyricTime = 240;
+
+  const lyricLines = lyrics
+    .filter(
+      (l) => Number.isFinite(l.time) && l.time >= 0 && l.time <= maxLyricTime,
+    )
+    .filter((l) => !(l as any).isInstrumental)
+    .filter((l) => !isMetadataLine(l.text || ""))
+    .filter((l) => normalizeSyncText(l.text || "").length >= 4)
+    .slice(0, 48);
+
+  for (const lyric of lyricLines) {
+    const scored: OffsetCandidate[] = [];
+
+    for (const window of windows) {
+      // Search broadly. Do not use the first match as an anchor.
+      const similarity = calculateTextSimilarity(lyric.text, window.text);
+      if (similarity < 0.48) continue;
+
+      const candidate = makeCandidate(lyric, window, similarity);
+      if (candidate) scored.push(candidate);
+    }
+
+    scored.sort((a, b) => {
+      const scoreA = a.similarity + Math.min(0.12, a.lyricWordCount / 100);
+      const scoreB = b.similarity + Math.min(0.12, b.lyricWordCount / 100);
+      return scoreB - scoreA;
+    });
+
+    // Keep multiple alternatives per lyric. A repeated chorus must not erase the true offset.
+    candidates.push(...scored.slice(0, 6));
+  }
+
+  return candidates;
+}
+
+function clusterCandidates(candidates: OffsetCandidate[]): OffsetCluster[] {
+  const sorted = [...candidates].sort((a, b) => a.offset - b.offset);
+  const clusters: OffsetCluster[] = [];
+  const tolerance = 0.65;
+
+  for (const candidate of sorted) {
+    let bestCluster: OffsetCluster | null = null;
+    let bestDistance = Infinity;
+
+    for (const cluster of clusters) {
+      const center = weightedMedian(cluster.samples);
+      const distance = Math.abs(candidate.offset - center);
+      if (distance <= tolerance && distance < bestDistance) {
+        bestCluster = cluster;
+        bestDistance = distance;
+      }
+    }
+
+    if (bestCluster) {
+      bestCluster.samples.push(candidate);
+      bestCluster.weight += candidateWeight(candidate);
+    } else {
+      clusters.push({
+        samples: [candidate],
+        weight: candidateWeight(candidate),
+      });
+    }
+  }
+
+  return clusters.sort((a, b) => b.weight - a.weight);
+}
+
+function selectIndependentSamples(
+  samples: OffsetCandidate[],
+): OffsetCandidate[] {
+  const selected: OffsetCandidate[] = [];
+  const usedLyricTimes: number[] = [];
+  const usedCaptionTimes: number[] = [];
+
+  const sorted = [...samples].sort((a, b) => {
+    const scoreA = candidateWeight(a);
+    const scoreB = candidateWeight(b);
+    return scoreB - scoreA;
+  });
+
+  for (const sample of sorted) {
+    // One lyric line should contribute only once.
+    if (usedLyricTimes.some((t) => Math.abs(t - sample.lyricTime) < 0.5))
+      continue;
+    // Avoid multiple overlapping caption windows counting as separate proof.
+    if (usedCaptionTimes.some((t) => Math.abs(t - sample.captionTime) < 2.0))
+      continue;
+
+    selected.push(sample);
+    usedLyricTimes.push(sample.lyricTime);
+    usedCaptionTimes.push(sample.captionTime);
+  }
+
+  return selected.sort((a, b) => a.lyricTime - b.lyricTime);
+}
+
+function countRegions(samples: OffsetCandidate[]): number {
+  if (!samples.length) return 0;
+  const regions = new Set<number>();
+  for (const sample of samples) regions.add(Math.floor(sample.lyricTime / 30));
+  return regions.size;
+}
+
+function validateOffset(
+  offset: number,
+  lyrics: LyricInputLine[],
+  captions: CaptionLine[],
+): {
+  matched: OffsetCandidate[];
+  medianSimilarity: number;
+  regionCount: number;
+  spread: number;
+} {
+  const cleanCaptions = captions
+    .filter((c) => Number.isFinite(c.time) && c.time >= 0 && c.time <= 240)
+    .filter((c) => normalizeSyncText(c.text || "").length >= 2)
+    .filter((c) => !isMusicOrNoiseTag(c.text || ""));
+
+  const cleanLyrics = lyrics
+    .filter((l) => Number.isFinite(l.time) && l.time >= 0 && l.time <= 240)
+    .filter((l) => !(l as any).isInstrumental)
+    .filter((l) => !isMetadataLine(l.text || ""))
+    .filter((l) => normalizeSyncText(l.text || "").length >= 4)
+    .slice(0, 48);
+
+  const matches: OffsetCandidate[] = [];
+
+  for (const lyric of cleanLyrics) {
+    const expected = lyric.time + offset;
+    let best: OffsetCandidate | null = null;
+
+    for (const caption of cleanCaptions) {
+      const timeDistance = Math.abs(caption.time - expected);
+      if (timeDistance > 1.25) continue;
+
+      const similarity = calculateTextSimilarity(lyric.text, caption.text);
+      if (similarity < 0.48) continue;
+
+      const candidate = makeCandidate(
+        lyric,
+        {
+          text: caption.text,
+          time: caption.time,
+          endTime: caption.time + (caption.duration || 0.2),
+        },
+        similarity,
+      );
+      if (!candidate) continue;
+
+      if (!best || similarity > best.similarity) best = candidate;
+    }
+
+    if (best) matches.push(best);
+  }
+
+  const independent = selectIndependentSamples(matches);
+  const similarities = independent.map((m) => m.similarity);
+  const medianSimilarity = median(similarities);
+  const offsets = independent.map((m) => m.offset);
+  const center = median(offsets);
+  const spread = median(offsets.map((o) => Math.abs(o - center)));
+
+  return {
+    matched: independent,
+    medianSimilarity,
+    regionCount: countRegions(independent),
+    spread,
+  };
+}
+
+function confidenceForEvidence(
+  matchCount: number,
+  regionCount: number,
+  medianSimilarity: number,
+  spread: number,
+): number {
+  if (matchCount === 0) return 0;
+
+  let confidence = 0.25;
+  confidence += Math.min(0.3, matchCount * 0.06);
+  confidence += Math.min(0.18, Math.max(0, regionCount - 1) * 0.09);
+  confidence += Math.max(0, medianSimilarity - 0.55) * 0.55;
+
+  if (spread <= 0.2) confidence += 0.1;
+  else if (spread <= 0.4) confidence += 0.06;
+  else if (spread <= 0.7) confidence += 0.02;
+  else confidence -= 0.08;
+
+  if (
+    matchCount >= 5 &&
+    regionCount >= 3 &&
+    medianSimilarity >= 0.78 &&
+    spread <= 0.5
+  ) {
+    confidence += 0.08;
+  }
+
+  return Math.max(0, Math.min(0.99, confidence));
+}
+
+export function detectAutoSyncOffset(
+  lyrics: LyricInputLine[],
+  captions: CaptionLine[],
+): AutoSyncDetectionResult | null {
+  if (!Array.isArray(lyrics) || !lyrics.length) return null;
+  if (!Array.isArray(captions) || !captions.length) return null;
+
+  const windows = buildCaptionWindows(captions);
+  if (!windows.length) return null;
+
+  const candidates = buildCandidates(lyrics, windows);
+  if (!candidates.length) return null;
+
+  const clusters = clusterCandidates(candidates);
+
+  // Evaluate the top few clusters independently. This avoids accepting a large
+  // but accidental cluster without checking the original caption stream.
+  let bestResult: AutoSyncDetectionResult | null = null;
+  let bestScore = -Infinity;
+
+  for (const cluster of clusters.slice(0, 8)) {
+    if (cluster.samples.length < 2) continue;
+
+    const provisionalOffset = weightedMedian(cluster.samples);
+    const validation = validateOffset(provisionalOffset, lyrics, captions);
+    const { matched, medianSimilarity, regionCount, spread } = validation;
+
+    const isSmallStrongCluster =
+      matched.length === 2 && medianSimilarity >= 0.7 && spread <= 0.45;
+    if (matched.length < 2 || (matched.length === 2 && !isSmallStrongCluster))
+      continue;
+    if (regionCount < 2 && matched.length < 5 && !isSmallStrongCluster)
+      continue;
+    if (medianSimilarity < 0.55) continue;
+    if (spread > 1.1) continue;
+
+    const finalOffset = weightedMedian(matched);
+    const finalValidation = validateOffset(finalOffset, lyrics, captions);
+    const finalMatches = finalValidation.matched;
+
+    const isFinalSmallStrong =
+      finalMatches.length === 2 &&
+      finalValidation.medianSimilarity >= 0.7 &&
+      finalValidation.spread <= 0.45;
+    if (
+      finalMatches.length < 2 ||
+      (finalMatches.length === 2 && !isFinalSmallStrong)
+    )
+      continue;
+
+    const finalConfidence = confidenceForEvidence(
+      finalMatches.length,
+      finalValidation.regionCount,
+      finalValidation.medianSimilarity,
+      finalValidation.spread,
+    );
+
+    // Large offsets are possible for videos with long intros, so do not use a
+    // hard maximum here. However, a large offset is also exactly where a
+    // repeated chorus/verse can produce a false caption match.
+    // Require balanced independent evidence across progressive distance tiers.
+    const absFinalOffset = Math.abs(finalOffset);
+
+    // Progressive confidence and evidence scaling for non-zero offsets
+    if (absFinalOffset > 35) {
+      const passesExtreme =
+        finalMatches.length >= 5 &&
+        finalValidation.regionCount >= 3 &&
+        finalValidation.medianSimilarity >= 0.72 &&
+        finalValidation.spread <= 0.55 &&
+        finalConfidence >= 0.74;
+      if (!passesExtreme) continue;
+    } else if (absFinalOffset > 10) {
+      const passesModerateIntro =
+        finalMatches.length >= 3 &&
+        finalValidation.regionCount >= 2 &&
+        finalValidation.medianSimilarity >= 0.6 &&
+        finalValidation.spread <= 0.7 &&
+        finalConfidence >= 0.62;
+      if (!passesModerateIntro) continue;
+    } else if (absFinalOffset > 1.5) {
+      const passesSmallShift =
+        finalMatches.length >= 3 &&
+        finalValidation.regionCount >= 2 &&
+        finalValidation.medianSimilarity >= 0.55 &&
+        finalValidation.spread <= 0.8 &&
+        finalConfidence >= 0.58;
+      if (!passesSmallShift) continue;
+    } else {
+      // |offset| <= 1.5s: normal validation threshold
+      if (finalConfidence < 0.52) continue;
+    }
+
+    const topSample = [...finalMatches].sort(
+      (a, b) => b.similarity - a.similarity,
+    )[0];
+    const lateOccurrencePenalty = Math.min(
+      0.6,
+      Math.max(0, absFinalOffset - 20) / 70,
+    );
+
+    const score =
+      finalConfidence * 2 +
+      finalValidation.medianSimilarity +
+      Math.min(0.5, finalMatches.length * 0.05) +
+      Math.min(0.3, finalValidation.regionCount * 0.1) -
+      finalValidation.spread * 0.25 -
+      lateOccurrencePenalty;
+
+    if (score > bestScore) {
+      bestScore = score;
+      const rawOffset = Number(finalOffset.toFixed(2));
+      const deadbandOffset = Math.abs(rawOffset) <= 0.5 ? 0 : rawOffset;
+
+      bestResult = {
+        detectedOffset: deadbandOffset,
+        rawOffset,
+        confidence: Number(finalConfidence.toFixed(2)),
+        matchedLyricText: topSample.lyricText,
+        matchedCaptionText: topSample.captionText,
+        matchCount: finalMatches.length,
+        regionCount: finalValidation.regionCount,
+        offsetSpread: Number(finalValidation.spread.toFixed(2)),
+        medianSimilarity: Number(finalValidation.medianSimilarity.toFixed(2)),
+      };
+    }
+  }
+
+  return bestResult;
 }

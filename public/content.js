@@ -4,14 +4,108 @@
 window.getSongInfoFromPage = function () {
     console.log('[Content] getSongInfoFromPage called');
 
-    const videoId =
-        window.location.hostname.includes('youtube.com')
-            ? new URLSearchParams(window.location.search).get('v') || null
-            : null;
+    let videoId = null;
+    const isYouTube = window.location.hostname.includes('youtube.com');
+    const isWatchUrl = isYouTube && window.location.pathname.includes('/watch');
 
-    // Try MediaSession first
+    if (isYouTube) {
+        if (isWatchUrl) {
+            videoId = new URLSearchParams(window.location.search).get('v') || null;
+            if (!videoId) {
+                try {
+                    const player = document.getElementById('movie_player');
+                    if (player && !player.closest?.('ytd-inline-preview-player, #inline-preview-player')) {
+                        videoId = player?.getVideoData?.()?.video_id || null;
+                    }
+                } catch {}
+            }
+        } else {
+            // NOT on watch page (e.g. youtube.com home feed, search, subscriptions)
+            // The ONLY legitimate music source is the active YouTube miniplayer!
+            // NEVER inspect document.getElementById('movie_player') or generic players here,
+            // because thumbnail hover-previews mount an inline player.
+            try {
+                const miniLink = document.querySelector(
+                    "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']"
+                );
+                if (miniLink && miniLink.href) {
+                    const match = miniLink.href.match(/[?&]v=([^&]+)/);
+                    if (match && match[1]) videoId = match[1];
+                }
+            } catch {}
+
+            // If there's no miniplayer video, there is NO song on this page - ignore hover previews
+            if (!videoId) {
+                console.log('[Content] Non-watch page without active miniplayer song - ignoring hover previews');
+                return null;
+            }
+        }
+    }
+
+    // Check if an ad is currently playing on YouTube
+    let isAd = false;
+    if (isYouTube) {
+        const player = document.getElementById('movie_player');
+        if (player) {
+            const hasAdClass =
+                player.classList?.contains('ad-showing') ||
+                player.classList?.contains('ad-interrupting');
+            const adModule = player.querySelector('.video-ads.ytp-ad-module');
+            const hasAdChildren = Boolean(adModule && adModule.children.length > 0);
+            const hasAdOverlay = Boolean(
+                player.querySelector(
+                    '.ytp-ad-player-overlay, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, .ytp-ad-preview-container',
+                ),
+            );
+            if (hasAdClass || (hasAdChildren && hasAdOverlay)) {
+                isAd = true;
+            }
+        }
+    }
+
+    // Try MediaSession first ONLY IF it is not an ad
     const mediaSessionInfo = getMediaSessionMetadata();
+    const isAdMediaSession =
+        isAd ||
+        mediaSessionInfo?.title?.toUpperCase() === 'UNLABELED' ||
+        mediaSessionInfo?.artist?.toLowerCase().includes('emp experiment') ||
+        mediaSessionInfo?.artist?.toLowerCase().includes('youtube premium');
+
+    if (isAdMediaSession) {
+        console.log('[Content] Ad detected on YouTube - skipping song fetch');
+        return {
+            isAd: true,
+            title: "Ad in progress...",
+            artist: "Advertisement",
+            videoId: videoId
+        };
+    }
+
+    // Guard MediaSession against thumbnail hover-previews:
+    // If MediaSession artwork has a video ID that doesn't match our valid videoId,
+    // or if on non-watch page and MediaSession title doesn't match miniplayer text,
+    // MediaSession has been hijacked by a hover preview!
+    let isMediaSessionValid = false;
     if (mediaSessionInfo && mediaSessionInfo.title) {
+        isMediaSessionValid = true;
+        if (videoId && mediaSessionInfo.artwork) {
+            const artMatch = mediaSessionInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+            if (artMatch && artMatch[1] && artMatch[1] !== videoId) {
+                console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
+                isMediaSessionValid = false;
+            }
+        }
+        if (!isWatchUrl && isMediaSessionValid) {
+            const miniTitleEl = document.querySelector("ytd-miniplayer #video-title, ytd-miniplayer .ytp-title-link, ytd-miniplayer .info-bar");
+            const miniTitle = miniTitleEl?.innerText?.trim();
+            if (miniTitle && !miniTitle.toLowerCase().includes(mediaSessionInfo.title.toLowerCase().slice(0, 10)) && !mediaSessionInfo.title.toLowerCase().includes(miniTitle.toLowerCase().slice(0, 10))) {
+                console.debug('[Content] MediaSession title does not match miniplayer title - rejecting hover preview session');
+                isMediaSessionValid = false;
+            }
+        }
+    }
+
+    if (isMediaSessionValid && mediaSessionInfo && mediaSessionInfo.title) {
         if (!mediaSessionInfo.artwork) {
             mediaSessionInfo.artwork = getYouTubeArtworkFromPage();
         }
@@ -117,14 +211,22 @@ function scrapePageInfo() {
     if (window.location.hostname.includes('youtube.com')) {
         console.log('[Content] Detecting YouTube song...');
 
+        const isWatchUrl = window.location.pathname.includes('/watch');
+
         // Try multiple selectors for video title
-        const titleSelectors = [
-            'h1.ytd-watch-metadata yt-formatted-string',
-            'h1.title.ytd-video-primary-info-renderer yt-formatted-string',
-            'ytd-watch-metadata h1',
-            '#title h1 yt-formatted-string',
-            'h1.title yt-formatted-string'
-        ];
+        const titleSelectors = isWatchUrl
+            ? [
+                'h1.ytd-watch-metadata yt-formatted-string',
+                'h1.title.ytd-video-primary-info-renderer yt-formatted-string',
+                'ytd-watch-metadata h1',
+                '#title h1 yt-formatted-string',
+                'h1.title yt-formatted-string',
+              ]
+            : [
+                'ytd-miniplayer .ytp-title-link',
+                'ytd-miniplayer #video-title',
+                'ytd-miniplayer .info-bar',
+              ];
 
         let videoTitle = null;
         for (const selector of titleSelectors) {
@@ -135,12 +237,17 @@ function scrapePageInfo() {
             }
         }
 
-        const channelSelectors = [
-            '#channel-name a',
-            'ytd-channel-name a',
-            '#owner #channel-name a',
-            'ytd-video-owner-renderer a'
-        ];
+        const channelSelectors = isWatchUrl
+            ? [
+                '#channel-name a',
+                'ytd-channel-name a',
+                '#owner #channel-name a',
+                'ytd-video-owner-renderer a',
+              ]
+            : [
+                'ytd-miniplayer #channel-name',
+                'ytd-miniplayer #owner-name',
+              ];
 
         let channelName = null;
         for (const selector of channelSelectors) {

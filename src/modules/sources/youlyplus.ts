@@ -43,7 +43,7 @@ export async function fetchYouLyPlusRaw(songInfo: SongInfo): Promise<any | null>
       }
       return null;
     } catch (e) {
-      console.warn("[Lyrical] YouLyPlus fetch error:", e);
+      console.debug("[Lyrical] YouLyPlus fetch error:", e);
       return null;
     }
   })();

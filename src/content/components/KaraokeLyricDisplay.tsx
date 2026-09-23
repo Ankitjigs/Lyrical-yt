@@ -22,7 +22,7 @@ function getActiveVideo(): HTMLVideoElement | null {
   );
 }
 
-interface TimedKaraokeWord {
+export interface TimedKaraokeWord {
   text: string;
   time: number;
   duration: number;
@@ -42,7 +42,7 @@ interface TimedKaraokeWord {
  *      with clause spaces preserved.
  *    - Non-CJK (Hindi, English, Spanish, etc.): Tokenized word-by-word, keeping ligatures intact.
  */
-function generateLineSyncedWords(
+export function generateLineSyncedWords(
   text: string,
   lineStart: number,
   rawInterval: number,

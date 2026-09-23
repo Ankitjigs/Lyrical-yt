@@ -134,6 +134,7 @@ export default function LyricsDock({
     isTranslateEnabled,
     isRomanizationEnabled,
     isLoading,
+    isAdPlaying,
     reduceAnimations,
     lyrics,
     availableCaptionTracks,
@@ -150,6 +151,7 @@ export default function LyricsDock({
       isTranslateEnabled: state.isTranslateEnabled,
       isRomanizationEnabled: state.isRomanizationEnabled,
       isLoading: state.isLoading,
+      isAdPlaying: state.isAdPlaying,
       reduceAnimations: state.reduceAnimations,
       lyrics: state.lyrics,
       availableCaptionTracks: state.availableCaptionTracks,
@@ -208,7 +210,10 @@ export default function LyricsDock({
   let displayName = "No source";
   let tooltipContent = "No lyrics source available";
 
-  if (isLoading) {
+  if (isAdPlaying) {
+    displayName = "Ad in progress";
+    tooltipContent = "Ad is playing • Waiting for video";
+  } else if (isLoading) {
     displayName = "Searching...";
     tooltipContent = "Searching for lyrics...";
   } else if (hasLyrics && activeOption) {
