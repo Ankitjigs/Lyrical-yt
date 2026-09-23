@@ -1,7 +1,8 @@
 import React from "react";
-import { Download, Pencil, Trash2, X } from "lucide-react";
+import { Download, Pencil, Sparkles, Trash2, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { PRESET_THEMES } from "../../themes";
+import { useAppStore } from "../store";
 import { t } from "../../i18n";
 
 const ThemeSelectionModal = ({
@@ -14,6 +15,10 @@ const ThemeSelectionModal = ({
   onDeleteCustomTheme,
   onExportCustomTheme,
 }) => {
+  const dynamicThemeTokens = useAppStore((state) => state.dynamicThemeTokens);
+  const currentArtwork = useAppStore(
+    (state) => state.dynamicArtworkUrl || state.songInfo?.artwork,
+  );
   const sections = [
     {
       id: "preset",
@@ -180,6 +185,11 @@ const ThemeSelectionModal = ({
                       >
                         {section.themes.map((theme) => {
                           const isSelected = theme.id === selectedThemeId;
+                          const isDynamic = theme.id === "dynamic";
+                          const cardTokens =
+                            isDynamic && dynamicThemeTokens
+                              ? dynamicThemeTokens
+                              : theme.tokens;
                           const themeName = theme.isCustom
                             ? theme.name
                             : t(`theme_${theme.id}_name`, undefined, theme.name);
@@ -333,6 +343,7 @@ const ThemeSelectionModal = ({
                                 style={{
                                   height: "78px",
                                   background:
+                                    cardTokens["--lyrical-panel-bg"] ||
                                     theme.tokens["--lyrical-panel-bg"],
                                   position: "relative",
                                 }}
@@ -344,11 +355,17 @@ const ThemeSelectionModal = ({
                                     width: "34px",
                                     height: "34px",
                                     borderRadius: "12px",
-                                    background:
-                                      theme.tokens[
+                                    backgroundImage:
+                                      isDynamic && currentArtwork
+                                        ? `url("${currentArtwork}")`
+                                        : "none",
+                                    backgroundSize: "cover",
+                                    backgroundPosition: "center",
+                                    backgroundColor:
+                                      cardTokens[
                                         "--lyrical-panel-surface-soft"
                                       ],
-                                    border: `1px solid ${theme.tokens["--lyrical-border"]}`,
+                                    border: `1px solid ${cardTokens["--lyrical-border"]}`,
                                     boxShadow:
                                       "0 10px 18px rgba(0, 0, 0, 0.16)",
                                   }}
@@ -362,7 +379,7 @@ const ThemeSelectionModal = ({
                                     height: "8px",
                                     borderRadius: "999px",
                                     background:
-                                      theme.tokens["--lyrical-slider-gradient"],
+                                      cardTokens["--lyrical-slider-gradient"],
                                   }}
                                 />
                               </div>
@@ -383,8 +400,21 @@ const ThemeSelectionModal = ({
                                       fontWeight: 700,
                                       color:
                                         "var(--lyrical-text-primary, #fff)",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "6px",
                                     }}
                                   >
+                                    {isDynamic && (
+                                      <Sparkles
+                                        size={15}
+                                        style={{
+                                          color:
+                                            cardTokens["--lyrical-accent"] ||
+                                            "#3ea6ff",
+                                        }}
+                                      />
+                                    )}
                                     {themeName}
                                   </span>
                                   {isSelected && (

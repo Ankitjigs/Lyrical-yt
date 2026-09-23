@@ -1199,7 +1199,13 @@ const LyricsPanel = () => {
     })),
   );
   const isAdPlaying = useAppStore((state) => state.isAdPlaying);
-  const themeVars = getThemeCssVariables(themeId, customThemes);
+  const dynamicThemeTokens = useAppStore((state) => state.dynamicThemeTokens);
+  const themeVars = useMemo(() => {
+    if (themeId === "dynamic") {
+      return getThemeCssVariables("dynamic", customThemes, dynamicThemeTokens);
+    }
+    return getThemeCssVariables(themeId, customThemes);
+  }, [themeId, customThemes, dynamicThemeTokens]);
   const lyricsTypography = getLyricsTypography(lyricsSizePreset, compactMode);
   const alignedRomanizedLyrics = useMemo(
     () =>
@@ -2272,7 +2278,7 @@ const LyricsPanel = () => {
         height: isExpanded ? "auto" : collapsedPanelHeight,
         overflow: "hidden",
         position: "relative",
-        transition: "min-height 0.25s ease, height 0.25s ease",
+        transition: "min-height 0.25s ease, height 0.25s ease, background 0.75s ease-in-out",
       }}
     >
       {/* Header */}

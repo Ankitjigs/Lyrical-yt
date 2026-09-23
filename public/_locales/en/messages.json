@@ -343,6 +343,14 @@
       }
     }
   },
+  "theme_dynamic_name": {
+    "message": "Dynamic",
+    "description": "Dynamic preset theme name."
+  },
+  "theme_dynamic_description": {
+    "message": "Adapts panel colors and glowing accents dynamically to the currently playing song artwork.",
+    "description": "Dynamic preset theme description."
+  },
   "theme_midnight_name": {
     "message": "Midnight",
     "description": "Midnight preset theme name."

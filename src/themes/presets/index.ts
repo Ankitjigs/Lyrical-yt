@@ -1,8 +1,9 @@
-import aurora from "./aurora";
+import dynamic from "./dynamic";
 import midnight from "./midnight";
-import mono from "./mono";
+import aurora from "./aurora";
 import sunset from "./sunset";
+import mono from "./mono";
 
-const presetThemes = [midnight, aurora, sunset, mono];
+const presetThemes = [dynamic, midnight, aurora, sunset, mono];
 
 export default presetThemes;

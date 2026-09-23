@@ -1,19 +1,62 @@
-import React from "react";
+import React, { useEffect, useMemo } from "react";
 import { Github } from "lucide-react";
 import SettingsContent from "../content/components/SettingsContent";
 import { useAppStore } from "../content/store";
-import { getThemeCssVariables } from "../themes";
+import { getThemeCssVariables, getObsidianPopupTokens } from "../themes";
 import { useShallow } from "zustand/react/shallow";
 import { t } from "../i18n";
 
 const PopupApp = () => {
-  const { themeId, customThemes } = useAppStore(
+  const { themeId, customThemes, dynamicThemeTokens } = useAppStore(
     useShallow((state) => ({
       themeId: state.themeId,
       customThemes: state.customThemes,
+      dynamicThemeTokens: state.dynamicThemeTokens,
     })),
   );
-  const themeVars = getThemeCssVariables(themeId, customThemes);
+
+  useEffect(() => {
+    if (typeof chrome !== "undefined" && chrome?.storage?.local) {
+      chrome.storage.local.get(
+        ["dynamicThemeTokens", "dynamicArtworkUrl"],
+        (res) => {
+          if (res.dynamicThemeTokens) {
+            useAppStore.getState().setDynamicThemeTokens(res.dynamicThemeTokens);
+          }
+          if (res.dynamicArtworkUrl) {
+            useAppStore.getState().setDynamicArtworkUrl(res.dynamicArtworkUrl);
+          }
+        },
+      );
+      const listener = (
+        changes: Record<string, chrome.storage.StorageChange>,
+        areaName: string,
+      ) => {
+        if (areaName === "local") {
+          if (changes.dynamicThemeTokens) {
+            useAppStore
+              .getState()
+              .setDynamicThemeTokens(changes.dynamicThemeTokens.newValue || null);
+          }
+          if (changes.dynamicArtworkUrl) {
+            useAppStore
+              .getState()
+              .setDynamicArtworkUrl(changes.dynamicArtworkUrl.newValue || null);
+          }
+        }
+      };
+      chrome.storage.onChanged.addListener(listener);
+      return () => chrome.storage.onChanged.removeListener(listener);
+    }
+  }, []);
+
+  const themeVars = useMemo(() => {
+    if (themeId === "dynamic") {
+      const dynamicAccent = dynamicThemeTokens?.["--lyrical-accent"];
+      return getObsidianPopupTokens(dynamicAccent);
+    }
+    return getThemeCssVariables(themeId, customThemes);
+  }, [themeId, customThemes, dynamicThemeTokens]);
 
   return (
     <div

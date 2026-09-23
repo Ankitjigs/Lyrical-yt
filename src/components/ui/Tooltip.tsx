@@ -77,22 +77,25 @@ export const Tooltip = ({
             bottom: "100%",
             marginBottom: "8px",
             padding: "6px 10px",
-            background: "var(--lyrical-card-bg-elevated, #27272a)",
-            color: "var(--lyrical-text-primary, #fff)",
+            background:
+              "linear-gradient(180deg, color-mix(in srgb, var(--lyrical-card-bg-elevated, #241412) 95%, #ffffff 4%), color-mix(in srgb, var(--lyrical-popup-bg, #160d0b) 96%, #000000 4%))",
+            color: "var(--lyrical-text-primary, #ffffff)",
             fontSize: "11px",
-            fontWeight: 500,
-            borderRadius: "7px",
+            fontWeight: 550,
+            borderRadius: "8px",
             whiteSpace: "pre-line",
             zIndex: 99999,
             pointerEvents: "none",
-            boxShadow: "0 8px 20px rgba(0,0,0,0.45)",
-            border: "1px solid var(--lyrical-border, rgba(255,255,255,0.15))",
+            boxShadow:
+              "0 12px 28px -4px rgba(0, 0, 0, 0.6), 0 0 0 1px color-mix(in srgb, var(--lyrical-border-soft, rgba(255, 255, 255, 0.08)) 80%, transparent)",
+            border:
+              "1px solid color-mix(in srgb, var(--lyrical-border, rgba(255, 255, 255, 0.16)) 80%, #ffffff 10%)",
             width: "max-content",
             maxWidth: "180px",
             textAlign: "center",
             lineHeight: "1.35",
-            backdropFilter: "blur(12px)",
-            WebkitBackdropFilter: "blur(12px)",
+            backdropFilter: "blur(16px)",
+            WebkitBackdropFilter: "blur(16px)",
             ...getPositionStyles(),
           }}
         >
@@ -105,7 +108,7 @@ export const Tooltip = ({
               borderWidth: "4px",
               borderStyle: "solid",
               borderColor:
-                "var(--lyrical-card-bg-elevated, #27272a) transparent transparent transparent",
+                "color-mix(in srgb, var(--lyrical-popup-bg, #160d0b) 96%, #000000 4%) transparent transparent transparent",
               ...getArrowStyles(),
             }}
           />

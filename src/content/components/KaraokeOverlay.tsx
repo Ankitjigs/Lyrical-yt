@@ -85,6 +85,7 @@ export default function KaraokeOverlay() {
     romanizedLyrics,
     songInfo,
     themeId,
+    dynamicThemeTokens,
     translatedLyrics,
   } = useAppStore(
     useShallow((state) => ({
@@ -104,6 +105,7 @@ export default function KaraokeOverlay() {
       romanizedLyrics: state.romanizedLyrics,
       songInfo: state.songInfo,
       themeId: state.themeId,
+      dynamicThemeTokens: state.dynamicThemeTokens,
       translatedLyrics: state.translatedLyrics,
     })),
   );
@@ -158,7 +160,7 @@ export default function KaraokeOverlay() {
       data-karaoke-font={karaokeFontSize}
       data-karaoke-pos={karaokePosition}
       data-karaoke-animation={karaokeAnimationStyle}
-      style={{ ...getThemeCssVariables(themeId, customThemes), ...positionStyle }}
+      style={{ ...getThemeCssVariables(themeId, customThemes, dynamicThemeTokens), ...positionStyle }}
       aria-live="off"
     >
       {lyrics && lyrics.length > 0 ? (

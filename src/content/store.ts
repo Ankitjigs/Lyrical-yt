@@ -259,6 +259,10 @@ interface LyricalAppState extends LyricalSettingsState {
   ) => void;
   setReduceAnimations: (reduceAnimations: boolean) => void;
   setThemeId: (themeId: string) => void;
+  dynamicThemeTokens: Record<string, string> | null;
+  setDynamicThemeTokens: (tokens: Record<string, string> | null) => void;
+  dynamicArtworkUrl: string | null;
+  setDynamicArtworkUrl: (url: string | null) => void;
   setCustomThemes: (customThemes: CustomTheme[]) => void;
   setBoiduApiKey: (key: string) => void;
   setSourcePreferences: (prefs: unknown) => void;
@@ -329,6 +333,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   floatingPositionPreset: "right",
   floatingCustomPosition: null,
   themeId: DEFAULT_THEME_ID,
+  dynamicThemeTokens: null,
+  dynamicArtworkUrl: null,
   customThemes: [],
   richsyncOffsetTrim: 0,
   lineOffsetTrim: 0,
@@ -573,6 +579,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   },
   setReduceAnimations: (reduceAnimations) => set({ reduceAnimations }),
   setThemeId: (themeId) => set({ themeId }),
+  setDynamicThemeTokens: (dynamicThemeTokens) => set({ dynamicThemeTokens }),
+  setDynamicArtworkUrl: (dynamicArtworkUrl) => set({ dynamicArtworkUrl }),
   setCustomThemes: (customThemes) =>
     set({ customThemes: Array.isArray(customThemes) ? customThemes : [] }),
   setBoiduApiKey: (key) => {

@@ -991,7 +991,11 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
   if (isDismissed) return null;
 
-  const themeVars = getThemeCssVariables(themeId, customThemes);
+  const dynamicThemeTokens = useAppStore((state) => state.dynamicThemeTokens);
+  const themeVars =
+    themeId === "dynamic"
+      ? getThemeCssVariables("dynamic", customThemes, dynamicThemeTokens)
+      : getThemeCssVariables(themeId, customThemes);
   const title = songInfo?.title || headerText;
   const artist = songInfo?.artist || "Playing on YouTube";
   const artwork = songInfo?.artwork;

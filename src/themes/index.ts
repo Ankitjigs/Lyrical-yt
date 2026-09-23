@@ -19,6 +19,16 @@ export function getThemeById(themeId, customThemes = []) {
   );
 }
 
-export function getThemeCssVariables(themeId, customThemes = []) {
-  return getThemeById(themeId, customThemes).tokens;
+export function getThemeCssVariables(themeId, customThemes = [], dynamicTokens = null) {
+  const baseTokens = getThemeById(themeId, customThemes).tokens;
+  if (themeId === "dynamic" && dynamicTokens) {
+    return { ...baseTokens, ...dynamicTokens };
+  }
+  return baseTokens;
 }
+
+export {
+  extractDynamicThemeTokens,
+  getDynamicThemeFallback,
+  getObsidianPopupTokens,
+} from "./dynamicTheme";

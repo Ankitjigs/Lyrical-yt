@@ -17,7 +17,11 @@ import lyricsEffectsStyles from "./lyricsEffects.css?inline";
 import archivetuneEffectsStyles from "./archivetuneEffects.css?inline";
 import karaokeEffectsStyles from "./karaokeEffects.css?inline";
 import shinyTextStyles from "./components/ShinyText.css?inline";
-import { CUSTOM_THEMES_STORAGE_KEY, DEFAULT_THEME_ID } from "../themes";
+import {
+  CUSTOM_THEMES_STORAGE_KEY,
+  DEFAULT_THEME_ID,
+  extractDynamicThemeTokens,
+} from "../themes";
 import { resolveCustomThemes } from "../themes/customThemeUtils";
 import type { CaptionTrackInfo } from "../types/lyrics";
 import { vocalRemover } from "../modules/audio/vocalRemover";
@@ -421,6 +425,9 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
       });
     } else {
       useAppStore.getState().setThemeId(nextThemeId);
+    }
+    if (nextThemeId === "dynamic") {
+      void applyDynamicTheme();
     }
   }
 
@@ -3167,6 +3174,29 @@ function updateSongInfo(songInfo) {
 
   currentSongInfo = merged;
   useAppStore.getState().setSongInfo(merged);
+  if (merged.artwork) {
+    void applyDynamicTheme(merged.artwork);
+  }
+}
+
+async function applyDynamicTheme(artworkUrl?: string | null) {
+  const url = artworkUrl || currentSongInfo?.artwork;
+  if (!url) return;
+  try {
+    const tokens = await extractDynamicThemeTokens(url);
+    if (tokens) {
+      useAppStore.getState().setDynamicThemeTokens(tokens);
+      useAppStore.getState().setDynamicArtworkUrl(url);
+      if (typeof chrome !== "undefined" && chrome?.storage?.local?.set) {
+        chrome.storage.local.set({
+          dynamicThemeTokens: tokens,
+          dynamicArtworkUrl: url,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[Lyrical] Dynamic theme extraction error:", e);
+  }
 }
 
 async function hydrateSongInfoWithRetry(maxAttempts = 6, delayMs = 350) {
@@ -6476,6 +6506,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
       } else {
         useAppStore.getState().setThemeId(nextThemeId);
+      }
+      if (nextThemeId === "dynamic") {
+        void applyDynamicTheme();
       }
     } else if (key === "compactMode") {
       useAppStore.getState().setCompactMode(Boolean(value));

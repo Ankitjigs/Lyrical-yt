@@ -956,14 +956,33 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         display: "inline-flex",
                         alignItems: "center",
                         gap: "6px",
-                        padding: "9px 12px",
-                        borderRadius: "10px",
-                        border: "none",
-                        background: "var(--lyrical-danger)",
-                        color: "var(--lyrical-text-primary)",
+                        padding: "7px 12px",
+                        borderRadius: "8px",
+                        border:
+                          "1px solid var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))",
+                        background:
+                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))",
+                        color: "var(--lyrical-danger-text, #f87171)",
                         cursor: "pointer",
                         fontSize: "12px",
-                        fontWeight: "700",
+                        fontWeight: "600",
+                        transition: "all 0.16s ease",
+                        boxShadow: "0 2px 6px rgba(239, 68, 68, 0.08)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--lyrical-danger-hover, rgba(239, 68, 68, 0.24))";
+                        e.currentTarget.style.borderColor =
+                          "rgba(239, 68, 68, 0.55)";
+                        e.currentTarget.style.color = "#ffffff";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))";
+                        e.currentTarget.style.borderColor =
+                          "var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))";
+                        e.currentTarget.style.color =
+                          "var(--lyrical-danger-text, #f87171)";
                       }}
                     >
                       <Trash2 size={14} />
@@ -1181,13 +1200,32 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                   style={{
                                     width: "34px",
                                     height: "34px",
-                                    borderRadius: "10px",
-                                    border: "none",
-                                    background: "var(--lyrical-danger)",
-                                    color: "var(--lyrical-text-primary)",
+                                    borderRadius: "8px",
+                                    border:
+                                      "1px solid var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))",
+                                    background:
+                                      "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))",
+                                    color:
+                                      "var(--lyrical-danger-text, #f87171)",
                                     display: "grid",
                                     placeItems: "center",
                                     cursor: "pointer",
+                                    transition: "all 0.16s ease",
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background =
+                                      "var(--lyrical-danger-hover, rgba(239, 68, 68, 0.24))";
+                                    e.currentTarget.style.borderColor =
+                                      "rgba(239, 68, 68, 0.55)";
+                                    e.currentTarget.style.color = "#ffffff";
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background =
+                                      "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))";
+                                    e.currentTarget.style.borderColor =
+                                      "var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))";
+                                    e.currentTarget.style.color =
+                                      "var(--lyrical-danger-text, #f87171)";
                                   }}
                                 >
                                   <Trash2 size={15} />

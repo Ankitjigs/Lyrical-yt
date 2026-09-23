@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useRef } from "react";
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Settings,
   Monitor,
@@ -36,6 +36,7 @@ import {
   DEFAULT_THEME_ID,
   getThemeById,
   getThemeCssVariables,
+  getObsidianPopupTokens,
 } from "../../themes";
 import {
   createStoredCustomThemeFromDraft,
@@ -142,7 +143,22 @@ const SettingsContent = () => {
     LYRICS_SIZE_PRESETS.find(
       (preset) => preset.id === settings.lyricsSizePreset,
     ) || LYRICS_SIZE_PRESETS[1];
-  const themeVars = getThemeCssVariables(themeId, customThemes);
+  const dynamicThemeTokens = useAppStore((state) => state.dynamicThemeTokens);
+  const dynamicArtworkUrl = useAppStore(
+    (state) => state.dynamicArtworkUrl || state.songInfo?.artwork,
+  );
+  const isInsidePopup =
+    typeof window !== "undefined" &&
+    window.location.pathname.includes("popup");
+  const themeVars = useMemo(() => {
+    if (themeId === "dynamic") {
+      if (isInsidePopup) {
+        return getObsidianPopupTokens(dynamicThemeTokens?.["--lyrical-accent"]);
+      }
+      return getThemeCssVariables("dynamic", customThemes, dynamicThemeTokens);
+    }
+    return getThemeCssVariables(themeId, customThemes);
+  }, [themeId, customThemes, dynamicThemeTokens, isInsidePopup]);
   const editingCustomTheme =
     customThemes.find((theme) => theme.id === editingCustomThemeId) || null;
   const sectionCardStyle = {
@@ -863,18 +879,38 @@ const SettingsContent = () => {
                       </div>
                     </div>
                     <button
+                      type="button"
                       style={{
-                        background: "var(--lyrical-danger)",
-                        color: "var(--lyrical-text-primary)",
-                        border: "none",
-                        padding: "6px 12px",
-                        borderRadius: "6px",
+                        background:
+                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))",
+                        color: "var(--lyrical-danger-text, #f87171)",
+                        border:
+                          "1px solid var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))",
+                        padding: "7px 13px",
+                        borderRadius: "8px",
                         fontSize: "12px",
                         fontWeight: "600",
                         cursor: "pointer",
-                        display: "flex",
+                        display: "inline-flex",
                         alignItems: "center",
                         gap: "6px",
+                        transition: "all 0.16s ease",
+                        boxShadow: "0 2px 6px rgba(239, 68, 68, 0.08)",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--lyrical-danger-hover, rgba(239, 68, 68, 0.24))";
+                        e.currentTarget.style.borderColor =
+                          "rgba(239, 68, 68, 0.55)";
+                        e.currentTarget.style.color = "#ffffff";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background =
+                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))";
+                        e.currentTarget.style.borderColor =
+                          "var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))";
+                        e.currentTarget.style.color =
+                          "var(--lyrical-danger-text, #f87171)";
                       }}
                       onClick={() => {
                         chrome.storage.local.clear(() => {
@@ -2016,86 +2052,173 @@ const SettingsContent = () => {
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    borderRadius: "16px",
-                    overflow: "hidden",
-                    border: "1px solid var(--lyrical-border)",
-                    background: "var(--lyrical-panel-surface-soft)",
-                  }}
-                >
-                  <div
-                    style={{
-                      height: "116px",
-                      background: currentTheme.tokens["--lyrical-panel-bg"],
-                      position: "relative",
-                    }}
-                  >
+                {(() => {
+                  const isDynamicTheme = currentTheme.id === "dynamic";
+                  const activeThemeTokens =
+                    isDynamicTheme && dynamicThemeTokens
+                      ? dynamicThemeTokens
+                      : currentTheme.tokens;
+                  return (
                     <div
                       style={{
-                        position: "absolute",
-                        left: "18px",
-                        bottom: "18px",
-                        padding: "6px 12px",
-                        borderRadius: "999px",
-                        background:
-                          currentTheme.tokens["--lyrical-panel-surface-soft"],
-                        color: currentTheme.tokens["--lyrical-text-primary"],
-                        border: `1px solid ${currentTheme.tokens["--lyrical-border"]}`,
-                        fontSize: "12px",
-                        fontWeight: "700",
-                        letterSpacing: "0.06em",
-                        textTransform: "uppercase",
-                      }}
-                    >
-                      {t("settings_theme_active")}
-                    </div>
-                  </div>
-                  <div style={{ padding: "16px" }}>
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: "16px",
-                        marginBottom: "8px",
+                        borderRadius: "16px",
+                        overflow: "hidden",
+                        border: isDynamicTheme
+                          ? `1px solid ${activeThemeTokens["--lyrical-accent-strong"] || "var(--lyrical-border)"}`
+                          : "1px solid var(--lyrical-border)",
+                        background: "var(--lyrical-panel-surface-soft)",
+                        transition: "all 0.25s ease",
                       }}
                     >
                       <div
                         style={{
-                          fontSize: "18px",
-                          fontWeight: "700",
-                          color: "var(--lyrical-text-primary)",
+                          height: "116px",
+                          background:
+                            activeThemeTokens["--lyrical-panel-bg"] ||
+                            currentTheme.tokens["--lyrical-panel-bg"],
+                          position: "relative",
+                          transition: "background 0.5s ease",
                         }}
                       >
-                        {currentThemeName}
+                        {/* Artwork Preview (if dynamic and artwork available) */}
+                        {isDynamicTheme && dynamicArtworkUrl && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "16px",
+                              left: "18px",
+                              width: "44px",
+                              height: "44px",
+                              borderRadius: "12px",
+                              backgroundImage: `url("${dynamicArtworkUrl}")`,
+                              backgroundSize: "cover",
+                              backgroundPosition: "center",
+                              backgroundColor:
+                                activeThemeTokens["--lyrical-panel-surface-soft"],
+                              border: `1px solid ${activeThemeTokens["--lyrical-border"]}`,
+                              boxShadow: "0 8px 18px rgba(0, 0, 0, 0.24)",
+                            }}
+                          />
+                        )}
+
+                        {/* Dynamic Slider Scrubber Swatch */}
+                        <div
+                          style={{
+                            position: "absolute",
+                            right: "18px",
+                            bottom: "22px",
+                            width: "72px",
+                            height: "8px",
+                            borderRadius: "999px",
+                            background:
+                              activeThemeTokens["--lyrical-slider-gradient"],
+                            boxShadow: `0 0 10px ${activeThemeTokens["--lyrical-accent-glow"] || "transparent"}`,
+                          }}
+                        />
+
+                        <div
+                          style={{
+                            position: "absolute",
+                            left: "18px",
+                            bottom: "18px",
+                            padding: "6px 12px",
+                            borderRadius: "999px",
+                            background: isDynamicTheme
+                              ? activeThemeTokens["--lyrical-accent-soft"] ||
+                                "rgba(62,166,255,0.15)"
+                              : activeThemeTokens[
+                                  "--lyrical-panel-surface-soft"
+                                ],
+                            color: isDynamicTheme
+                              ? activeThemeTokens["--lyrical-accent"] ||
+                                "#3ea6ff"
+                              : activeThemeTokens["--lyrical-text-primary"],
+                            border: `1px solid ${isDynamicTheme ? activeThemeTokens["--lyrical-accent-strong"] || activeThemeTokens["--lyrical-border"] : activeThemeTokens["--lyrical-border"]}`,
+                            fontSize: "12px",
+                            fontWeight: "700",
+                            letterSpacing: "0.06em",
+                            textTransform: "uppercase",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "6px",
+                          }}
+                        >
+                          {isDynamicTheme && (
+                            <Sparkles
+                              size={13}
+                              style={{
+                                color:
+                                  activeThemeTokens["--lyrical-accent"] ||
+                                  "#3ea6ff",
+                              }}
+                            />
+                          )}
+                          {t("settings_theme_active")}
+                        </div>
                       </div>
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--lyrical-accent)",
-                          fontWeight: "700",
-                          letterSpacing: "0.08em",
-                          textTransform: "uppercase",
-                        }}
-                      >
-                        {currentTheme.isCustom
-                          ? t("common_custom")
-                          : t("common_preset")}
+                      <div style={{ padding: "16px" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            gap: "16px",
+                            marginBottom: "8px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: "18px",
+                              fontWeight: "700",
+                              color: "var(--lyrical-text-primary)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "8px",
+                            }}
+                          >
+                            {isDynamicTheme && (
+                              <Sparkles
+                                size={16}
+                                style={{
+                                  color:
+                                    activeThemeTokens["--lyrical-accent"] ||
+                                    "#3ea6ff",
+                                }}
+                              />
+                            )}
+                            {currentThemeName}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: "12px",
+                              color: isDynamicTheme
+                                ? activeThemeTokens["--lyrical-accent"] ||
+                                  "var(--lyrical-accent)"
+                                : "var(--lyrical-accent)",
+                              fontWeight: "700",
+                              letterSpacing: "0.08em",
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            {currentTheme.isCustom
+                              ? t("common_custom")
+                              : t("common_preset")}
+                          </div>
+                        </div>
+                        <p
+                          style={{
+                            margin: 0,
+                            fontSize: "13px",
+                            lineHeight: "1.6",
+                            color: "var(--lyrical-text-muted)",
+                          }}
+                        >
+                          {currentThemeDescription}
+                        </p>
                       </div>
                     </div>
-                    <p
-                      style={{
-                        margin: 0,
-                        fontSize: "13px",
-                        lineHeight: "1.6",
-                        color: "var(--lyrical-text-muted)",
-                      }}
-                    >
-                      {currentThemeDescription}
-                    </p>
-                  </div>
-                </div>
+                  );
+                })()}
 
                 <div
                   style={{
