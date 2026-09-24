@@ -181,20 +181,46 @@ function getVideoId() {
   const v = params.get("v");
   if (v) return v;
 
+  // 1. The playing video title link inside the HTML5 player controls (.ytp-title-link always has the playing video)
   try {
-    const miniLink = document.querySelector(
-      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']"
+    const titleLink = document.querySelector(
+      "ytd-miniplayer .ytp-title-link[href*='watch?v='], ytd-miniplayer a.ytp-title-link, .ytp-title-link[href*='watch?v=']"
     );
-    if (miniLink && miniLink.href) {
-      const match = miniLink.href.match(/[?&]v=([^&]+)/);
+    if (titleLink && titleLink.href) {
+      const match = titleLink.href.match(/[?&]v=([^&]+)/);
       if (match && match[1]) return match[1];
     }
   } catch {}
 
+  // 2. Selected playlist queue item inside miniplayer
   try {
-    const titleLink = document.querySelector(".ytp-title-link");
-    if (titleLink && titleLink.href) {
-      const match = titleLink.href.match(/[?&]v=([^&]+)/);
+    const selItem = document.querySelector(
+      "ytd-miniplayer ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], ytd-miniplayer [aria-selected='true'] a[href*='watch?v='], ytd-miniplayer .selected a[href*='watch?v=']"
+    );
+    if (selItem && selItem.href) {
+      const match = selItem.href.match(/[?&]v=([^&]+)/);
+      if (match && match[1]) return match[1];
+    }
+  } catch {}
+
+  // 3. MediaSession artwork
+  if ("mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+    try {
+      const arts = navigator.mediaSession.metadata.artwork;
+      for (let i = arts.length - 1; i >= 0; i--) {
+        const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+        if (m && m[1]) return m[1];
+      }
+    } catch {}
+  }
+
+  // 4. Fallback: miniplayer info bar or any miniplayer link
+  try {
+    const miniLink = document.querySelector(
+      "ytd-miniplayer .info-bar a[href*='watch?v='], ytd-miniplayer .metadata a[href*='watch?v='], ytd-miniplayer a[href*='watch?v=']"
+    );
+    if (miniLink && miniLink.href) {
+      const match = miniLink.href.match(/[?&]v=([^&]+)/);
       if (match && match[1]) return match[1];
     }
   } catch {}

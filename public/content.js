@@ -22,21 +22,72 @@ window.getSongInfoFromPage = function () {
         } else {
             // NOT on watch page (e.g. youtube.com home feed, search, subscriptions)
             // The ONLY legitimate music source is the active YouTube miniplayer!
-            // NEVER inspect document.getElementById('movie_player') or generic players here,
-            // because thumbnail hover-previews mount an inline player.
+            const mini = document.querySelector('ytd-miniplayer');
+            const isMiniActive = mini && (
+                mini.hasAttribute('active') ||
+                mini.offsetParent !== null ||
+                window.getComputedStyle(mini).display !== 'none'
+            );
+
+            if (!isMiniActive) {
+                console.log('[Content] Non-watch page without active miniplayer song - ignoring hover previews');
+                return null;
+            }
+
+            // 1. The playing video title link inside the miniplayer player chrome (.ytp-title-link always has the playing video)
             try {
-                const miniLink = document.querySelector(
-                    "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']"
+                const titleLink = mini.querySelector(
+                    ".ytp-title-link[href*='watch?v='], a.ytp-title-link"
                 );
-                if (miniLink && miniLink.href) {
-                    const match = miniLink.href.match(/[?&]v=([^&]+)/);
+                if (titleLink && titleLink.href) {
+                    const match = titleLink.href.match(/[?&]v=([^&]+)/);
                     if (match && match[1]) videoId = match[1];
                 }
             } catch {}
 
+            // 2. Selected playlist queue item inside miniplayer
+            if (!videoId) {
+                try {
+                    const selItem = mini.querySelector(
+                        "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']"
+                    );
+                    if (selItem && selItem.href) {
+                        const match = selItem.href.match(/[?&]v=([^&]+)/);
+                        if (match && match[1]) videoId = match[1];
+                    }
+                } catch {}
+            }
+
+            // 3. MediaSession artwork videoId (only the playing video controls MediaSession)
+            if (!videoId && "mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+                try {
+                    const arts = navigator.mediaSession.metadata.artwork;
+                    for (let i = arts.length - 1; i >= 0; i--) {
+                        const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+                        if (m && m[1]) {
+                            videoId = m[1];
+                            break;
+                        }
+                    }
+                } catch {}
+            }
+
+            // 4. Fallback: miniplayer info-bar or any link
+            if (!videoId) {
+                try {
+                    const miniLink = mini.querySelector(
+                        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']"
+                    );
+                    if (miniLink && miniLink.href) {
+                        const match = miniLink.href.match(/[?&]v=([^&]+)/);
+                        if (match && match[1]) videoId = match[1];
+                    }
+                } catch {}
+            }
+
             // If there's no miniplayer video, there is NO song on this page - ignore hover previews
             if (!videoId) {
-                console.log('[Content] Non-watch page without active miniplayer song - ignoring hover previews');
+                console.log('[Content] Active miniplayer without identifiable videoId - skipping');
                 return null;
             }
         }
@@ -91,14 +142,26 @@ window.getSongInfoFromPage = function () {
         if (videoId && mediaSessionInfo.artwork) {
             const artMatch = mediaSessionInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
             if (artMatch && artMatch[1] && artMatch[1] !== videoId) {
-                console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
-                isMediaSessionValid = false;
+                if (!isWatchUrl) {
+                    // In miniplayer, MediaSession artwork is frequently the most up-to-date indicator of the new track
+                    console.debug('[Content] Updating miniplayer videoId from MediaSession artwork:', artMatch[1]);
+                    videoId = artMatch[1];
+                } else {
+                    console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
+                    isMediaSessionValid = false;
+                }
             }
         }
         if (!isWatchUrl && isMediaSessionValid) {
-            const miniTitleEl = document.querySelector("ytd-miniplayer #video-title, ytd-miniplayer .ytp-title-link, ytd-miniplayer .info-bar");
+            const miniTitleEl = document.querySelector(
+                "ytd-miniplayer .ytp-title-link, ytd-miniplayer #video-title, ytd-miniplayer .info-bar"
+            );
             const miniTitle = miniTitleEl?.innerText?.trim();
-            if (miniTitle && !miniTitle.toLowerCase().includes(mediaSessionInfo.title.toLowerCase().slice(0, 10)) && !mediaSessionInfo.title.toLowerCase().includes(miniTitle.toLowerCase().slice(0, 10))) {
+            if (
+                miniTitle &&
+                !miniTitle.toLowerCase().includes(mediaSessionInfo.title.toLowerCase().slice(0, 8)) &&
+                !mediaSessionInfo.title.toLowerCase().includes(miniTitle.toLowerCase().slice(0, 8))
+            ) {
                 console.debug('[Content] MediaSession title does not match miniplayer title - rejecting hover preview session');
                 isMediaSessionValid = false;
             }
@@ -106,8 +169,8 @@ window.getSongInfoFromPage = function () {
     }
 
     if (isMediaSessionValid && mediaSessionInfo && mediaSessionInfo.title) {
-        if (!mediaSessionInfo.artwork) {
-            mediaSessionInfo.artwork = getYouTubeArtworkFromPage();
+        if (!mediaSessionInfo.artwork && videoId) {
+            mediaSessionInfo.artwork = getYouTubeArtworkFromPage(videoId);
         }
         if (videoId && !mediaSessionInfo.videoId) {
             mediaSessionInfo.videoId = videoId;
@@ -117,10 +180,10 @@ window.getSongInfoFromPage = function () {
     }
 
     // Fallback to page scraping
-    const scrapedInfo = scrapePageInfo();
+    const scrapedInfo = scrapePageInfo(videoId);
     if (scrapedInfo) {
-        if (!scrapedInfo.artwork) {
-            scrapedInfo.artwork = getYouTubeArtworkFromPage();
+        if (!scrapedInfo.artwork && videoId) {
+            scrapedInfo.artwork = getYouTubeArtworkFromPage(videoId);
         }
         if (videoId && !scrapedInfo.videoId) {
             scrapedInfo.videoId = videoId;
@@ -133,32 +196,40 @@ window.getSongInfoFromPage = function () {
     return null;
 };
 
-function getYouTubeArtworkFromPage() {
+function getYouTubeArtworkFromPage(videoId) {
     if (!window.location.hostname.includes('youtube.com')) return null;
 
-    const ogImage = document.querySelector('meta[property="og:image"]')?.content;
-    if (ogImage) return ogImage;
+    // Direct video thumbnail if videoId is known (always reliable, high resolution, and never stale)
+    if (videoId) {
+        return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+    }
 
-    const twitterImage = document.querySelector('meta[name="twitter:image"]')?.content;
-    if (twitterImage) return twitterImage;
+    const isWatchUrl = window.location.pathname.includes('/watch');
+    if (isWatchUrl) {
+        const ogImage = document.querySelector('meta[property="og:image"]')?.content;
+        if (ogImage) return ogImage;
 
-    const thumbImg =
-        document.querySelector('#thumbnail img')?.src ||
-        document.querySelector('ytd-watch-metadata #owner img')?.src ||
-        null;
-    if (thumbImg) return thumbImg;
+        const twitterImage = document.querySelector('meta[name="twitter:image"]')?.content;
+        if (twitterImage) return twitterImage;
 
-    try {
-        const playerResponse =
-            window?.ytInitialPlayerResponse ||
-            window?.ytplayer?.config?.args?.player_response &&
-                JSON.parse(window.ytplayer.config.args.player_response);
-        const thumbs = playerResponse?.videoDetails?.thumbnail?.thumbnails;
-        if (Array.isArray(thumbs) && thumbs.length > 0) {
-            return thumbs[thumbs.length - 1]?.url || thumbs[0]?.url || null;
+        const thumbImg =
+            document.querySelector('#thumbnail img')?.src ||
+            document.querySelector('ytd-watch-metadata #owner img')?.src ||
+            null;
+        if (thumbImg) return thumbImg;
+
+        try {
+            const playerResponse =
+                window?.ytInitialPlayerResponse ||
+                (window?.ytplayer?.config?.args?.player_response &&
+                    JSON.parse(window.ytplayer.config.args.player_response));
+            const thumbs = playerResponse?.videoDetails?.thumbnail?.thumbnails;
+            if (Array.isArray(thumbs) && thumbs.length > 0) {
+                return thumbs[thumbs.length - 1]?.url || thumbs[0]?.url || null;
+            }
+        } catch {
+            // ignore parse/read failures
         }
-    } catch {
-        // ignore parse/read failures
     }
 
     return null;
@@ -178,6 +249,12 @@ function getMediaSessionMetadata() {
                 .trim();
         }
 
+        // Pick highest resolution artwork or last item in array
+        let artworkUrl = null;
+        if (Array.isArray(artwork) && artwork.length > 0) {
+            artworkUrl = artwork[artwork.length - 1]?.src || artwork[0]?.src || null;
+        }
+
         // If title still has " - ", try to extract artist and song
         if (title && title.includes(' - ')) {
             const parts = title.split(' - ');
@@ -185,11 +262,9 @@ function getMediaSessionMetadata() {
                 artist: parts[0].trim(),
                 title: parts[1].trim(),
                 album: album || "",
-                artwork: artwork && artwork.length > 0 ? artwork[0].src : null
+                artwork: artworkUrl
             };
         }
-
-        const artworkUrl = artwork && artwork.length > 0 ? artwork[0].src : null;
 
         console.log("MediaSession detected:", { title, artist, album, artworkUrl });
 
@@ -204,7 +279,7 @@ function getMediaSessionMetadata() {
 }
 
 // Fallback: scrape page content
-function scrapePageInfo() {
+function scrapePageInfo(videoId) {
     console.log('[Content] scrapePageInfo called for:', window.location.hostname);
 
     // YouTube video page
@@ -277,7 +352,8 @@ function scrapePageInfo() {
                 const result = {
                     artist: cleanTitle(parts[0]),
                     title: cleanTitle(parts[1]),
-                    artwork: getYouTubeArtworkFromPage()
+                    artwork: getYouTubeArtworkFromPage(videoId),
+                    videoId: videoId || null
                 };
                 console.log('[Content] Parsed song info:', result);
                 return result;
@@ -292,7 +368,8 @@ function scrapePageInfo() {
             const result = {
                 title: cleanTitleFallback,
                 artist: channelName ? channelName.innerText.trim() : 'Unknown Artist',
-                artwork: getYouTubeArtworkFromPage()
+                artwork: getYouTubeArtworkFromPage(videoId),
+                videoId: videoId || null
             };
             console.log('[Content] Using channel as artist:', result);
             return result;
@@ -307,7 +384,8 @@ function scrapePageInfo() {
                 const result = {
                     title: parts[0].trim(),
                     artist: parts[1] ? parts[1].trim() : 'YouTube',
-                    artwork: getYouTubeArtworkFromPage()
+                    artwork: getYouTubeArtworkFromPage(videoId),
+                    videoId: videoId || null
                 };
                 console.log('[Content] Parsed from document.title:', result);
                 return result;
@@ -315,7 +393,8 @@ function scrapePageInfo() {
             const result = {
                 title: docTitle,
                 artist: 'YouTube',
-                artwork: getYouTubeArtworkFromPage()
+                artwork: getYouTubeArtworkFromPage(videoId),
+                videoId: videoId || null
             };
             console.log('[Content] Using full document.title:', result);
             return result;

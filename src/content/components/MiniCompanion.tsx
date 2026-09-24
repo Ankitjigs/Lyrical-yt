@@ -493,6 +493,34 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     return "";
   }, [isRomanizationEnabled, activeLineIndex, activeLine, rawRomanizedLyrics]);
 
+  // Resolve timedRomanization for the active line
+  const activeTimedRomanization = useMemo(() => {
+    if (!isRomanizationEnabled || activeLineIndex < 0 || !activeLine) return null;
+    if (activeLine.isInstrumental) return null;
+
+    if (Array.isArray(activeLine.timedRomanization) && activeLine.timedRomanization.length > 0) {
+      return activeLine.timedRomanization;
+    }
+
+    const rawArr = Array.isArray(rawRomanizedLyrics) ? rawRomanizedLyrics : [];
+    const directMatch = rawArr[activeLineIndex];
+    if (directMatch) {
+      const timed = directMatch.timedRomanization || (directMatch as any).timedRomanized;
+      if (Array.isArray(timed) && timed.length > 0) return timed;
+    }
+
+    const lineTime = Number(activeLine.time ?? 0);
+    for (const src of rawArr) {
+      if (!src) continue;
+      const srcTime = Number(src.time ?? -999);
+      if (Math.abs(srcTime - lineTime) <= 0.12) {
+        const timed = src.timedRomanization || (src as any).timedRomanized;
+        if (Array.isArray(timed) && timed.length > 0) return timed;
+      }
+    }
+    return null;
+  }, [isRomanizationEnabled, activeLineIndex, activeLine, rawRomanizedLyrics]);
+
   // Resolve translated text for the active line (same approach)
   const activeTranslated = useMemo(() => {
     if (!isTranslateEnabled || activeLineIndex < 0 || !activeLine) return "";
@@ -989,6 +1017,143 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     );
   };
 
+  const renderSingleLineRomanized = () => {
+    if (!activeLine || !activeRomanized || isInstrumental) return null;
+
+    const lineStart = Number(activeLine.time ?? 0);
+    const nextLine = lyrics?.[activeLineIndex + 1];
+    const rawInterval = nextLine
+      ? Math.max(0.5, Number(nextLine.time) - lineStart)
+      : Math.max(0.5, Number(activeLine.duration) || 3.5);
+
+    let wordObjects: TimedKaraokeWord[];
+
+    if (activeTimedRomanization && activeTimedRomanization.length > 0) {
+      wordObjects = activeTimedRomanization.map((p: any) => ({
+        text: p.text,
+        time: Number(p.time ?? lineStart),
+        duration: Math.max(Number(p.duration ?? 0), 0.12),
+        trailingSpace: p.trailingSpace,
+      }));
+    } else {
+      wordObjects = generateLineSyncedWords(
+        activeRomanized,
+        lineStart,
+        rawInterval,
+        Boolean(activeLine.duration && activeLine.duration > 0),
+        Number(activeLine.duration),
+      );
+      if (wordObjects.length === 0) {
+        return <span>{activeRomanized}</span>;
+      }
+    }
+
+    const EARLY_PREPARE_S = 0.35;
+    const nextLineTime = nextLine
+      ? Number(nextLine.time ?? Infinity)
+      : Infinity;
+    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+
+    return wordObjects.map((wordObj, index) => {
+      const start = wordObj.time;
+      const duration = wordObj.duration;
+      const wordCurrentTime = currentTime + duration * 0.1;
+      const calcEnd = start + duration;
+      const wordEnd = Math.min(calcEnd, unmountDeadline);
+      const effectiveDuration = Math.max(wordEnd - start, 0.1);
+
+      const isPast =
+        currentTime >= wordEnd || wordCurrentTime >= wordEnd;
+      const isActive = wordCurrentTime >= start && !isPast;
+
+      let progress = 0;
+      if (isPast) {
+        progress = 1;
+      } else if (isActive) {
+        progress = Math.min(
+          1,
+          Math.max(0, (wordCurrentTime - start) / effectiveDuration),
+        );
+      }
+
+      if (lyricsAnimationStyle === "archivetune") {
+        return (
+          <React.Fragment key={`rom-${index}-${start}-${wordObj.text}`}>
+            <span
+              className={[
+                "at-lyrics--word-rom",
+                isActive ? "at-lyrics--animating" : "",
+                isPast ? "is-past" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-content={wordObj.text}
+              style={
+                {
+                  "--at-duration": `${effectiveDuration}s`,
+                  "--at-anim-delay": "0s",
+                  "--at-transition-amount-start": isPast
+                    ? 1.3
+                    : isActive
+                      ? -0.25 + progress * 1.55
+                      : -0.25,
+                  "--at-transition-amount-end": isPast
+                    ? 1.4
+                    : isActive
+                      ? -0.15 + progress * 1.55
+                      : -0.15,
+                  display: "inline-block",
+                  position: "relative",
+                } as React.CSSProperties
+              }
+            >
+              {wordObj.text}
+            </span>
+            {wordObj.trailingSpace !== undefined
+              ? wordObj.trailingSpace
+                ? "\u00A0"
+                : null
+              : index < wordObjects.length - 1
+                ? "\u00A0"
+                : null}
+          </React.Fragment>
+        );
+      }
+
+      // Classic ("better-lyrics") swipe
+      return (
+        <React.Fragment key={`rom-${index}-${start}-${wordObj.text}`}>
+          <span
+            className={[
+              "lyrical-mini-rom-word",
+              isPast ? "is-past" : "",
+              isActive ? "is-active" : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
+            data-content={wordObj.text}
+            style={
+              {
+                "--cw-progress": progress,
+                display: "inline-block",
+                position: "relative",
+              } as React.CSSProperties
+            }
+          >
+            {wordObj.text}
+          </span>
+          {wordObj.trailingSpace !== undefined
+            ? wordObj.trailingSpace
+              ? "\u00A0"
+              : null
+            : index < wordObjects.length - 1
+              ? "\u00A0"
+              : null}
+        </React.Fragment>
+      );
+    });
+  };
+
   if (isDismissed) return null;
 
   const dynamicThemeTokens = useAppStore((state) => state.dynamicThemeTokens);
@@ -998,7 +1163,11 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       : getThemeCssVariables(themeId, customThemes);
   const title = songInfo?.title || headerText;
   const artist = songInfo?.artist || "Playing on YouTube";
-  const artwork = songInfo?.artwork;
+  const artwork =
+    songInfo?.artwork ||
+    (songInfo?.videoId
+      ? `https://i.ytimg.com/vi/${songInfo.videoId}/hqdefault.jpg`
+      : null);
 
   const hasCustomPos = Boolean(miniCompanionCustomPosition);
   // During drag, don't apply position from React — the card's inline styles
@@ -1041,6 +1210,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       <AnimatePresence>
         <motion.div
           key="lyrical-mini-companion-card"
+          data-reduce-animations={reduceAnimations ? "true" : "false"}
           initial={{ opacity: 0, y: 16, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 12, scale: 0.96 }}
@@ -1103,6 +1273,40 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             text-shadow: 0 0 14px color-mix(in srgb, var(--lyrical-accent, #3ea6ff) 50%, transparent);
           }
 
+          /* Classic Romanized Word in Mini Companion */
+          .lyrical-mini-rom-word {
+            position: relative;
+            display: inline-block;
+            vertical-align: baseline;
+            color: color-mix(in srgb, var(--lyrical-romanized, #86efac) 60%, transparent);
+            transition: text-shadow 0.2s ease, color 0.15s ease;
+          }
+          .lyrical-mini-rom-word::after {
+            content: attr(data-content);
+            position: absolute;
+            inset: 0;
+            color: transparent;
+            background-image: linear-gradient(
+              90deg,
+              var(--lyrical-text-primary, #ffffff) 0%,
+              var(--lyrical-text-primary, #ffffff) calc(var(--cw-progress, 0) * 110%),
+              transparent calc(var(--cw-progress, 0) * 110% + 4%)
+            );
+            background-clip: text;
+            -webkit-background-clip: text;
+            pointer-events: none;
+            white-space: nowrap;
+          }
+          .lyrical-mini-rom-word.is-past {
+            color: var(--lyrical-text-primary, #ffffff);
+          }
+          .lyrical-mini-rom-word.is-past::after {
+            content: none;
+          }
+          .lyrical-mini-rom-word.is-active {
+            text-shadow: 0 0 10px color-mix(in srgb, var(--lyrical-romanized, #86efac) 70%, transparent);
+          }
+
           .at-lyrics--word {
             display: inline-block;
             transform: translateY(0px) scale(1);
@@ -1116,6 +1320,41 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           .at-lyrics--word.is-past {
             color: var(--lyrical-text-primary, #ffffff) !important;
           }
+
+          /* Modern Gentle Romanized Word in Mini Companion */
+          .at-lyrics--word-rom {
+            display: inline-block;
+            vertical-align: baseline;
+            transform: translateY(0px) scale(1);
+            position: relative;
+            color: color-mix(in srgb, var(--lyrical-romanized, #86efac) 60%, transparent);
+            transition: transform 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.2s ease;
+          }
+          .at-lyrics--word-rom.at-lyrics--animating {
+            animation: at-sine-float var(--at-duration, 0.3s) ease forwards;
+            will-change: transform;
+            color: var(--lyrical-text-primary, #ffffff);
+            text-shadow: 0 0 8px color-mix(in srgb, var(--lyrical-romanized, #86efac) 70%, transparent);
+          }
+          .at-lyrics--word-rom.is-past {
+            color: var(--lyrical-text-primary, #ffffff) !important;
+            transform: translateY(0px) scale(1);
+            text-shadow: none;
+          }
+
+          /* Reduced animations support */
+          [data-reduce-animations="true"] .lyrical-mini-rom-word::after {
+            display: none !important;
+          }
+          [data-reduce-animations="true"] .lyrical-mini-rom-word.is-active,
+          [data-reduce-animations="true"] .lyrical-mini-rom-word.is-past,
+          [data-reduce-animations="true"] .at-lyrics--word-rom.is-past,
+          [data-reduce-animations="true"] .at-lyrics--word-rom.at-lyrics--animating {
+            animation: none !important;
+            transform: none !important;
+            color: var(--lyrical-text-primary, #ffffff) !important;
+          }
+
           @keyframes at-sine-float {
             0% { transform: translateY(0px) scale(1); }
             50% { transform: translateY(-3px) scale(1.02); }
@@ -1495,7 +1734,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                       textOverflow: "ellipsis",
                     }}
                   >
-                    {activeRomanized}
+                    {renderSingleLineRomanized()}
                   </div>
                 )}
 

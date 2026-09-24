@@ -1021,8 +1021,9 @@ window.addEventListener("message", (event) => {
                     useAppStore
                       .getState()
                       .setOffset(currentSyncOffset, userSongOffset);
+                    void saveStoredSongOffset(activeSongKey, userSongOffset);
                     log(
-                      "[Lyrical Auto-Sync] ⚡ Applied late auto-detected offset:",
+                      "[Lyrical Auto-Sync] ⚡ Applied & saved late auto-detected offset:",
                       detected,
                       "s",
                     );
@@ -2286,25 +2287,6 @@ function getCurrentVideoId(songInfo?: any): string | null {
   if (isWatchUrl) {
     const urlV = new URLSearchParams(window.location.search).get("v");
     if (urlV) return urlV;
-  } else {
-    // On non-watch page (home feed, etc.), ONLY check miniplayer!
-    const miniLink = document.querySelector<HTMLAnchorElement>(
-      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer [href*='watch?v=']",
-    );
-    if (miniLink?.href) {
-      try {
-        const v = new URL(miniLink.href).searchParams.get("v");
-        if (v) return v;
-      } catch {}
-    }
-  }
-
-  if (songInfo?.videoId) return songInfo.videoId;
-  if (currentSongInfo?.videoId) return currentSongInfo.videoId;
-  const storeSongInfo = useAppStore.getState().songInfo;
-  if (storeSongInfo?.videoId) return storeSongInfo.videoId;
-
-  if (isWatchUrl) {
     try {
       const player = document.getElementById("movie_player") as any;
       if (player && !player.closest?.("ytd-inline-preview-player, #inline-preview-player")) {
@@ -2312,7 +2294,58 @@ function getCurrentVideoId(songInfo?: any): string | null {
         if (playerV) return playerV;
       }
     } catch {}
+  } else {
+    // On non-watch page (home feed, etc.), check miniplayer!
+    const mini = document.querySelector("ytd-miniplayer");
+    if (mini) {
+      // 1. The playing video title link inside the HTML5 video player chrome
+      const titleLink = mini.querySelector<HTMLAnchorElement>(
+        ".ytp-title-link[href*='watch?v='], a.ytp-title-link"
+      );
+      if (titleLink?.href) {
+        try {
+          const v = new URL(titleLink.href).searchParams.get("v");
+          if (v) return v;
+        } catch {}
+      }
+
+      // 2. Selected playlist queue item inside miniplayer
+      const selItem = mini.querySelector<HTMLAnchorElement>(
+        "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']"
+      );
+      if (selItem?.href) {
+        try {
+          const v = new URL(selItem.href).searchParams.get("v");
+          if (v) return v;
+        } catch {}
+      }
+
+      // 3. MediaSession artwork
+      if ("mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+        const arts = navigator.mediaSession.metadata.artwork;
+        for (let i = arts.length - 1; i >= 0; i--) {
+          const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+          if (m && m[1]) return m[1];
+        }
+      }
+
+      // 4. Fallback: info-bar or any watch link in miniplayer
+      const fallbackLink = mini.querySelector<HTMLAnchorElement>(
+        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']"
+      );
+      if (fallbackLink?.href) {
+        try {
+          const v = new URL(fallbackLink.href).searchParams.get("v");
+          if (v) return v;
+        } catch {}
+      }
+    }
   }
+
+  if (songInfo?.videoId) return songInfo.videoId;
+  if (currentSongInfo?.videoId && isWatchUrl) return currentSongInfo.videoId;
+  const storeSongInfo = useAppStore.getState().songInfo;
+  if (storeSongInfo?.videoId && isWatchUrl) return storeSongInfo.videoId;
 
   return null;
 }
@@ -2469,19 +2502,12 @@ function checkMiniplayerSongChange() {
   if (!info || !info.title) return;
 
   // Guard: Validate against the actual miniplayer video to prevent hover-preview
-  // thumbnails from changing the lyrics. The miniplayer DOM always has an anchor
-  // with the real playing video's ID.
+  // thumbnails from changing the lyrics.
   try {
-    const miniLink = document.querySelector<HTMLAnchorElement>(
-      "ytd-miniplayer a[href*='watch?v='], ytd-miniplayer .ytp-title-link[href*='watch?v=']",
-    );
-    if (miniLink?.href) {
-      const match = miniLink.href.match(/[?&]v=([^&]+)/);
-      const miniVideoId = match?.[1];
-      if (miniVideoId && info.videoId && miniVideoId !== info.videoId) {
-        // The info is from a hover preview, not the actual miniplayer video — skip
-        return;
-      }
+    const activeMiniVid = getCurrentVideoId(info);
+    if (activeMiniVid && info.videoId && activeMiniVid !== info.videoId) {
+      // If info videoId differs from the active miniplayer video, skip
+      return;
     }
   } catch {}
 
@@ -3156,20 +3182,36 @@ function updateSongInfo(songInfo) {
   log("React Update: Song Info", songInfo);
   if (!songInfo) return;
 
-  // Merge partial updates so first-load sparse metadata doesn't wipe existing fields.
+  const currentVid = currentSongInfo?.videoId;
+  const newVid = songInfo.videoId;
+  const isDifferentTrack =
+    Boolean(currentSongInfo) &&
+    ((newVid && currentVid && newVid !== currentVid) ||
+      (songInfo.title &&
+        currentSongInfo?.title &&
+        songInfo.title.trim().toLowerCase() !==
+          currentSongInfo.title.trim().toLowerCase()));
+
+  // Merge partial updates so first-load sparse metadata doesn't wipe existing fields,
+  // BUT do not inherit previous track metadata (especially artwork!) when switching tracks.
   const merged = {
-    ...(currentSongInfo || {}),
+    ...(isDifferentTrack ? {} : (currentSongInfo || {})),
     ...songInfo,
   };
 
-  if (!merged.title && currentSongInfo?.title) {
+  if (!merged.title && currentSongInfo?.title && !isDifferentTrack) {
     merged.title = currentSongInfo.title;
   }
-  if (!merged.artist && currentSongInfo?.artist) {
+  if (!merged.artist && currentSongInfo?.artist && !isDifferentTrack) {
     merged.artist = currentSongInfo.artist;
   }
-  if (!merged.artwork && currentSongInfo?.artwork) {
+  if (!merged.artwork && currentSongInfo?.artwork && !isDifferentTrack) {
     merged.artwork = currentSongInfo.artwork;
+  }
+
+  // Ensure high-resolution thumbnail if artwork is not set but videoId is known
+  if (!merged.artwork && merged.videoId) {
+    merged.artwork = `https://i.ytimg.com/vi/${merged.videoId}/hqdefault.jpg`;
   }
 
   currentSongInfo = merged;
@@ -5183,6 +5225,13 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
     ) {
       songInfo = realInfo;
     }
+  }
+
+  if (!songInfo.videoId && videoId) {
+    songInfo.videoId = videoId;
+  }
+  if (!songInfo.artwork && videoId) {
+    songInfo.artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
   }
 
   currentSongInfo = songInfo;
