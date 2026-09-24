@@ -14,7 +14,7 @@
     "skipLibCheck": true,
     "strict": false,
     "target": "es2022",
-    "types": ["node"]
+    "types": ["node", "chrome"]
   },
   "include": ["src", "vite*.config.ts"],
   "exclude": ["node_modules", "dist"]

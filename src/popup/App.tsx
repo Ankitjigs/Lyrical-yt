@@ -21,10 +21,14 @@ const PopupApp = () => {
         ["dynamicThemeTokens", "dynamicArtworkUrl"],
         (res) => {
           if (res.dynamicThemeTokens) {
-            useAppStore.getState().setDynamicThemeTokens(res.dynamicThemeTokens);
+            useAppStore
+              .getState()
+              .setDynamicThemeTokens(res.dynamicThemeTokens as Record<string, string>);
           }
           if (res.dynamicArtworkUrl) {
-            useAppStore.getState().setDynamicArtworkUrl(res.dynamicArtworkUrl);
+            useAppStore
+              .getState()
+              .setDynamicArtworkUrl(res.dynamicArtworkUrl as string);
           }
         },
       );
@@ -36,12 +40,16 @@ const PopupApp = () => {
           if (changes.dynamicThemeTokens) {
             useAppStore
               .getState()
-              .setDynamicThemeTokens(changes.dynamicThemeTokens.newValue || null);
+              .setDynamicThemeTokens(
+                (changes.dynamicThemeTokens.newValue as Record<string, string>) || null,
+              );
           }
           if (changes.dynamicArtworkUrl) {
             useAppStore
               .getState()
-              .setDynamicArtworkUrl(changes.dynamicArtworkUrl.newValue || null);
+              .setDynamicArtworkUrl(
+                (changes.dynamicArtworkUrl.newValue as string) || null,
+              );
           }
         }
       };
