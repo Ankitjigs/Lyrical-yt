@@ -254,7 +254,7 @@ const SettingsContent = () => {
         showProgressBar: true,
         reopenFloatingLyricsAutomatically: false,
       },
-      (items) => {
+      (items: any) => {
         setSettings({
           showLogs: items.showLogs,
           compactMode: items.compactMode,
@@ -326,13 +326,13 @@ const SettingsContent = () => {
     );
 
     // Load active lyrics source from local storage (for popup to show ACTIVE badge)
-    chrome.storage.local.get("activeLyricsSource", (result) => {
+    chrome.storage.local.get("activeLyricsSource", (result: any) => {
       if (result.activeLyricsSource) {
         useAppStore.setState({ lyricsSource: result.activeLyricsSource });
       }
     });
 
-    const handleStorageChange = (changes, namespace) => {
+    const handleStorageChange = (changes: any, namespace) => {
       if (
         namespace === "local" &&
         Object.prototype.hasOwnProperty.call(changes, "activeLyricsSource")

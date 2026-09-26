@@ -51,7 +51,7 @@ export const FloatingLyricsModal: React.FC<FloatingLyricsModalProps> = ({
           scrollLongTitles: true,
           showProgressBar: true,
         },
-        (items) => {
+        (items: any) => {
           useAppStore.setState({
             albumArtTransition: items.albumArtTransition || "shuffle",
             titleTransition: items.titleTransition || "spring",

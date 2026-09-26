@@ -220,7 +220,7 @@ if (chrome.storage) {
       showProgressBar: true,
       reopenFloatingLyricsAutomatically: false,
     },
-    (res) => {
+    (res: any) => {
       setDebugMode(res.showLogs); // Use logger utility
       // Sync global state
       isRomanizationEnabled = res.isRomanizationEnabled;
@@ -302,7 +302,7 @@ if (chrome.storage) {
 }
 
 // 🔄 SYNC: Listen for updates from Extension Popup / Options
-chrome.storage.onChanged.addListener((changes, namespace) => {
+chrome.storage.onChanged.addListener((changes: any, namespace) => {
   if (namespace !== "sync") return;
 
   log("Storage changed:", changes);
@@ -414,7 +414,7 @@ chrome.storage.onChanged.addListener((changes, namespace) => {
       useAppStore.getState().customThemes.length === 0
     ) {
       // Hydrate custom themes first if not present in store
-      chrome.storage.sync.get([CUSTOM_THEMES_STORAGE_KEY], (res) => {
+      chrome.storage.sync.get([CUSTOM_THEMES_STORAGE_KEY], (res: any) => {
         const customThemes = resolveCustomThemes(
           res[CUSTOM_THEMES_STORAGE_KEY] || [],
         );
@@ -772,7 +772,7 @@ function lockCurrentFetchWinner(sourceId) {
   return currentFetchWinningSourceId === sourceId;
 }
 
-function canDisplayCaptionsForCurrentFetch() {
+function canDisplayCaptionsForCurrentFetch(isManual = false) {
   const liveVideoId = getCurrentVideoId(currentSongInfo);
 
   if (
@@ -794,7 +794,11 @@ function canDisplayCaptionsForCurrentFetch() {
     return false;
   }
 
-  if (!captionSourceReachedForCurrentFetch) {
+  if (
+    !isManual &&
+    !captionSourceReachedForCurrentFetch &&
+    currentFetchWinningSourceId !== "captions"
+  ) {
     log(
       "Caption data queued, but source priority has not reached captions yet",
     );
@@ -802,6 +806,7 @@ function canDisplayCaptionsForCurrentFetch() {
   }
 
   if (
+    !isManual &&
     currentFetchWinningSourceId &&
     currentFetchWinningSourceId !== "captions"
   ) {
@@ -946,6 +951,23 @@ window.addEventListener("message", (event) => {
         "lang:",
         pendingMainWorldCaptionLanguage,
       );
+
+      // Cache the captions so they are readily available as an alternate source
+      if (currentSongInfo) {
+        persistLyricsCache(currentSongInfo, "captions", lyrics, {
+          label: `Captions (${pendingMainWorldCaptionLanguage || "auto"})`,
+          language: pendingMainWorldCaptionLanguage || null,
+          trackId: event.data.selectedTrack?.vssId || null,
+          isAsr: event.data.selectedTrack?.kind === "asr",
+        });
+      }
+
+      // Register "captions" as an available alternative source if enabled in preferences
+      const sourcePreferences = useAppStore.getState().sourcePreferences || [];
+      const captionsPref = sourcePreferences.find((s) => s.id === "captions");
+      if (captionsPref ? captionsPref.enabled !== false : true) {
+        useAppStore.getState().addAvailableLyricsSource("captions");
+      }
 
       // Recovery hook: when lyrics arrive late from MAIN world, run a delayed
       // caption retry if nothing is currently shown.
@@ -2973,7 +2995,7 @@ function attachEventListeners() {
           throw new Error("chrome.storage.local unavailable");
         }
         const stored = await chrome.storage.local.get(songKey);
-        const versions = stored[songKey] || {};
+        const versions = (stored[songKey] || {}) as any;
         const currentVideoId =
           currentSongInfo?.videoId ||
           (typeof window !== "undefined" && window.location?.search
@@ -3519,7 +3541,7 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
   if (sourceId === "captions") {
     try {
       if (hasLocalStorageApi() && chrome?.storage?.local?.get) {
-        const existing = await chrome.storage.local.get([sourceKey]);
+        const existing: any = await chrome.storage.local.get([sourceKey]);
         const prevEntry = existing?.[sourceKey] || {};
         const prevTracks = prevEntry.tracks || {};
         const rawLang =
@@ -3830,7 +3852,7 @@ async function tryRestoreCachedLyricsForSource(
 
   const cachedEntries = await chrome.storage.local.get(sourceCacheKeys);
   for (const cacheKeyForSource of sourceCacheKeys) {
-    const entry = cachedEntries[cacheKeyForSource];
+    const entry = cachedEntries[cacheKeyForSource] as any;
     if (!entry?.lyrics?.length) continue;
 
     const cacheAge = Date.now() - entry.timestamp;
@@ -4343,7 +4365,7 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
     try {
       const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
       if (sourceKey) {
-        const stored = await chrome.storage.local.get([sourceKey]);
+        const stored: any = await chrome.storage.local.get([sourceKey]);
         const cachedTracks = stored?.[sourceKey]?.tracks;
         if (cachedTracks && typeof cachedTracks === "object") {
           Object.values(cachedTracks).forEach((ct: any, idx: number) => {
@@ -4466,10 +4488,10 @@ function isTranslatedEnglishTrack(track) {
  * - We get caption tracks from postMessage (captions-extractor.js in MAIN world)
  * - We use fetch + library fallback instead of direct API access
  */
-async function tryDisplayCaptions() {
+async function tryDisplayCaptions(isManual = false) {
   const videoId = getCurrentVideoId(currentSongInfo);
   if (!videoId) return false;
-  if (!canDisplayCaptionsForCurrentFetch()) return false;
+  if (!canDisplayCaptionsForCurrentFetch(isManual)) return false;
 
   log("Attempting to load captions for video:", videoId);
 
@@ -4586,7 +4608,9 @@ async function tryDisplayCaptions() {
   );
 
   if (lyrics && lyrics.length > 0) {
-    if (!lockCurrentFetchWinner("captions")) {
+    if (isManual) {
+      currentFetchWinningSourceId = "captions";
+    } else if (!lockCurrentFetchWinner("captions")) {
       log(
         "Skipping caption display because another source already won this session",
       );
@@ -4948,7 +4972,7 @@ async function preScanAvailableCachedSources(
   if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) return;
   const keysArray = Array.from(allKeysMap.keys());
   try {
-    const cachedEntries = await chrome.storage.local.get(keysArray);
+    const cachedEntries: any = await chrome.storage.local.get(keysArray);
     for (const key of keysArray) {
       const entry = cachedEntries[key];
       if (entry?.lyrics?.length) {
@@ -4963,6 +4987,17 @@ async function preScanAvailableCachedSources(
     }
   } catch (e) {
     // ignore
+  }
+
+  // If prefetched captions are already in memory for this video, ensure captions is marked available
+  const hasPendingCaptions = Boolean(
+    pendingMainWorldCaptionLyrics &&
+      pendingMainWorldCaptionLyrics.length > 0 &&
+      (!pendingMainWorldCaptionVideoId ||
+        pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
+  );
+  if (hasPendingCaptions) {
+    useAppStore.getState().addAvailableLyricsSource("captions");
   }
 }
 
@@ -4997,6 +5032,21 @@ async function backgroundPreScanAllSources(
     if (useAppStore.getState().availableLyricsSources.includes(source.id))
       continue;
 
+    // Fast-path: Captions from Main World or caption tracks
+    if (source.id === "captions") {
+      const hasPending = Boolean(
+        pendingMainWorldCaptionLyrics &&
+          pendingMainWorldCaptionLyrics.length > 0 &&
+          (!pendingMainWorldCaptionVideoId ||
+            pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
+      );
+      const hasTracks = Boolean(availableCaptions && availableCaptions.length > 0);
+      if (hasPending || hasTracks) {
+        useAppStore.getState().addAvailableLyricsSource("captions");
+        continue;
+      }
+    }
+
     try {
       // 1. Check if already cached in storage
       if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) break;
@@ -5005,7 +5055,7 @@ async function backgroundPreScanAllSources(
       for (const subId of lookupIds) {
         const key = getLyricsCacheKey(songInfo, subId);
         if (key) {
-          const res = await chrome.storage.local.get(key);
+          const res: any = await chrome.storage.local.get(key);
           const entry = res?.[key];
           if (entry?.lyrics?.length) {
             const cacheAge = Date.now() - (entry.timestamp || 0);
@@ -5463,7 +5513,9 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
   if (!sourceId || !currentSongInfo) return;
 
   log("[Lyrical] User manually selected source:", sourceId);
+  currentFetchWinningSourceId = sourceId;
   if (sourceId === "captions") {
+    captionSourceReachedForCurrentFetch = true;
     userSongOffset = 0;
     currentSyncOffset = 0;
     useAppStore.getState().setOffset(0, 0);
@@ -5528,7 +5580,9 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       found = await tryFetchLRCLib(currentSongInfo);
       break;
     case "captions":
-      found = await tryDisplayCaptions();
+      captionSourceReachedForCurrentFetch = true;
+      currentFetchWinningSourceId = "captions";
+      found = await tryDisplayCaptions(true);
       break;
   }
   useAppStore.setState({ isLoading: false });
@@ -5555,8 +5609,8 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
 
     if (sourceKey && hasLocalStorageApi() && chrome?.storage?.local?.get) {
       try {
-        const stored = await chrome.storage.local.get([sourceKey]);
-        const entry = stored?.[sourceKey];
+        const stored: any = await chrome.storage.local.get([sourceKey]);
+        const entry: any = stored?.[sourceKey];
         let cachedTrack =
           entry?.tracks?.[track.vssId] ||
           (entry?.tracks &&
@@ -6399,7 +6453,7 @@ async function initialize() {
             showMiniCompanion: true,
             miniCompanionCustomPosition: null,
           },
-          (res) => {
+          (res: any) => {
             useAppStore.setState({
               albumArtTransition: res.albumArtTransition || "shuffle",
               titleTransition: res.titleTransition || "spring",
@@ -6544,7 +6598,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         nextThemeId.startsWith("custom-") &&
         useAppStore.getState().customThemes.length === 0
       ) {
-        chrome.storage.sync.get([CUSTOM_THEMES_STORAGE_KEY], (res) => {
+        chrome.storage.sync.get([CUSTOM_THEMES_STORAGE_KEY], (res: any) => {
           const customThemes = resolveCustomThemes(
             res[CUSTOM_THEMES_STORAGE_KEY] || [],
           );

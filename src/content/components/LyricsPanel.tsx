@@ -1576,7 +1576,7 @@ const LyricsPanel = () => {
   const { strategy, setIsUserScrolled } = useLyricsEngine(
     strategyName,
     isKaraokeMode ? [] : lyrics,
-    { isPlaying, offset }, // Pass total offset (base + user)
+    { isPlaying, offset, isExpanded }, // Pass total offset (base + user) and expansion state
     contentRef,
     engineExtraData,
     engineResetKey,
@@ -1737,13 +1737,58 @@ const LyricsPanel = () => {
     };
   }, [strategy, isExpanded]);
 
-  // When expanding from collapsed view, refresh imperative layout calculations
+  // When expanding from collapsed view, refresh imperative layout calculations & trigger paused render
   useEffect(() => {
     if (!isExpanded) return;
-    if (strategyRef.current?.invalidateLayout) {
-      strategyRef.current.invalidateLayout(300);
+
+    const container = contentRef.current;
+    if (container && strategyRef.current && lyrics && lyrics.length > 0) {
+      const rootId = strategyRef.current.rootId || "blyrics-root";
+      const root = container.querySelector(`#${rootId}`);
+      const isMounted =
+        root &&
+        ((strategyRef.current.container &&
+          root.contains(strategyRef.current.container)) ||
+          root.firstElementChild !== null);
+
+      if (root && !isMounted && strategyRef.current.mount) {
+        strategyRef.current.mount(container, lyrics, engineExtraData);
+      }
     }
-  }, [isExpanded]);
+
+    if (strategyRef.current?.invalidateLayout) {
+      strategyRef.current.invalidateLayout(compactMode ? 350 : 300);
+    }
+
+    // Force an update tick even if paused, so lines are rendered, styled and scrolled to active
+    const triggerPausedUpdate = () => {
+      const video = document.querySelector<HTMLVideoElement>("video");
+      const currentTime = video ? video.currentTime : 0;
+      const videoIsPlaying = video ? !video.paused : false;
+
+      if (strategyRef.current?.update) {
+        strategyRef.current.update({
+          currentTime,
+          offset,
+          isPlaying: videoIsPlaying,
+          currentLineIndex: activeIndex,
+          refs: { containerRef: contentRef },
+          syncedLyrics: lyrics,
+          enableAutoScroll: true,
+        });
+      }
+    };
+
+    const rafId = requestAnimationFrame(triggerPausedUpdate);
+    const t1 = window.setTimeout(triggerPausedUpdate, 120);
+    const t2 = window.setTimeout(triggerPausedUpdate, 380);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [isExpanded, lyrics, offset, compactMode, activeIndex, engineExtraData]);
 
   // FIX: Clear lingering scroll-pause timers when the song changes
   useEffect(() => {

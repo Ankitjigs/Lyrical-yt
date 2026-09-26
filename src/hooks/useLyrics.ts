@@ -55,7 +55,7 @@ export default function useLyrics(songInfo) {
 
                 // Check cache first
                 if (chrome?.storage?.local) {
-                    const cached = await chrome.storage.local.get(cacheKey);
+                    const cached: any = await chrome.storage.local.get(cacheKey);
                     if (cached[cacheKey]) {
                         console.log('Lyrics loaded from cache');
                         const cachedData = cached[cacheKey];
