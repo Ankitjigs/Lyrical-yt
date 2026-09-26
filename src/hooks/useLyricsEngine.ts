@@ -190,7 +190,7 @@ export function useLyricsEngine(
         strategy.mount(containerRef.current, syncedLyrics, extraData);
       }
     }
-  }, [containerRef.current, strategy, syncedLyrics, extraData, songInfo?.isExpanded]);
+  }, [containerRef.current, strategy, syncedLyrics, extraData]);
 
   const currentTimeRef = useRef(currentTime);
   useEffect(() => {
@@ -315,7 +315,6 @@ export function useLyricsEngine(
   }, [
     songInfo?.isPlaying,
     songInfo?.offset,
-    songInfo?.isExpanded,
     strategy,
     isUserScrolled,
     syncedLyrics,

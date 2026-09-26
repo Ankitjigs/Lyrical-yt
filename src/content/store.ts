@@ -159,6 +159,8 @@ export function isRichsyncSourceId(
   return false;
 }
 
+export type SearchingIndicatorStyle = "lofi" | "disco" | "rock" | "soothing" | "none";
+
 interface LyricalSettingsState {
   offset: number;
   userOffset: number;
@@ -171,6 +173,7 @@ interface LyricalSettingsState {
   compactMode: boolean;
   lyricsSizePreset: "compact" | "standard" | "large" | "cinematic";
   lyricsAnimationStyle: "better-lyrics" | "archivetune";
+  searchingIndicatorStyle: SearchingIndicatorStyle;
   isKaraokeMode: boolean;
   karaokePosition: "top" | "bottom" | "center" | "custom";
   karaokeCustomPosition: number;
@@ -243,6 +246,7 @@ interface LyricalAppState extends LyricalSettingsState {
   setSettings: (settings: Partial<LyricalSettingsState>) => void;
   setCompactMode: (isCompact: boolean) => void;
   setLyricsAnimationStyle: (style: "better-lyrics" | "archivetune") => void;
+  setSearchingIndicatorStyle: (style: SearchingIndicatorStyle) => void;
   setKaraokeMode: (enabled: boolean) => void;
   setKaraokePosition: (position: "top" | "bottom" | "center" | "custom") => void;
   setKaraokeCustomPosition: (percent: number) => void;
@@ -317,6 +321,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   compactMode: false, // Added compactMode
   lyricsSizePreset: "standard",
   lyricsAnimationStyle: "better-lyrics",
+  searchingIndicatorStyle: "lofi",
   isKaraokeMode: false,
   karaokePosition: "bottom",
   karaokeCustomPosition: 80,
@@ -464,6 +469,10 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   setLyricsAnimationStyle: (style) => {
     set({ lyricsAnimationStyle: style });
     chrome.storage.sync.set({ lyricsAnimationStyle: style });
+  },
+  setSearchingIndicatorStyle: (style) => {
+    set({ searchingIndicatorStyle: style });
+    chrome.storage.sync.set({ searchingIndicatorStyle: style });
   },
   setKaraokeMode: (enabled) => {
     set({ isKaraokeMode: enabled });

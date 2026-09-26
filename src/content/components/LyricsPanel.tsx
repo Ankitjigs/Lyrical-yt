@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useMemo } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useAppStore } from "../store";
 import {
@@ -16,6 +16,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import ShinyText from "./ShinyText";
+import SearchingVibeIcon from "./SearchingVibeIcons";
 import { useLyricsEngine } from "../../hooks/useLyricsEngine";
 import {
   createInstrumentalElement,
@@ -1163,6 +1164,7 @@ const LyricsPanel = () => {
     titleTransition,
     scrollLongTitles,
     showProgressBar,
+    searchingIndicatorStyle,
   } = useAppStore(
     useShallow((state) => ({
       songInfo: state.songInfo,
@@ -1196,6 +1198,7 @@ const LyricsPanel = () => {
       titleTransition: state.titleTransition,
       scrollLongTitles: state.scrollLongTitles,
       showProgressBar: state.showProgressBar,
+      searchingIndicatorStyle: state.searchingIndicatorStyle,
     })),
   );
   const isAdPlaying = useAppStore((state) => state.isAdPlaying);
@@ -1576,7 +1579,7 @@ const LyricsPanel = () => {
   const { strategy, setIsUserScrolled } = useLyricsEngine(
     strategyName,
     isKaraokeMode ? [] : lyrics,
-    { isPlaying, offset, isExpanded }, // Pass total offset (base + user) and expansion state
+    { isPlaying, offset }, // Pass total offset (base + user)
     contentRef,
     engineExtraData,
     engineResetKey,
@@ -1737,58 +1740,13 @@ const LyricsPanel = () => {
     };
   }, [strategy, isExpanded]);
 
-  // When expanding from collapsed view, refresh imperative layout calculations & trigger paused render
+  // When expanding from collapsed view, refresh imperative layout calculations
   useEffect(() => {
     if (!isExpanded) return;
-
-    const container = contentRef.current;
-    if (container && strategyRef.current && lyrics && lyrics.length > 0) {
-      const rootId = strategyRef.current.rootId || "blyrics-root";
-      const root = container.querySelector(`#${rootId}`);
-      const isMounted =
-        root &&
-        ((strategyRef.current.container &&
-          root.contains(strategyRef.current.container)) ||
-          root.firstElementChild !== null);
-
-      if (root && !isMounted && strategyRef.current.mount) {
-        strategyRef.current.mount(container, lyrics, engineExtraData);
-      }
-    }
-
     if (strategyRef.current?.invalidateLayout) {
       strategyRef.current.invalidateLayout(compactMode ? 350 : 300);
     }
-
-    // Force an update tick even if paused, so lines are rendered, styled and scrolled to active
-    const triggerPausedUpdate = () => {
-      const video = document.querySelector<HTMLVideoElement>("video");
-      const currentTime = video ? video.currentTime : 0;
-      const videoIsPlaying = video ? !video.paused : false;
-
-      if (strategyRef.current?.update) {
-        strategyRef.current.update({
-          currentTime,
-          offset,
-          isPlaying: videoIsPlaying,
-          currentLineIndex: activeIndex,
-          refs: { containerRef: contentRef },
-          syncedLyrics: lyrics,
-          enableAutoScroll: true,
-        });
-      }
-    };
-
-    const rafId = requestAnimationFrame(triggerPausedUpdate);
-    const t1 = window.setTimeout(triggerPausedUpdate, 120);
-    const t2 = window.setTimeout(triggerPausedUpdate, 380);
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [isExpanded, lyrics, offset, compactMode, activeIndex, engineExtraData]);
+  }, [isExpanded, compactMode]);
 
   // FIX: Clear lingering scroll-pause timers when the song changes
   useEffect(() => {
@@ -3130,8 +3088,16 @@ const LyricsPanel = () => {
                                 alignItems: "center",
                                 justifyContent: "center",
                                 textAlign: "center",
+                                gap: searchingIndicatorStyle === "none" ? "0px" : "10px",
                               }}
                             >
+                              {searchingIndicatorStyle !== "none" && (
+                                <SearchingVibeIcon
+                                  vibe={searchingIndicatorStyle}
+                                  size={25}
+                                  reduceAnimations={reduceAnimations}
+                                />
+                              )}
                               <ShinyText
                                 text={t("lyricsPanel_searching")}
                                 disabled={reduceAnimations}

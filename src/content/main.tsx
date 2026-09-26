@@ -194,6 +194,7 @@ if (chrome.storage) {
       compactMode: false,
       lyricsSizePreset: "standard",
       lyricsAnimationStyle: "better-lyrics",
+      searchingIndicatorStyle: "lofi",
       isKaraokeMode: false,
       karaokePosition: "bottom",
       karaokeCustomPosition: 80,
@@ -245,6 +246,7 @@ if (chrome.storage) {
         compactMode: res.compactMode,
         lyricsSizePreset: res.lyricsSizePreset || "standard",
         lyricsAnimationStyle: res.lyricsAnimationStyle || "better-lyrics",
+        searchingIndicatorStyle: res.searchingIndicatorStyle || "lofi",
         isKaraokeMode: Boolean(res.isKaraokeMode),
         karaokePosition: res.karaokePosition || "bottom",
         karaokeCustomPosition:
@@ -457,6 +459,14 @@ chrome.storage.onChanged.addListener((changes: any, namespace) => {
     useAppStore.setState({
       lyricsAnimationStyle:
         changes.lyricsAnimationStyle.newValue || "better-lyrics",
+    });
+  }
+
+  // 10b. Searching Indicator Style
+  if (changes.searchingIndicatorStyle) {
+    useAppStore.setState({
+      searchingIndicatorStyle:
+        changes.searchingIndicatorStyle.newValue || "lofi",
     });
   }
 

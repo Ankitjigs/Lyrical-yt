@@ -20,6 +20,7 @@ import {
   AlignCenterHorizontal,
   Move,
   Sparkles,
+  Disc3,
 } from "lucide-react";
 import { useAppStore } from "../store";
 import { log } from "../utils/logger";
@@ -30,6 +31,7 @@ import ThemeImportExportModal from "./ThemeImportExportModal";
 import LanguageExclusionsModal from "./LanguageExclusionsModal";
 import CacheEditorView from "./CacheEditorView";
 import FloatingLyricsModal from "./FloatingLyricsModal";
+import SearchingVibeModal from "./SearchingVibeModal";
 import { AVAILABLE_LANGUAGES } from "../utils/languages";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
@@ -99,6 +101,10 @@ const SettingsContent = () => {
   const [isExclusionsModalOpen, setIsExclusionsModalOpen] = useState(false);
   const [isCacheEditorOpen, setIsCacheEditorOpen] = useState(false);
   const [isFloatingLyricsModalOpen, setIsFloatingLyricsModalOpen] = useState(false);
+  const [isSearchingVibeModalOpen, setIsSearchingVibeModalOpen] = useState(false);
+  const searchingIndicatorStyle = useAppStore(
+    (state) => state.searchingIndicatorStyle || "lofi",
+  );
   const [editingCustomThemeId, setEditingCustomThemeId] = useState(null);
   const [customThemeRecords, setCustomThemeRecords] = useState([]);
   const [customThemes, setCustomThemes] = useState([]);
@@ -1210,6 +1216,113 @@ const SettingsContent = () => {
                     </button>
                   </div>
                 </div>
+
+                <div style={dividerStyle} />
+
+                {/* Searching Indicator Vibe Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsSearchingVibeModalOpen(true)}
+                  style={{
+                    width: "100%",
+                    padding: "0",
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: "14px",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "12px",
+                      minWidth: 0,
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "34px",
+                        height: "34px",
+                        borderRadius: "10px",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        color: "var(--lyrical-accent)",
+                        background: "var(--lyrical-accent-soft)",
+                        border: "1px solid var(--lyrical-border-soft)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      <Disc3 size={18} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          color: "var(--lyrical-text-primary)",
+                          fontSize: "14px",
+                          fontWeight: "600",
+                          marginBottom: "3px",
+                        }}
+                      >
+                        Searching Indicator Vibe
+                      </div>
+                      <div
+                        style={{
+                          color: "var(--lyrical-text-muted)",
+                          fontSize: "12px",
+                          lineHeight: 1.35,
+                        }}
+                      >
+                        Choose the animation shown while searching for lyrics
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <span
+                      style={{
+                        color: "var(--lyrical-text-primary)",
+                        background: "var(--lyrical-card-bg-elevated)",
+                        border: "1px solid var(--lyrical-border)",
+                        borderRadius: "999px",
+                        padding: "5px 10px",
+                        fontSize: "12px",
+                        fontWeight: "700",
+                      }}
+                    >
+                      {searchingIndicatorStyle === "none"
+                        ? "🚫 None"
+                        : searchingIndicatorStyle === "disco"
+                          ? "🪩 Disco Ball"
+                          : searchingIndicatorStyle === "rock"
+                            ? "⚡ Rock Pulse"
+                            : searchingIndicatorStyle === "soothing"
+                              ? "🌙 Soothing Halo"
+                              : "💿 Lo-Fi Vinyl"}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        color: "var(--lyrical-text-muted)",
+                        fontSize: "18px",
+                        lineHeight: 1,
+                      }}
+                    >
+                      ›
+                    </span>
+                  </div>
+                </button>
 
                 <div style={dividerStyle} />
 
@@ -2773,6 +2886,10 @@ const SettingsContent = () => {
           </div>
         </div>
       )}
+      <SearchingVibeModal
+        isOpen={isSearchingVibeModalOpen}
+        onClose={() => setIsSearchingVibeModalOpen(false)}
+      />
       <ThemeSelectionModal
         isOpen={isThemeModalOpen}
         onClose={() => setIsThemeModalOpen(false)}
