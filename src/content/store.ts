@@ -282,6 +282,7 @@ interface LyricalAppState extends LyricalSettingsState {
   ) => void;
   reset: () => void;
   resetLyricsOnly: () => void;
+  clearLyricsForNewTrack: () => void;
 }
 
 let karaokeCustomPosTimer: ReturnType<typeof setTimeout> | null = null;
@@ -717,6 +718,25 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       isProcessingLyrics: false,
       headerText: "No lyrics found",
       isLoading: false, // Ensure loading is off
+      lyricsLanguage: null,
+      offset: -0.45,
+      userOffset: 0,
+    }),
+
+  clearLyricsForNewTrack: () =>
+    set({
+      lyrics: [],
+      lyricsSource: null,
+      availableLyricsSources: [],
+      availableCaptionTracks: [],
+      selectedCaptionTrackId: null,
+      captionLanguageLabel: null,
+      translatedLyrics: [],
+      romanizedLyrics: [],
+      activeIndex: -1,
+      isProcessingLyrics: false,
+      headerText: "Searching for lyrics...",
+      isLoading: true,
       lyricsLanguage: null,
       offset: -0.45,
       userOffset: 0,

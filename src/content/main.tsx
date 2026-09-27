@@ -853,7 +853,7 @@ window.addEventListener("message", (event) => {
     if (useAppStore.getState().lyricsSource === "captions") {
       fetchedLyrics = null;
       currentFetchWinningSourceId = null;
-      useAppStore.getState().resetLyricsOnly();
+      useAppStore.getState().clearLyricsForNewTrack();
     }
     return;
   }
@@ -888,7 +888,7 @@ window.addEventListener("message", (event) => {
       if (useAppStore.getState().lyricsSource === "captions") {
         fetchedLyrics = null;
         currentFetchWinningSourceId = null;
-        useAppStore.getState().resetLyricsOnly();
+        useAppStore.getState().clearLyricsForNewTrack();
       }
 
       hydrateSongInfoWithRetry(8, 250).then(() => {
@@ -947,6 +947,19 @@ window.addEventListener("message", (event) => {
         "MAIN-world caption fetch failed. Marking to skip direct fetch delay.",
       );
     } else if (lyrics && lyrics.length > 0 && event.data.selectedTrack) {
+      // Guard: do not replace rich multi-line captions with an inferior 1-line stub
+      if (
+        pendingMainWorldCaptionLyrics &&
+        pendingMainWorldCaptionLyrics.length > lyrics.length &&
+        lyrics.length < 3
+      ) {
+        log(
+          "Ignoring inferior 1-line MAIN-world caption update in favor of existing",
+          pendingMainWorldCaptionLyrics.length,
+          "lines",
+        );
+        return;
+      }
       pendingMainWorldCaptionFailed = false;
       pendingMainWorldCaptionLyrics = lyrics;
       pendingMainWorldCaptionLanguage = getCaptionTrackLang(
@@ -963,7 +976,11 @@ window.addEventListener("message", (event) => {
       );
 
       // Cache the captions so they are readily available as an alternate source
-      if (currentSongInfo) {
+      // (Only persist if track has full cues >= 3 or video is very short)
+      const vEl = getActiveMediaVideoElement();
+      const vDur = vEl?.duration || 0;
+      const isCompleteTrack = lyrics.length >= 3 || (vDur > 0 && vDur < 25);
+      if (currentSongInfo && isCompleteTrack) {
         persistLyricsCache(currentSongInfo, "captions", lyrics, {
           label: `Captions (${pendingMainWorldCaptionLanguage || "auto"})`,
           language: pendingMainWorldCaptionLanguage || null,
@@ -1084,9 +1101,15 @@ function decodeXmlEntities(input: any): string {
     .replace(/&#x27;/g, "'");
 }
 
-function cleanCaptionText(value: any): string {
+function cleanCaptionText(value: any, preserveNewlines = false): string {
   if (!value) return "";
-  let words = decodeXmlEntities(String(value)).replace(/\r?\n/g, " ").trim();
+  let words = decodeXmlEntities(String(value));
+  if (preserveNewlines) {
+    words = words.replace(/\r\n?/g, "\n");
+  } else {
+    words = words.replace(/\r?\n/g, " ");
+  }
+  words = words.trim();
 
   // 1. Remove YouTube speaker change markers (e.g. ">> ", ">>> ", "> ")
   words = words.replace(/^(?:>{1,3}|&gt;{1,3})\s*/i, "");
@@ -1112,11 +1135,198 @@ function cleanCaptionText(value: any): string {
     "",
   );
 
-  // 4. Normalize multiple spaces
-  words = words.replace(/\s+/g, " ");
+  if (preserveNewlines) {
+    words = words
+      .split("\n")
+      .map((l) => l.replace(/[ \t]+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n");
+  } else {
+    // 4. Normalize multiple spaces
+    words = words.replace(/\s+/g, " ");
+  }
 
   return words.trim();
 }
+
+function splitLongChunk(chunk: string): string[] {
+  if (chunk.length <= 70) return [chunk];
+  const words = chunk.split(/\s+/).filter(Boolean);
+  if (words.length <= 11) return [chunk];
+
+  // Try splitting by semicolon, em-dash, double hyphen, or comma before clause conjunction
+  const clauseSplitRegex =
+    /;\s*|—\s*|\s+--\s+|,\s+(?=(?:and|but|or|so|yet|for|nor|because|although|though|when|while|where|which|who|that|if)\b)/i;
+  const parts = chunk
+    .split(clauseSplitRegex)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (parts.length > 1) {
+    return parts.flatMap(splitLongChunk);
+  }
+
+  // Try splitting on comma if segments can form balanced lines
+  const commaParts = chunk
+    .split(/,\s+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (commaParts.length > 1) {
+    const grouped: string[] = [];
+    let cur = "";
+    for (const cp of commaParts) {
+      if (!cur) {
+        cur = cp;
+      } else if ((cur + ", " + cp).length <= 65) {
+        cur += ", " + cp;
+      } else {
+        grouped.push(cur);
+        cur = cp;
+      }
+    }
+    if (cur) grouped.push(cur);
+    if (grouped.length > 1) {
+      return grouped;
+    }
+  }
+
+  // Fallback: split roughly in half at a word boundary
+  if (words.length >= 12) {
+    const mid = Math.ceil(words.length / 2);
+    return [
+      words.slice(0, mid).join(" "),
+      words.slice(mid).join(" "),
+    ];
+  }
+
+  return [chunk];
+}
+
+function splitIntoDisplayLines(text: string): string[] {
+  if (!text || !text.trim()) return [];
+
+  // 1. Initial split by explicit line breaks
+  const rawLines = text
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const initialChunks: string[] = [];
+  for (const line of rawLines) {
+    // 2. Sentence boundary split (. ! ? … or ...)
+    // Standard lookbehind without invalid Unicode escapes
+    const sentenceParts = line
+      .split(/(?<=[.!?…]+)["'”’)]*\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (sentenceParts.length > 0) {
+      initialChunks.push(...sentenceParts);
+    } else {
+      initialChunks.push(line);
+    }
+  }
+
+  // 3. Merge orphaned punctuation (e.g. "...", "!", "-") with the preceding chunk
+  const mergedChunks: string[] = [];
+  for (const chunk of initialChunks) {
+    if (/^[.!?…\-—\s]+$/.test(chunk)) {
+      if (mergedChunks.length > 0) {
+        mergedChunks[mergedChunks.length - 1] += " " + chunk;
+      }
+    } else {
+      mergedChunks.push(chunk);
+    }
+  }
+
+  // 4. For any chunks that are still excessively long (> 70 chars AND > 11 words),
+  // split into smaller natural display lines.
+  const finalChunks: string[] = [];
+  for (const chunk of mergedChunks) {
+    const words = chunk.split(/\s+/).filter(Boolean);
+    if (chunk.length > 70 && words.length > 11) {
+      finalChunks.push(...splitLongChunk(chunk));
+    } else {
+      finalChunks.push(chunk);
+    }
+  }
+
+  return finalChunks.filter(Boolean);
+}
+
+/**
+ * Splits a long caption line or multi-line block into cleanly timed sub-lines.
+ * Handles:
+ * 1. Explicit line breaks (\n, \r, <br>)
+ * 2. Sentence punctuation breaks (. ! ? …)
+ * 3. Clause breaks for long sentences (> 70 chars)
+ * 4. Realistic duration allocation based on speech rate (~13.5 chars/sec) when cue duration is missing/tiny
+ */
+function splitCaptionLine(
+  time: number,
+  duration: number,
+  rawText: string,
+): Array<{ time: number; duration: number; text: string }> {
+  if (!rawText) return [];
+
+  const cleaned = cleanCaptionText(rawText, false);
+  if (!cleaned) return [];
+
+  const chunks = splitIntoDisplayLines(cleaned);
+  if (chunks.length === 0) return [];
+
+  const safeTime = Number.isFinite(time) && time >= 0 ? time : 0;
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+
+  if (chunks.length === 1) {
+    const text = chunks[0];
+    return [
+      {
+        time: safeTime,
+        duration:
+          safeDuration > 0
+            ? Math.max(0.4, safeDuration)
+            : Math.max(1.5, Number((text.length / 13.5).toFixed(2))),
+        text,
+      },
+    ];
+  }
+
+  const weights = chunks.map((c) => Math.max(c.length, 5));
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+
+  // If the cue has a valid realistic duration from YouTube (> 0.3s and not overly stretched), distribute proportionally.
+  // When a duration is huge (e.g. 60s for 2 sentences) or missing, pace each chunk by natural speech rate (~13.5 chars/sec).
+  const hasKnownDuration =
+    safeDuration > 0.3 && safeDuration <= chunks.length * 7.0;
+
+  const results: Array<{ time: number; duration: number; text: string }> = [];
+  let currentStart = safeTime;
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunkText = chunks[i];
+    let chunkDur: number;
+
+    if (hasKnownDuration) {
+      chunkDur = (weights[i] / totalWeight) * safeDuration;
+    } else {
+      chunkDur = Math.max(1.5, Number((weights[i] / 13.5).toFixed(2)));
+    }
+    const finalDur = Math.max(0.4, Number(chunkDur.toFixed(3)));
+
+    results.push({
+      time: Number(currentStart.toFixed(3)),
+      duration: finalDur,
+      text: chunkText,
+    });
+
+    currentStart += chunkDur;
+  }
+
+  return results;
+}
+
 
 /**
  * Fetch caption content from content script (ISOLATED world)
@@ -1125,7 +1335,7 @@ function cleanCaptionText(value: any): string {
 async function fetchCaptionsFromContentScript(url, track = null) {
   const readAttr = (attrs, key) => {
     const match = attrs.match(
-      new RegExp(`${key}\\s*=\\s*["']([^"']+)["']`, "i"),
+      new RegExp(`(?:^|\\s)${key}\\s*=\\s*["']([^"']+)["']`, "i"),
     );
     return match ? match[1] : null;
   };
@@ -1144,7 +1354,7 @@ async function fetchCaptionsFromContentScript(url, track = null) {
     return Number.isFinite(n) ? n : 0;
   };
 
-  const parseXmlTimeToSeconds = (value, preferMsHeuristic = false) => {
+  const parseXmlTimeToSeconds = (value: any, isExplicitMs = false) => {
     if (value == null) return 0;
     const raw = String(value).trim().toLowerCase().replace(",", ".");
     if (!raw) return 0;
@@ -1153,7 +1363,8 @@ async function fetchCaptionsFromContentScript(url, track = null) {
     if (raw.includes(":")) return parseTimeLike(raw);
     const n = parseTimeLike(raw);
     if (!Number.isFinite(n)) return 0;
-    if (preferMsHeuristic && n >= 10000) return n / 1000;
+    // In YouTube format 3 (srv3), 't' and 'd' are ALWAYS in milliseconds
+    if (isExplicitMs) return n / 1000;
     return n;
   };
 
@@ -1273,27 +1484,12 @@ async function fetchCaptionsFromContentScript(url, track = null) {
                 words = event.text || event.utf8 || event.content || "";
               }
 
-              const cleaned = cleanCaptionText(words);
-              if (!cleaned) continue;
-
               const time = (event.tStartMs || 0) / 1000;
               const duration = (event.dDurationMs || 0) / 1000;
 
-              if (cleaned.includes("\n")) {
-                const subLines = cleaned.split("\n").map((s) => s.trim()).filter(Boolean);
-                for (let i = 0; i < subLines.length; i++) {
-                  lyrics.push({
-                    time: time + (i * 0.5),
-                    duration: Math.max(0.5, duration / subLines.length),
-                    text: subLines[i],
-                  });
-                }
-              } else {
-                lyrics.push({
-                  time,
-                  duration,
-                  text: cleaned,
-                });
+              const sublines = splitCaptionLine(time, duration, words);
+              for (const sub of sublines) {
+                if (sub.text) lyrics.push(sub);
               }
             }
 
@@ -1322,7 +1518,7 @@ async function fetchCaptionsFromContentScript(url, track = null) {
         text.includes("<?xml")
       ) {
         try {
-          const lyrics = [];
+          const lyrics: Array<{ time: number; text: string; duration: number }> = [];
           const textNodeRegex = /<text\b([^>]*)>([\s\S]*?)<\/text>/gi;
           let match;
 
@@ -1333,18 +1529,18 @@ async function fetchCaptionsFromContentScript(url, track = null) {
             const dur = readAttr(attrs, "dur");
             const t = readAttr(attrs, "t");
             const d = readAttr(attrs, "d");
-            const cleaned = cleanCaptionText(raw);
-            if (!cleaned) continue;
 
-            lyrics.push({
-              time: t
-                ? parseXmlTimeToSeconds(t, true)
-                : parseXmlTimeToSeconds(start, false),
-              duration: d
-                ? parseXmlTimeToSeconds(d, true)
-                : parseXmlTimeToSeconds(dur, false),
-              text: cleaned,
-            });
+            const time = t
+              ? parseXmlTimeToSeconds(t, true)
+              : parseXmlTimeToSeconds(start, false);
+            const duration = d
+              ? parseXmlTimeToSeconds(d, true)
+              : parseXmlTimeToSeconds(dur, false);
+
+            const sublines = splitCaptionLine(time, duration, raw);
+            for (const sub of sublines) {
+              if (sub.text) lyrics.push(sub);
+            }
           }
 
           // TTML fallback: parse <p begin/end/dur> blocks with optional <s> children.
@@ -1354,9 +1550,11 @@ async function fetchCaptionsFromContentScript(url, track = null) {
               const pAttrs = match[1] || "";
               const pBody = match[2] || "";
               const pStart =
-                readAttr(pAttrs, "begin") || readAttr(pAttrs, "start");
+                readAttr(pAttrs, "begin") ||
+                readAttr(pAttrs, "start") ||
+                readAttr(pAttrs, "t");
               const pEnd = readAttr(pAttrs, "end");
-              const pDur = readAttr(pAttrs, "dur");
+              const pDur = readAttr(pAttrs, "dur") || readAttr(pAttrs, "d");
 
               // CRITICAL: A valid TTML caption line MUST have timing attributes (begin, start, or t).
               // An HTML <p> tag from an error page has no timing attributes and must be rejected!
@@ -1369,30 +1567,73 @@ async function fetchCaptionsFromContentScript(url, track = null) {
                 continue;
               }
 
-              let lineText = "";
-              const sNodeRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
-              let sMatch;
-              while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
-                lineText += `${decodeXmlEntities(sMatch[1] || "")} `;
-              }
-
-              if (!lineText.trim()) {
-                lineText = decodeXmlEntities(pBody.replace(/<[^>]+>/g, " "));
-              }
-
-              const cleaned = cleanCaptionText(lineText);
-              if (!cleaned) continue;
-
-              const startTime = parseXmlTimeToSeconds(pStart, false);
-              let duration = parseXmlTimeToSeconds(pDur, false);
-              if (!duration && pEnd) {
-                duration = Math.max(
+              const isMs = Boolean(
+                readAttr(pAttrs, "t") || readAttr(pAttrs, "d"),
+              );
+              const pStartTime = parseXmlTimeToSeconds(pStart, isMs);
+              let pDuration = parseXmlTimeToSeconds(pDur, isMs);
+              if (!pDuration && pEnd) {
+                pDuration = Math.max(
                   0,
-                  parseXmlTimeToSeconds(pEnd, false) - startTime,
+                  parseXmlTimeToSeconds(pEnd, isMs) - pStartTime,
                 );
               }
 
-              lyrics.push({ time: startTime, duration, text: cleaned });
+              // Check if <p> contains <s> elements with their OWN timing attributes
+              const sNodeRegex = /<s\b([^>]*)>([\s\S]*?)<\/s>/gi;
+              let sMatch;
+              let hasTimedSpans = false;
+              const sCues: Array<{ time: number; duration: number; text: string }> = [];
+
+              while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
+                const sAttrs = sMatch[1] || "";
+                const sRaw = decodeXmlEntities(sMatch[2] || "");
+                const sCleaned = cleanCaptionText(sRaw);
+                if (!sCleaned) continue;
+
+                const sStart =
+                  readAttr(sAttrs, "t") ||
+                  readAttr(sAttrs, "begin") ||
+                  readAttr(sAttrs, "start");
+                const sDur = readAttr(sAttrs, "d") || readAttr(sAttrs, "dur");
+
+                if (sStart) {
+                  hasTimedSpans = true;
+                  const sIsMs = Boolean(
+                    readAttr(sAttrs, "t") || readAttr(sAttrs, "d"),
+                  );
+                  const sTime = parseXmlTimeToSeconds(sStart, sIsMs);
+                  const sDuration = sDur ? parseXmlTimeToSeconds(sDur, sIsMs) : 0;
+                  sCues.push({ time: sTime, duration: sDuration, text: sCleaned });
+                }
+              }
+
+              if (hasTimedSpans && sCues.length > 0) {
+                for (const sc of sCues) {
+                  const sublines = splitCaptionLine(sc.time, sc.duration, sc.text);
+                  for (const sub of sublines) {
+                    if (sub.text) lyrics.push(sub);
+                  }
+                }
+              } else {
+                let lineText = "";
+                const plainSRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
+                let m;
+                while ((m = plainSRegex.exec(pBody)) !== null) {
+                  lineText += `${decodeXmlEntities(m[1] || "")} `;
+                }
+
+                if (!lineText.trim()) {
+                  lineText = decodeXmlEntities(
+                    pBody.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " "),
+                  );
+                }
+
+                const sublines = splitCaptionLine(pStartTime, pDuration, lineText);
+                for (const sub of sublines) {
+                  if (sub.text) lyrics.push(sub);
+                }
+              }
             }
           }
 
@@ -1964,11 +2205,12 @@ async function tryAutoDetectOffset(
             : (Number(currentSongInfo?.duration) || 0);
 
         // Check if lyrics are already pre-synced to the video:
-        // Lyrics are pre-synced ONLY IF:
-        // 1. Adding sbOffset would overshoot the total video duration (+2s buffer), OR
-        // 2. A distinct outro segment exists AND the unshifted lyrics already reach the outro
-        //    (within 5s), AND adding sbOffset overshoots outroStart by a substantial margin (>= 5s or 70% of intro).
-        // 3. Pre-synced lyrics CANNOT have their first vocal before the intro skit ends (sbOffset - 1.5s).
+        // Video-native sources (Better Lyrics Unison, YouTube Captions)
+        // are submitted and synced directly against YouTube video timelines.
+        // Therefore, their timestamps already account for video intro skits and should remain 0.00s.
+        const isVideoNativeSource =
+          currentSource.startsWith("unison") || currentSource === "captions";
+
         const startsBeforeIntro =
           firstVocalTime !== null &&
           sbOffset >= 3.0 &&
@@ -1988,17 +2230,19 @@ async function tryAutoDetectOffset(
           lastVocalTime >= outroStart - 5.0 &&
           lastVocalTime + sbOffset > outroStart + Math.max(10.0, sbOffset * 0.85);
 
-        const wouldOvershoot =
-          !startsBeforeIntro && (overshootsVideo || overshootsOutro);
+        const isPreSyncedToVideo =
+          isVideoNativeSource || overshootsVideo || overshootsOutro;
 
-        if (wouldOvershoot) {
-          // The lyrics already span the full video timeline; do not double-delay them.
+        if (isPreSyncedToVideo) {
+          // The lyrics are already synced to the video timeline; lock offset to 0.00s.
           chosenOffset = 0;
-          chosenConfidence = 0.7;
-          chosenSource = `Lyrics pre-synced to video (last vocal ${lastVocalTime?.toFixed(1)}s + intro ${sbOffset.toFixed(1)}s exceeds bounds)`;
+          chosenConfidence = 0.8;
+          chosenSource = isVideoNativeSource
+            ? `Video-native source (${currentSource}) pre-synced to video timeline (0.00s)`
+            : `Lyrics pre-synced to video (last vocal ${lastVocalTime?.toFixed(1)}s + intro ${sbOffset.toFixed(1)}s exceeds bounds)`;
           shouldPersist = true;
           log(
-            `[Lyrical Auto-Sync] 🎯 Lyrics span full video timeline. Locking offset to 0.00s.`,
+            `[Lyrical Auto-Sync] 🎯 Lyrics pre-synced to video timeline. Locking offset to 0.00s.`,
           );
         } else {
           chosenOffset = sbOffset;
@@ -3680,6 +3924,16 @@ function restoreLyricsFromCacheEntry(
   let activeTrackId = entry.activeTrackId || null;
 
   if (currentSource === "captions" || fallbackSourceId === "captions") {
+    // If cached caption has <= 2 lines for a normal length video, ignore stale cache
+    const vEl = getActiveMediaVideoElement();
+    const vDur = vEl?.duration || 0;
+    if (Array.isArray(activeLyrics) && activeLyrics.length <= 2 && vDur > 25) {
+      log(
+        "[Lyrical] Ignoring stale 1-2 line caption cache for video; will fetch fresh complete track",
+      );
+      return false;
+    }
+
     if (entry.tracks && typeof entry.tracks === "object") {
       const activeTrack = activeTrackId
         ? entry.tracks[activeTrackId]
@@ -3703,7 +3957,13 @@ function restoreLyricsFromCacheEntry(
   const isCaptionsSource =
     currentSource === "captions" || fallbackSourceId === "captions";
   const cleanActiveLyrics = isCaptionsSource
-    ? activeLyrics
+    ? normalizeCaptionTiming(
+        activeLyrics
+          .flatMap((line: any) =>
+            splitCaptionLine(line.time, line.duration, line.text),
+          )
+          .filter((line: any) => Boolean(line.text && line.text.trim())),
+      )
     : normalizeLyrics(activeLyrics);
 
   fetchedLyrics = cleanActiveLyrics;
@@ -3807,14 +4067,25 @@ function restoreLyricsFromCacheEntry(
     }
   }
 
-  if (activeRomanized?.length || activeTranslated?.length) {
+  const store = useAppStore.getState();
+  const hasRom = Array.isArray(activeRomanized) && activeRomanized.length > 0;
+  const hasTrans = Array.isArray(activeTranslated) && activeTranslated.length > 0;
+  const needsRom = store.isRomanizationEnabled && !hasRom;
+  const needsTrans = store.isTranslateEnabled && !hasTrans;
+
+  if (needsRom || needsTrans) {
     updateSecondaryLyricsState({
-      romanizedLyrics: activeRomanized,
-      translatedLyrics: activeTranslated,
+      romanizedLyrics: activeRomanized || [],
+      translatedLyrics: activeTranslated || [],
+      isProcessingLyrics: true,
+    });
+    autoProcessLyrics();
+  } else {
+    updateSecondaryLyricsState({
+      romanizedLyrics: activeRomanized || [],
+      translatedLyrics: activeTranslated || [],
       isProcessingLyrics: false,
     });
-  } else {
-    autoProcessLyrics();
   }
 
   startLyricsTimer(cleanActiveLyrics);
@@ -3989,7 +4260,8 @@ function resetLyricsState(reason = "", options: any = {}) {
   } else if (reason === "all sources failed") {
     useAppStore.getState().resetLyricsOnly();
   } else {
-    useAppStore.getState().reset();
+    // When video changes or initializing search, immediately set clean loading state
+    useAppStore.getState().clearLyricsForNewTrack();
   }
 }
 
@@ -4286,9 +4558,12 @@ function normalizeCaptionTiming(lyrics) {
     duration: Number.isFinite(line.duration) ? line.duration : 0,
   }));
 
+  // 1. Sort strictly by start time so chronological order is guaranteed.
+  normalized.sort((a, b) => a.time - b.time);
+
   const maxTime = normalized.reduce((m, l) => Math.max(m, l.time || 0), 0);
 
-  // Heuristic: if we have a lot of lines but tiny max time, timestamps are likely
+  // 2. Heuristic: if we have a lot of lines but tiny max time, timestamps are likely
   // compressed by wrong unit conversion (e.g., seconds treated as milliseconds).
   if (normalized.length > 200 && maxTime > 0 && maxTime < 30) {
     for (const line of normalized) {
@@ -4297,10 +4572,44 @@ function normalizeCaptionTiming(lyrics) {
     }
   }
 
-  // Ensure strictly increasing timeline to avoid binary-search jumping to the end.
+  // 2. Detect whether this track is UNTIMED (e.g. transcript where all or most lines start at 0)
+  const nonZeroTimes = normalized.filter((l) => (l.time || 0) > 0.5);
+  const isUntimed =
+    normalized.length > 2 &&
+    (maxTime <= 1.5 ||
+      nonZeroTimes.length <=
+        Math.min(2, Math.floor(normalized.length * 0.08)));
+
+  if (isUntimed) {
+    // 🎵 UNTIMED CAPTIONS HANDLER:
+    // When captions have no timestamps (e.g. manual transcripts without timecodes), pace lines
+    // sequentially based on natural speech rate (~13.5 chars/sec, between 2.2s and 5.5s per line)
+    // so they stay synchronized with video playback as time progresses.
+    let currentPacedTime = normalized[0].time > 0 ? normalized[0].time : 0.5;
+    for (let i = 0; i < normalized.length; i++) {
+      normalized[i].time = Number(currentPacedTime.toFixed(3));
+      const textLen = (normalized[i].text || "").trim().length;
+      const naturalDur = Math.max(
+        2.2,
+        Math.min(5.5, Number((textLen / 13.5).toFixed(2))),
+      );
+      const lineDur =
+        normalized[i].duration > 0.8 && normalized[i].duration < 12.0
+          ? normalized[i].duration
+          : naturalDur;
+      normalized[i].duration = Number(lineDur.toFixed(3));
+      currentPacedTime += lineDur;
+    }
+    return normalized;
+  }
+
+  // 3. TIMED CAPTIONS: Ensure strictly non-decreasing timeline to satisfy binary-search.
+  // In timed subtitles, overlapping or simultaneous cues can legitimately share timestamps.
+  // We apply a tiny 10ms (0.01s) micro-nudge ONLY if time[i] <= time[i-1] to keep binary search monotonic,
+  // without distorting real YouTube cue sync.
   for (let i = 1; i < normalized.length; i++) {
     if (normalized[i].time <= normalized[i - 1].time) {
-      normalized[i].time = normalized[i - 1].time + 0.02;
+      normalized[i].time = Number((normalized[i - 1].time + 0.01).toFixed(3));
     }
   }
 
@@ -4512,9 +4821,14 @@ async function tryDisplayCaptions(isManual = false) {
 
   // METHOD 0: Consume MAIN-world prefetched captions, but only when this
   // ordered captions source is being evaluated.
-  if (
+  const vEl = getActiveMediaVideoElement();
+  const vDur = vEl?.duration || 0;
+  const isPendingCaptionUsable =
     pendingMainWorldCaptionLyrics &&
-    pendingMainWorldCaptionLyrics.length > 0 &&
+    (pendingMainWorldCaptionLyrics.length >= 3 || (vDur > 0 && vDur < 25));
+
+  if (
+    isPendingCaptionUsable &&
     (!pendingMainWorldCaptionVideoId ||
       pendingMainWorldCaptionVideoId === videoId)
   ) {
@@ -4532,7 +4846,7 @@ async function tryDisplayCaptions(isManual = false) {
       await new Promise((r) => setTimeout(r, 200));
       if (
         pendingMainWorldCaptionLyrics &&
-        pendingMainWorldCaptionLyrics.length > 0 &&
+        (pendingMainWorldCaptionLyrics.length >= 3 || (vDur > 0 && vDur < 25)) &&
         (!pendingMainWorldCaptionVideoId ||
           pendingMainWorldCaptionVideoId === videoId)
       ) {
@@ -4612,6 +4926,41 @@ async function tryDisplayCaptions(isManual = false) {
     }
   }
 
+  // If manual track resulted in an unsegmented paragraph dump (<= 2 lines),
+  // and an ASR track exists, try upgrading to the ASR track which has real line-by-line sync!
+  const isSingleParagraphDump =
+    lyrics &&
+    lyrics.length <= 2 &&
+    lyrics.some((l) => (l.text || "").length > 80 || (l.duration || 0) > 25);
+
+  const fallbackAsrTracks = Array.isArray(availableCaptions)
+    ? availableCaptions.filter(
+        (t) =>
+          t.kind === "asr" ||
+          getCaptionTrackName(t).toLowerCase().includes("auto-generated"),
+      )
+    : [];
+
+  if (isSingleParagraphDump && fallbackAsrTracks.length > 0) {
+    log(
+      "Manual caption track appears to be an unsegmented paragraph dump; attempting ASR track...",
+    );
+    const asrCandidate = fallbackAsrTracks[0];
+    const asrUrl = getCaptionTrackUrl(asrCandidate);
+    if (asrUrl) {
+      const asrLyrics = await fetchCaptionsFromContentScript(
+        asrUrl,
+        asrCandidate,
+      );
+      if (asrLyrics && asrLyrics.length > 5) {
+        log("Upgraded to better segmented ASR track:", asrLyrics.length, "lines");
+        lyrics = asrLyrics;
+        selectedTrack = asrCandidate;
+        languageCode = getCaptionTrackLang(asrCandidate) || languageCode;
+      }
+    }
+  }
+
   log(
     "Caption fetch result:",
     lyrics ? `${lyrics.length} lines (${methodUsed})` : "null/empty",
@@ -4627,12 +4976,11 @@ async function tryDisplayCaptions(isManual = false) {
       return false;
     }
 
-    // Clean up any remaining artifacts and filter blanks
+    // Clean up any remaining artifacts, ensure subline/sentence splitting, and filter blanks
     lyrics = lyrics
-      .map((line) => ({
-        ...line,
-        text: cleanCaptionText(line.text),
-      }))
+      .flatMap((line) =>
+        splitCaptionLine(line.time, line.duration, line.text),
+      )
       .filter((line) => Boolean(line.text && line.text.trim()));
 
     log("Captions loaded:", lyrics.length);
@@ -5650,7 +5998,14 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
             "[Lyrical] Restoring caption track directly from local cache:",
             track.name,
           );
-          fetchedLyrics = cachedTrack.lyrics;
+          const rawLines = cachedTrack.lyrics || [];
+          const splitLines = rawLines
+            .flatMap((line: any) =>
+              splitCaptionLine(line.time, line.duration, line.text),
+            )
+            .filter((line: any) => Boolean(line.text && line.text.trim()));
+          fetchedLyrics = normalizeCaptionTiming(splitLines);
+
           const currentVideoId = getCurrentVideoId(currentSongInfo);
           if (currentVideoId) {
             lastFetchedVideoId = currentVideoId;
@@ -5676,11 +6031,25 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
             selectedCaptionTrackId: track.vssId,
           });
 
+          const store = useAppStore.getState();
+          const hasCachedRom =
+            Array.isArray(cachedTrack.romanizedLyrics) &&
+            cachedTrack.romanizedLyrics.length > 0;
+          const hasCachedTrans =
+            Array.isArray(cachedTrack.translatedLyrics) &&
+            cachedTrack.translatedLyrics.length > 0;
+          const needsRom = store.isRomanizationEnabled && !hasCachedRom;
+          const needsTrans = store.isTranslateEnabled && !hasCachedTrans;
+
           updateSecondaryLyricsState({
             romanizedLyrics: cachedTrack.romanizedLyrics || [],
             translatedLyrics: cachedTrack.translatedLyrics || [],
-            isProcessingLyrics: false,
+            isProcessingLyrics: needsRom || needsTrans,
           });
+
+          if (needsRom || needsTrans) {
+            autoProcessLyrics();
+          }
 
           // Sync activeTrackId in storage
           entry.activeTrackId = track.vssId;
@@ -5765,7 +6134,7 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
         "[Lyrical] Fetching captions from live URL:",
         fetchUrl.substring(0, 100),
       );
-      const rawLyrics = await fetchCaptionsFromContentScript(fetchUrl);
+      const rawLyrics = await fetchCaptionsFromContentScript(fetchUrl, track);
       if (rawLyrics && rawLyrics.length > 0) {
         lyrics = rawLyrics;
       }
@@ -5785,10 +6154,9 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
 
     if (lyrics && lyrics.length > 0) {
       let cleaned = lyrics
-        .map((line: any) => ({
-          ...line,
-          text: cleanCaptionText(line.text),
-        }))
+        .flatMap((line: any) =>
+          splitCaptionLine(line.time, line.duration, line.text),
+        )
         .filter((line: any) => Boolean(line.text && line.text.trim()));
 
       const allCaps = cleaned.every(
@@ -5868,7 +6236,8 @@ window.addEventListener("lyrical-select-caption-track", async (event: any) => {
  * Auto-process lyrics based on settings (React Store Version)
  */
 async function autoProcessLyrics() {
-  const storeLyrics = useAppStore.getState().lyrics;
+  const storeState = useAppStore.getState();
+  const storeLyrics = storeState.lyrics;
   const rawCandidate =
     Array.isArray(storeLyrics) && storeLyrics.length > 0
       ? storeLyrics
@@ -5878,18 +6247,16 @@ async function autoProcessLyrics() {
     return;
   }
   try {
-    // Ensure lyrics sent to translation and romanization are strictly normalized
-    // so credit headers and metadata lines are never sent to translation/romanization APIs
-    const lyricsToProcess = normalizeLyrics(rawCandidate);
+    const isCaptions =
+      storeState.lyricsSource === "captions" ||
+      currentFetchWinningSourceId === "captions";
+    // For captions, do NOT run through song-structure normalizeLyricsPipeline which strips dialogue lines
+    const lyricsToProcess = isCaptions
+      ? rawCandidate
+      : normalizeLyrics(rawCandidate);
     fetchedLyrics = lyricsToProcess;
 
-    let {
-      isRomanizationEnabled,
-      isTranslateEnabled,
-      translationLanguage,
-      romanizationExclusions,
-      translationExclusions,
-    }: any = await new Promise((resolve) =>
+    const stored: any = await new Promise((resolve) =>
       chrome.storage.sync.get(
         {
           isRomanizationEnabled: false,
@@ -5902,7 +6269,17 @@ async function autoProcessLyrics() {
       ),
     );
 
-    const lyricsLanguage = useAppStore.getState().lyricsLanguage || "";
+    // Merge live store state and stored preferences so UI toggles immediately take effect
+    let isRomanizationEnabled =
+      storeState.isRomanizationEnabled || Boolean(stored.isRomanizationEnabled);
+    let isTranslateEnabled =
+      storeState.isTranslateEnabled || Boolean(stored.isTranslateEnabled);
+    const translationLanguage =
+      stored.translationLanguage || storeState.translationLanguage || "en";
+    const romanizationExclusions = stored.romanizationExclusions || [];
+    const translationExclusions = stored.translationExclusions || [];
+
+    const lyricsLanguage = storeState.lyricsLanguage || "";
 
     if (
       isRomanizationEnabled &&
@@ -5925,7 +6302,11 @@ async function autoProcessLyrics() {
     // Reset if nothing enabled
     if (!isRomanizationEnabled && !isTranslateEnabled) {
       log("Auto-process: All disabled or excluded");
-      updateSecondaryLyricsState({ translatedLyrics: [], romanizedLyrics: [] });
+      updateSecondaryLyricsState({
+        translatedLyrics: [],
+        romanizedLyrics: [],
+        isProcessingLyrics: false,
+      });
       return;
     }
 
@@ -6154,8 +6535,11 @@ async function startLyricsTimer(lyrics) {
         }
       }
 
-      // Migration check 2: If a positive intro offset was erroneously saved on PRE-SYNCED lyrics
-      // (e.g. LRCLib saved 21.8s when lyrics already start at 28.2s, resulting in double-delay)
+      // Migration check 2: If a positive intro offset was erroneously saved on a VIDEO-NATIVE source (Unison)
+      const currentSource = useAppStore.getState().lyricsSource;
+      const isVideoNativeSource =
+        currentSource.startsWith("unison") || currentSource === "captions";
+
       const lastVocalTime = getLastVocalLyricTime(lyrics);
       const video = getActiveMediaVideoElement();
       const videoDuration =
@@ -6170,11 +6554,16 @@ async function startLyricsTimer(lyrics) {
         videoDuration > 0 &&
         lastVocalTime + stored > videoDuration + 2.0;
 
-      if (isOvershootingStoredIntro) {
+      const shouldReDetectStoredOffset =
+        stored !== null &&
+        stored >= 0.5 &&
+        (isOvershootingStoredIntro || isVideoNativeSource);
+
+      if (shouldReDetectStoredOffset) {
         log(
-          "[Lyrical Panel] Detected invalid overshooting intro offset on pre-synced lyrics:",
+          "[Lyrical Panel] Re-verifying stored intro offset on pre-synced/video-native source:",
           stored,
-          `s (last vocal ${lastVocalTime.toFixed(1)}s + offset > duration ${videoDuration.toFixed(1)}s) - re-detecting`,
+          `s (${currentSource}) - re-detecting`,
         );
         const autoDetected = await tryAutoDetectOffset(
           lyrics,
@@ -6447,6 +6836,7 @@ async function initialize() {
       log(
         "[Lyrical Panel] On watch page, using waitForStableVideo for injection",
       );
+      useAppStore.getState().clearLyricsForNewTrack();
       lyricsRendered = false;
       lastInjectedVideoId = null; // Reset to allow reinjection
       waitForVideoInProgress = false; // Reset waiting flag for fresh navigation

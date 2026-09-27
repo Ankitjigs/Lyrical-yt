@@ -20,20 +20,10 @@ let currentSelectedTrack = null;
 const MAX_EXTRACTION_ATTEMPTS = 8;
 const EXTRACTION_INTERVAL_MS = 1000;
 
-function ensureCaptionHiderStyle() {
-  if (document.getElementById("lyrical-caption-hider")) return;
+function removeCaptionHiderStyle() {
   try {
-    const style = document.createElement("style");
-    style.id = "lyrical-caption-hider";
-    style.textContent = `
-      .ytp-caption-window-bottom,
-      .caption-window,
-      .ytp-caption-window-rollup {
-        opacity: 0 !important;
-        pointer-events: none !important;
-      }
-    `;
-    (document.head || document.documentElement).appendChild(style);
+    const style = document.getElementById("lyrical-caption-hider");
+    if (style) style.remove();
   } catch {}
 }
 
@@ -127,6 +117,17 @@ function handleInterceptedTimedText(text, url) {
   } catch {}
 
   if (currentVideoId) {
+    // If an existing cached track for this video already has significantly more lines (e.g. 343 vs 1),
+    // do not overwrite the rich track with an incomplete/1-line stub!
+    const existing = cachedTimedTextByVideo.get(`${currentVideoId}:latest`);
+    if (existing && existing.length > lyrics.length && lyrics.length < 3) {
+      console.log(
+        "[Lyrical Extractor] Ignored inferior 1-line timedtext intercept in favor of cached",
+        existing.length,
+        "lines",
+      );
+      return;
+    }
     if (interceptedVss) cachedTimedTextByVideo.set(`${currentVideoId}:${interceptedVss}`, lyrics);
     if (interceptedLang) cachedTimedTextByVideo.set(`${currentVideoId}:${interceptedLang}`, lyrics);
     cachedTimedTextByVideo.set(`${currentVideoId}:latest`, lyrics);
@@ -327,7 +328,7 @@ function decodeXmlEntities(input) {
 }
 
 function readAttr(attrs, key) {
-  const match = attrs.match(new RegExp(`${key}\\s*=\\s*["']([^"']+)["']`, "i"));
+  const match = attrs.match(new RegExp(`(?:^|\\s)${key}\\s*=\\s*["']([^"']+)["']`, "i"));
   return match ? match[1] : null;
 }
 
@@ -347,7 +348,7 @@ function parseTimeLike(value) {
   return 0;
 }
 
-function parseXmlTimeToSeconds(value, preferMsHeuristic = false) {
+function parseXmlTimeToSeconds(value, isExplicitMs = false) {
   if (value == null) return 0;
   const raw = String(value).trim().toLowerCase().replace(",", ".");
   if (!raw) return 0;
@@ -368,9 +369,8 @@ function parseXmlTimeToSeconds(value, preferMsHeuristic = false) {
   const n = parseTimeLike(raw);
   if (!Number.isFinite(n)) return 0;
 
-  // Heuristic for ambiguous plain numeric t/d attrs.
-  // For large values, they are usually milliseconds.
-  if (preferMsHeuristic && n >= 10000) return n / 1000;
+  // In YouTube format 3 (srv3), 't' and 'd' are ALWAYS in milliseconds
+  if (isExplicitMs) return n / 1000;
   return n;
 }
 
@@ -408,7 +408,9 @@ function parseCaptionPayload(text) {
           };
         })
         .filter((line) => line.text);
-      return lyrics.length > 0 ? lyrics : null;
+      return lyrics.length > 0
+        ? lyrics.sort((a, b) => a.time - b.time)
+        : null;
     } catch {
       // fall through to XML parser
     }
@@ -453,49 +455,97 @@ function parseCaptionPayload(text) {
         while ((match = pNodeRegex.exec(text)) !== null) {
           const pAttrs = match[1] || "";
           const pBody = match[2] || "";
-          const pStart = readAttr(pAttrs, "begin") || readAttr(pAttrs, "start");
+          const pStart =
+            readAttr(pAttrs, "begin") ||
+            readAttr(pAttrs, "start") ||
+            readAttr(pAttrs, "t");
           const pEnd = readAttr(pAttrs, "end");
-          const pDur = readAttr(pAttrs, "dur");
+          const pDur = readAttr(pAttrs, "dur") || readAttr(pAttrs, "d");
 
           // CRITICAL: A valid TTML caption line MUST have timing attributes (begin, start, or t).
           // An HTML <p> tag from an error page has no timing attributes and must be rejected!
-          if (!pStart && !pAttrs.includes("t=") && !pAttrs.includes("begin=") && !pAttrs.includes("start=")) {
+          if (
+            !pStart &&
+            !pAttrs.includes("t=") &&
+            !pAttrs.includes("begin=") &&
+            !pAttrs.includes("start=")
+          ) {
             continue;
           }
 
-          let lineText = "";
-          const sNodeRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
-          let sMatch;
-          while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
-            lineText += `${decodeXmlEntities(sMatch[1] || "")} `;
-          }
-
-          if (!lineText.trim()) {
-            // Plain text directly inside <p>, strip inner tags if any remain.
-            lineText = decodeXmlEntities(pBody.replace(/<[^>]+>/g, " "));
-          }
-
-          const cleaned = cleanCaptionText(lineText);
-          if (!cleaned) continue;
-
-          const startTime = parseXmlTimeToSeconds(pStart, false);
-          let duration = parseXmlTimeToSeconds(pDur, false);
-          if (!duration && pEnd) {
-            duration = Math.max(
+          const isMs = Boolean(
+            readAttr(pAttrs, "t") || readAttr(pAttrs, "d"),
+          );
+          const pStartTime = parseXmlTimeToSeconds(pStart, isMs);
+          let pDuration = parseXmlTimeToSeconds(pDur, isMs);
+          if (!pDuration && pEnd) {
+            pDuration = Math.max(
               0,
-              parseXmlTimeToSeconds(pEnd, false) - startTime,
+              parseXmlTimeToSeconds(pEnd, isMs) - pStartTime,
             );
           }
 
-          lyrics.push({
-            time: startTime,
-            duration,
-            text: cleaned,
-          });
+          // Check if <p> contains <s> elements with their OWN timing attributes
+          const sNodeRegex = /<s\b([^>]*)>([\s\S]*?)<\/s>/gi;
+          let sMatch;
+          let hasTimedSpans = false;
+          const sCues = [];
+
+          while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
+            const sAttrs = sMatch[1] || "";
+            const sRaw = decodeXmlEntities(sMatch[2] || "");
+            const sCleaned = cleanCaptionText(sRaw);
+            if (!sCleaned) continue;
+
+            const sStart =
+              readAttr(sAttrs, "t") ||
+              readAttr(sAttrs, "begin") ||
+              readAttr(sAttrs, "start");
+            const sDur = readAttr(sAttrs, "d") || readAttr(sAttrs, "dur");
+
+            if (sStart) {
+              hasTimedSpans = true;
+              const sIsMs = Boolean(
+                readAttr(sAttrs, "t") || readAttr(sAttrs, "d"),
+              );
+              const sTime = parseXmlTimeToSeconds(sStart, sIsMs);
+              const sDuration = sDur ? parseXmlTimeToSeconds(sDur, sIsMs) : 0;
+              sCues.push({ time: sTime, duration: sDuration, text: sCleaned });
+            }
+          }
+
+          if (hasTimedSpans && sCues.length > 0) {
+            for (const sc of sCues) {
+              lyrics.push(sc);
+            }
+          } else {
+            let lineText = "";
+            const plainSRegex = /<s\b[^>]*>([\s\S]*?)<\/s>/gi;
+            let m;
+            while ((m = plainSRegex.exec(pBody)) !== null) {
+              lineText += `${decodeXmlEntities(m[1] || "")} `;
+            }
+
+            if (!lineText.trim()) {
+              // Plain text directly inside <p>, strip inner tags if any remain.
+              lineText = decodeXmlEntities(pBody.replace(/<[^>]+>/g, " "));
+            }
+
+            const cleaned = cleanCaptionText(lineText);
+            if (!cleaned) continue;
+
+            lyrics.push({
+              time: pStartTime,
+              duration: pDuration,
+              text: cleaned,
+            });
+          }
         }
       }
 
-      return lyrics.length > 0 ? lyrics : null;
+      return lyrics.length > 0
+        ? lyrics.sort((a, b) => a.time - b.time)
+        : null;
     } catch {
       return null;
     }
@@ -508,7 +558,7 @@ async function requestPlayerCaptionTrack(track) {
   const player = document.getElementById("movie_player");
   if (!player) return null;
 
-  ensureCaptionHiderStyle();
+  removeCaptionHiderStyle();
 
   const currentVideoId = getVideoId();
   const targetLang = (getTrackLang(track) || "").toLowerCase();
@@ -529,6 +579,26 @@ async function requestPlayerCaptionTrack(track) {
       return cachedTimedTextByVideo.get(`${currentVideoId}:latest`);
     }
   }
+
+  // Preserve user's existing native caption choice
+  let userHadCaptionsActive = false;
+  let userInitialTrack = null;
+  try {
+    const ccBtn = document.querySelector(".ytp-subtitles-button");
+    const isCcButtonActive =
+      ccBtn?.getAttribute("aria-pressed") === "true" ||
+      ccBtn?.classList?.contains("ytp-button-active");
+    userInitialTrack = player.getOption?.("captions", "track");
+    const hasValidTrack = Boolean(
+      userInitialTrack &&
+        ((userInitialTrack.languageCode && userInitialTrack.languageCode !== "") ||
+          (userInitialTrack.vss_id && userInitialTrack.vss_id !== "") ||
+          (typeof userInitialTrack === "object" &&
+            Object.keys(userInitialTrack).length > 0 &&
+            userInitialTrack.languageCode !== ""))
+    );
+    userHadCaptionsActive = isCcButtonActive || hasValidTrack;
+  } catch {}
 
   try {
     if (typeof player.loadModule === "function") {
@@ -594,8 +664,18 @@ async function requestPlayerCaptionTrack(track) {
     }
 
     const lyrics = await interceptedPromise;
-    // After extracting caption data, disable YouTube's native CC display
-    disableNativeCaptions();
+
+    // Restore user's original caption state:
+    // If user did not have native captions on, turn off the player's track display.
+    // If the user DID have native captions enabled, restore their selected track!
+    if (!userHadCaptionsActive) {
+      disableNativeCaptions();
+    } else if (userInitialTrack && typeof player.setOption === "function") {
+      try {
+        player.setOption("captions", "track", userInitialTrack);
+      } catch {}
+    }
+
     if (lyrics && lyrics.length > 0) {
       return lyrics;
     }
@@ -686,13 +766,26 @@ async function fetchLyricsForTrack(track) {
         }
 
         const lyrics = parseCaptionPayload(text);
-        if (lyrics && lyrics.length > 0) {
+        const player = document.getElementById("movie_player");
+        const videoDuration = player?.getDuration?.() || 0;
+        const isVeryShortVideo = videoDuration > 0 && videoDuration < 20;
+
+        if (
+          lyrics &&
+          (lyrics.length >= 3 || (isVeryShortVideo && lyrics.length > 0))
+        ) {
           console.log(
             "[Lyrical Extractor] Parsed prefetched captions:",
             lyrics.length,
             "lines",
           );
           return lyrics;
+        } else if (lyrics && lyrics.length > 0) {
+          console.log(
+            "[Lyrical Extractor] Direct timedtext fetch yielded only",
+            lyrics.length,
+            "lines — insufficient for full video track; continuing fallback...",
+          );
         }
       } catch (err) {
         console.debug("[Lyrical Extractor] Fetch timedtext error:", err);
@@ -978,8 +1071,6 @@ async function processPlayerResponsePayload(payload, source = "unknown") {
       postedCaptionsForCurrentVideo = true;
       extractionAttempts = 0;
       clearExtractionTimer();
-      // After Lyrical has the data, turn off YouTube's native CC
-      disableNativeCaptions();
     } else {
       console.log("[Lyrical Extractor] Captions not ready yet — will retry");
       postedCaptionsForCurrentVideo = false;
@@ -1297,6 +1388,7 @@ function installNetworkInterceptors() {
 }
 
 function onVideoChange() {
+  removeCaptionHiderStyle();
   const currentVideoId = getVideoId();
   if (currentVideoId && currentVideoId !== currentTrackedVideoId) {
     console.log("[Lyrical Extractor] New video:", currentVideoId);
@@ -1328,6 +1420,7 @@ function setupMiniplayerTracking() {
 }
 setInterval(setupMiniplayerTracking, 1000);
 
+removeCaptionHiderStyle();
 installNetworkInterceptors();
 // Initial check
 if (window.ytInitialPlayerResponse) {
@@ -1396,8 +1489,6 @@ window.addEventListener("message", async (event) => {
     }
 
     const lyrics = await fetchLyricsForTrack(match);
-    // After fetching track data, disable YouTube's native CC to prevent it from switching
-    disableNativeCaptions();
     if (lyrics && lyrics.length > 0) {
       window.postMessage(
         {

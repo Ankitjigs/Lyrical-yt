@@ -2725,7 +2725,9 @@ const LyricsPanel = () => {
                                 spread={115}
                               />
                             </motion.div>
-                          ) : isLoading ? (
+                          ) : isLoading ||
+                            (headerText &&
+                              headerText.toLowerCase().includes("search")) ? (
                             <motion.div
                               key="searching-lyrics"
                               initial={
@@ -2811,7 +2813,10 @@ const LyricsPanel = () => {
                                 </svg>
                               </div>
                               <p style={{ margin: 0, fontSize: "14px" }}>
-                                {headerText || t("lyricsPanel_noLyricsFound")}
+                                {headerText &&
+                                !headerText.toLowerCase().includes("search")
+                                  ? headerText
+                                  : t("lyricsPanel_noLyricsFound")}
                               </p>
                             </motion.div>
                           )}
