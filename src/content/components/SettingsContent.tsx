@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from "react";
 import {
   Settings,
   Monitor,
@@ -25,13 +25,14 @@ import {
 import { useAppStore } from "../store";
 import { log } from "../utils/logger";
 import SourcePreferenceList from "./SourcePreferenceList";
-import ThemeSelectionModal from "./ThemeSelectionModal";
-import CustomThemeModal from "./CustomThemeModal";
-import ThemeImportExportModal from "./ThemeImportExportModal";
-import LanguageExclusionsModal from "./LanguageExclusionsModal";
-import CacheEditorView from "./CacheEditorView";
-import FloatingLyricsModal from "./FloatingLyricsModal";
-import SearchingVibeModal from "./SearchingVibeModal";
+
+const ThemeSelectionModal = lazy(() => import("./ThemeSelectionModal"));
+const CustomThemeModal = lazy(() => import("./CustomThemeModal"));
+const ThemeImportExportModal = lazy(() => import("./ThemeImportExportModal"));
+const LanguageExclusionsModal = lazy(() => import("./LanguageExclusionsModal"));
+const CacheEditorView = lazy(() => import("./CacheEditorView"));
+const FloatingLyricsModal = lazy(() => import("./FloatingLyricsModal"));
+const SearchingVibeModal = lazy(() => import("./SearchingVibeModal"));
 import { AVAILABLE_LANGUAGES } from "../utils/languages";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
@@ -2886,55 +2887,83 @@ const SettingsContent = () => {
           </div>
         </div>
       )}
-      <SearchingVibeModal
-        isOpen={isSearchingVibeModalOpen}
-        onClose={() => setIsSearchingVibeModalOpen(false)}
-      />
-      <ThemeSelectionModal
-        isOpen={isThemeModalOpen}
-        onClose={() => setIsThemeModalOpen(false)}
-        selectedThemeId={themeId}
-        onSelectTheme={(nextThemeId) => updateSetting("themeId", nextThemeId)}
-        customThemes={customThemes}
-        onEditCustomTheme={openEditCustomThemeModal}
-        onDeleteCustomTheme={deleteCustomTheme}
-        onExportCustomTheme={exportCustomTheme}
-      />
-      <CustomThemeModal
-        isOpen={isCustomThemeModalOpen}
-        onClose={() => {
-          setIsCustomThemeModalOpen(false);
-          setEditingCustomThemeId(null);
-        }}
-        onSaveTheme={saveCustomTheme}
-        seedTheme={editingCustomTheme || currentTheme}
-        mode={editingCustomTheme ? "edit" : "create"}
-      />
-      <ThemeImportExportModal
-        isOpen={isThemeImportModalOpen}
-        onClose={() => setIsThemeImportModalOpen(false)}
-        onImportThemes={importCustomThemes}
-        existingThemes={customThemeRecords}
-      />
-      <CacheEditorView
-        isOpen={isCacheEditorOpen}
-        onClose={() => setIsCacheEditorOpen(false)}
-        onCacheChange={refreshCacheInfo}
-      />
-      <LanguageExclusionsModal
-        isOpen={isExclusionsModalOpen}
-        onClose={() => setIsExclusionsModalOpen(false)}
-        romanizationExclusions={settings.romanizationExclusions}
-        translationExclusions={settings.translationExclusions}
-        onUpdateExclusions={(newExclusions) => {
-          updateSetting("romanizationExclusions", newExclusions.romanization);
-          updateSetting("translationExclusions", newExclusions.translation);
-        }}
-      />
-      <FloatingLyricsModal
-        isOpen={isFloatingLyricsModalOpen}
-        onClose={() => setIsFloatingLyricsModalOpen(false)}
-      />
+      {isSearchingVibeModalOpen && (
+        <Suspense fallback={null}>
+          <SearchingVibeModal
+            isOpen={isSearchingVibeModalOpen}
+            onClose={() => setIsSearchingVibeModalOpen(false)}
+          />
+        </Suspense>
+      )}
+      {isThemeModalOpen && (
+        <Suspense fallback={null}>
+          <ThemeSelectionModal
+            isOpen={isThemeModalOpen}
+            onClose={() => setIsThemeModalOpen(false)}
+            selectedThemeId={themeId}
+            onSelectTheme={(nextThemeId) => updateSetting("themeId", nextThemeId)}
+            customThemes={customThemes}
+            onEditCustomTheme={openEditCustomThemeModal}
+            onDeleteCustomTheme={deleteCustomTheme}
+            onExportCustomTheme={exportCustomTheme}
+          />
+        </Suspense>
+      )}
+      {isCustomThemeModalOpen && (
+        <Suspense fallback={null}>
+          <CustomThemeModal
+            isOpen={isCustomThemeModalOpen}
+            onClose={() => {
+              setIsCustomThemeModalOpen(false);
+              setEditingCustomThemeId(null);
+            }}
+            onSaveTheme={saveCustomTheme}
+            seedTheme={editingCustomTheme || currentTheme}
+            mode={editingCustomTheme ? "edit" : "create"}
+          />
+        </Suspense>
+      )}
+      {isThemeImportModalOpen && (
+        <Suspense fallback={null}>
+          <ThemeImportExportModal
+            isOpen={isThemeImportModalOpen}
+            onClose={() => setIsThemeImportModalOpen(false)}
+            onImportThemes={importCustomThemes}
+            existingThemes={customThemeRecords}
+          />
+        </Suspense>
+      )}
+      {isCacheEditorOpen && (
+        <Suspense fallback={null}>
+          <CacheEditorView
+            isOpen={isCacheEditorOpen}
+            onClose={() => setIsCacheEditorOpen(false)}
+            onCacheChange={refreshCacheInfo}
+          />
+        </Suspense>
+      )}
+      {isExclusionsModalOpen && (
+        <Suspense fallback={null}>
+          <LanguageExclusionsModal
+            isOpen={isExclusionsModalOpen}
+            onClose={() => setIsExclusionsModalOpen(false)}
+            romanizationExclusions={settings.romanizationExclusions}
+            translationExclusions={settings.translationExclusions}
+            onUpdateExclusions={(newExclusions) => {
+              updateSetting("romanizationExclusions", newExclusions.romanization);
+              updateSetting("translationExclusions", newExclusions.translation);
+            }}
+          />
+        </Suspense>
+      )}
+      {isFloatingLyricsModalOpen && (
+        <Suspense fallback={null}>
+          <FloatingLyricsModal
+            isOpen={isFloatingLyricsModalOpen}
+            onClose={() => setIsFloatingLyricsModalOpen(false)}
+          />
+        </Suspense>
+      )}
     </div>
   );
 };

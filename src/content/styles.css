@@ -200,24 +200,73 @@
   }
 }
 
-/* ─── Custom Scrollbar for Lyrics ─── */
-#lyrical-content::-webkit-scrollbar {
-  width: 6px;
+/* ─── Custom Theme Scrollbars for Lyrics, Submenus, Popups & Modals ─── */
+#lyrical-content,
+.lyrical-dock-source-submenu,
+.lyrical-dock-source-menu,
+.lyrical-dock-popover,
+.lyrical-custom-scrollbar,
+.lyrical-scrollable,
+[data-lyrical-scrollbar="true"],
+#lyrical-panel * {
+  scrollbar-width: thin;
+  scrollbar-color: var(--lyrical-scrollbar-thumb, rgba(255, 255, 255, 0.25)) var(--lyrical-scrollbar-track, rgba(0, 0, 0, 0.15));
 }
 
-#lyrical-content::-webkit-scrollbar-track {
-  background: var(--lyrical-scrollbar-track);
-  border-radius: 3px;
+#lyrical-content::-webkit-scrollbar,
+.lyrical-dock-source-submenu::-webkit-scrollbar,
+.lyrical-dock-source-menu::-webkit-scrollbar,
+.lyrical-dock-popover::-webkit-scrollbar,
+.lyrical-custom-scrollbar::-webkit-scrollbar,
+.lyrical-scrollable::-webkit-scrollbar,
+[data-lyrical-scrollbar="true"]::-webkit-scrollbar,
+#lyrical-panel *::-webkit-scrollbar,
+#lyrical-root *::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
 }
 
-#lyrical-content::-webkit-scrollbar-thumb {
-  background: var(--lyrical-scrollbar-thumb);
-  border-radius: 3px;
+#lyrical-content::-webkit-scrollbar-track,
+.lyrical-dock-source-submenu::-webkit-scrollbar-track,
+.lyrical-dock-source-menu::-webkit-scrollbar-track,
+.lyrical-dock-popover::-webkit-scrollbar-track,
+.lyrical-custom-scrollbar::-webkit-scrollbar-track,
+.lyrical-scrollable::-webkit-scrollbar-track,
+[data-lyrical-scrollbar="true"]::-webkit-scrollbar-track,
+#lyrical-panel *::-webkit-scrollbar-track,
+#lyrical-root *::-webkit-scrollbar-track {
+  background: var(--lyrical-scrollbar-track, rgba(0, 0, 0, 0.15));
+  border-radius: 999px;
+  margin: 3px 0;
 }
 
-#lyrical-content::-webkit-scrollbar-thumb:hover {
-  background: var(--lyrical-scrollbar-thumb-hover);
+#lyrical-content::-webkit-scrollbar-thumb,
+.lyrical-dock-source-submenu::-webkit-scrollbar-thumb,
+.lyrical-dock-source-menu::-webkit-scrollbar-thumb,
+.lyrical-dock-popover::-webkit-scrollbar-thumb,
+.lyrical-custom-scrollbar::-webkit-scrollbar-thumb,
+.lyrical-scrollable::-webkit-scrollbar-thumb,
+[data-lyrical-scrollbar="true"]::-webkit-scrollbar-thumb,
+#lyrical-panel *::-webkit-scrollbar-thumb,
+#lyrical-root *::-webkit-scrollbar-thumb {
+  background: var(--lyrical-scrollbar-thumb, rgba(255, 255, 255, 0.25));
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
 }
+
+#lyrical-content::-webkit-scrollbar-thumb:hover,
+.lyrical-dock-source-submenu::-webkit-scrollbar-thumb:hover,
+.lyrical-dock-source-menu::-webkit-scrollbar-thumb:hover,
+.lyrical-dock-popover::-webkit-scrollbar-thumb:hover,
+.lyrical-custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.lyrical-scrollable::-webkit-scrollbar-thumb:hover,
+[data-lyrical-scrollbar="true"]::-webkit-scrollbar-thumb:hover,
+#lyrical-panel *::-webkit-scrollbar-thumb:hover,
+#lyrical-root *::-webkit-scrollbar-thumb:hover {
+  background: var(--lyrical-scrollbar-thumb-hover, rgba(255, 255, 255, 0.45));
+}
+
 
 .lyrical-sync-slider {
   appearance: none;

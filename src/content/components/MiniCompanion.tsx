@@ -97,31 +97,92 @@ const getTitleMotion = (
 
 // Mini progress bar driven by video.currentTime
 const MiniProgressBar: React.FC = () => {
-  const [progress, setProgress] = useState(0);
+  const barRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    let rafId: number;
+    let rafId: number | null = null;
+    let cachedVideo: HTMLVideoElement | null = null;
+
+    const getVideo = () => {
+      if (!cachedVideo || !cachedVideo.isConnected) {
+        cachedVideo = getActiveMediaVideoElement();
+      }
+      return cachedVideo;
+    };
+
     const update = () => {
-      const video = getActiveMediaVideoElement();
+      const video = getVideo();
       if (
         video &&
         video.duration &&
         !isNaN(video.duration) &&
-        video.duration > 0
+        video.duration > 0 &&
+        barRef.current
       ) {
-        setProgress(
-          Math.min(1, Math.max(0, video.currentTime / video.duration)),
-        );
+        const ratio = Math.min(1, Math.max(0, video.currentTime / video.duration));
+        barRef.current.style.width = `${(ratio * 100).toFixed(2)}%`;
       }
+    };
+
+    const isPlaying = (video: HTMLVideoElement | null) => {
+      return Boolean(video && !video.paused && !video.ended && video.readyState > 2);
     };
 
     const loop = () => {
       update();
-      rafId = requestAnimationFrame(loop);
+      const video = getVideo();
+      if (isPlaying(video)) {
+        rafId = requestAnimationFrame(loop);
+      } else {
+        rafId = null;
+      }
     };
-    rafId = requestAnimationFrame(loop);
 
-    return () => cancelAnimationFrame(rafId);
+    const startLoop = () => {
+      if (!rafId) {
+        rafId = requestAnimationFrame(loop);
+      }
+    };
+
+    const onPlay = () => startLoop();
+    const onPauseOrEnded = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      update();
+    };
+    const onSeekOrTimeUpdate = () => {
+      update();
+      const video = getVideo();
+      if (isPlaying(video) && !rafId) {
+        startLoop();
+      }
+    };
+
+    const video = getVideo();
+    update();
+    if (isPlaying(video)) {
+      startLoop();
+    }
+
+    video?.addEventListener("play", onPlay);
+    video?.addEventListener("playing", onPlay);
+    video?.addEventListener("pause", onPauseOrEnded);
+    video?.addEventListener("ended", onPauseOrEnded);
+    video?.addEventListener("seeked", onSeekOrTimeUpdate);
+    video?.addEventListener("timeupdate", onSeekOrTimeUpdate);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      const v = getVideo();
+      v?.removeEventListener("play", onPlay);
+      v?.removeEventListener("playing", onPlay);
+      v?.removeEventListener("pause", onPauseOrEnded);
+      v?.removeEventListener("ended", onPauseOrEnded);
+      v?.removeEventListener("seeked", onSeekOrTimeUpdate);
+      v?.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+    };
   }, []);
 
   return (
@@ -136,8 +197,9 @@ const MiniProgressBar: React.FC = () => {
       }}
     >
       <div
+        ref={barRef}
         style={{
-          width: `${(progress * 100).toFixed(2)}%`,
+          width: "0%",
           height: "100%",
           background: "var(--lyrical-accent, #3ea6ff)",
           borderRadius: "2px",
@@ -396,10 +458,23 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
   // Track playback time
   useEffect(() => {
-    let rafId: number;
+    let rafId: number | null = null;
     let lastTime = -1;
+    let cachedVideo: HTMLVideoElement | null = null;
+
+    const getVideo = () => {
+      if (!cachedVideo || !cachedVideo.isConnected) {
+        cachedVideo = getActiveMediaVideoElement();
+      }
+      return cachedVideo;
+    };
+
+    const isPlaying = (video: HTMLVideoElement | null) => {
+      return Boolean(video && !video.paused && !video.ended && video.readyState > 2);
+    };
+
     const tick = () => {
-      const video = getActiveMediaVideoElement();
+      const video = getVideo();
       if (video) {
         // Correctly apply offset: video.currentTime - offset (matching main panel)
         const t = Math.max(0, video.currentTime - offset);
@@ -408,11 +483,58 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           setCurrentTime(t);
         }
       }
-      rafId = requestAnimationFrame(tick);
+      if (isPlaying(video)) {
+        rafId = requestAnimationFrame(tick);
+      } else {
+        rafId = null;
+      }
     };
-    rafId = requestAnimationFrame(tick);
 
-    return () => cancelAnimationFrame(rafId);
+    const startTick = () => {
+      if (!rafId) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    const onPlay = () => startTick();
+    const onPauseOrEnded = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+      tick();
+    };
+    const onSeekOrTimeUpdate = () => {
+      tick();
+      const video = getVideo();
+      if (isPlaying(video) && !rafId) {
+        startTick();
+      }
+    };
+
+    const video = getVideo();
+    tick();
+    if (isPlaying(video)) {
+      startTick();
+    }
+
+    video?.addEventListener("play", onPlay);
+    video?.addEventListener("playing", onPlay);
+    video?.addEventListener("pause", onPauseOrEnded);
+    video?.addEventListener("ended", onPauseOrEnded);
+    video?.addEventListener("seeked", onSeekOrTimeUpdate);
+    video?.addEventListener("timeupdate", onSeekOrTimeUpdate);
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      const v = getVideo();
+      v?.removeEventListener("play", onPlay);
+      v?.removeEventListener("playing", onPlay);
+      v?.removeEventListener("pause", onPauseOrEnded);
+      v?.removeEventListener("ended", onPauseOrEnded);
+      v?.removeEventListener("seeked", onSeekOrTimeUpdate);
+      v?.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+    };
   }, [offset]);
 
   // Determine active lyric line index using binary search matching main panel findLyricIndex

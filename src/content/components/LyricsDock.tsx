@@ -369,6 +369,13 @@ export default function LyricsDock({
       key === "isTranslateEnabled" ? isTranslateEnabled : isRomanizationEnabled;
     const next = !current;
     useAppStore.setState({ [key]: next });
+    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
+      chrome.storage.sync.set({ [key]: next }, () => {
+        if (chrome.runtime?.lastError) {
+          console.warn("Storage sync error:", chrome.runtime.lastError.message);
+        }
+      });
+    }
   };
 
   const sourceTag = activeOption?.tags?.[0] || "LINE";
