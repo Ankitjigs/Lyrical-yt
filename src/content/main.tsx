@@ -1332,7 +1332,13 @@ function splitCaptionLine(
  * Fetch caption content from content script (ISOLATED world)
  * This is the same approach better-lyrics uses - their main script runs in ISOLATED world
  */
-async function fetchCaptionsFromContentScript(url, track = null) {
+async function fetchCaptionsFromContentScript(
+  url,
+  track = null,
+  signal?: AbortSignal | null,
+) {
+  const activeSignal = signal || currentFetchAbortController?.signal;
+  if (activeSignal?.aborted) return null;
   const readAttr = (attrs, key) => {
     const match = attrs.match(
       new RegExp(`(?:^|\\s)${key}\\s*=\\s*["']([^"']+)["']`, "i"),
@@ -1411,11 +1417,13 @@ async function fetchCaptionsFromContentScript(url, track = null) {
   }
 
   for (const fetchUrl of candidateUrls) {
+    if (activeSignal?.aborted) return null;
     try {
       log("Fetching captions from content script:", fetchUrl.substring(0, 100));
 
       const response = await fetch(fetchUrl, {
         credentials: "include",
+        signal: activeSignal || undefined,
       });
 
       log("Caption fetch response status:", response.status);
@@ -1665,6 +1673,32 @@ let youtubeNavListenerAttached = false;
 let lastInjectedVideoId = null; // Prevent duplicate inject attempts
 let lastFetchedVideoId = null; // Prevent duplicate lyrics fetches (source of truth)
 let activeFetchSessionId = 0; // Prevent stale concurrent runs from clobbering state
+let activeProcessSessionId = 0; // Prevent stale translation/romanization runs from clobbering state
+let currentFetchAbortController: AbortController | null = null; // Abort in-flight network requests on navigation
+
+function abortCurrentFetch(reason = "Navigation") {
+  if (currentFetchAbortController) {
+    try {
+      currentFetchAbortController.abort(reason);
+    } catch {
+      // ignore abort errors
+    }
+    currentFetchAbortController = null;
+  }
+}
+
+function combineSignals(timeoutMs: number, externalSignal?: AbortSignal | null): AbortSignal {
+  if (!externalSignal) return AbortSignal.timeout(timeoutMs);
+  if (externalSignal.aborted) return externalSignal;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => {
+    clearTimeout(timeoutId);
+    controller.abort();
+  };
+  externalSignal.addEventListener("abort", onAbort, { once: true });
+  return controller.signal;
+}
 
 // Sync optimization
 const PLATFORM_OFFSET = -0.45; // YouTube's systemic delay (constant)
@@ -2003,7 +2037,12 @@ async function tryAutoDetectOffset(
     // Run both evidence sources independently. Neither one is allowed to
     // overwrite the other before the final fusion decision.
     const [sbResult, captionLines] = await Promise.all([
-      videoId ? detectNonCaptionIntroOffset(videoId) : Promise.resolve(null),
+      videoId
+        ? detectNonCaptionIntroOffset(
+            videoId,
+            currentFetchAbortController?.signal || undefined,
+          )
+        : Promise.resolve(null),
       getAvailableCaptionLines(),
     ]);
 
@@ -4213,7 +4252,9 @@ function resetLyricsState(reason = "", options: any = {}) {
   lyricsByVersion = {};
   currentLyricsVersion = "default";
 
-  // Reset translation state
+  // Reset translation state and cancel active secondary processing & in-flight requests
+  activeProcessSessionId++;
+  abortCurrentFetch(`resetLyricsState: ${reason}`);
   translatedLyrics = null;
   currentTranslationLang = null;
   isTranslationMode = false;
@@ -5209,14 +5250,16 @@ async function tryFetchBoidu(songInfo, sourceId = "lyrical") {
 /**
  * Try to fetch from LRCLIB
  */
-async function tryFetchLRCLib(songInfo) {
+async function tryFetchLRCLib(songInfo, signal?: AbortSignal | null) {
+  const activeSignal = signal || currentFetchAbortController?.signal;
+  if (activeSignal?.aborted) return false;
   const query = `${songInfo.title} ${songInfo.artist}`.trim();
   log("Fetching lyrics from lrclib for:", query);
 
   try {
     const response = await fetch(
       `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`,
-      { signal: AbortSignal.timeout(3500) },
+      { signal: combineSignals(3500, activeSignal) },
     );
     const results = await response.json();
 
@@ -5489,9 +5532,11 @@ async function backgroundPreScanAllSources(
           }
         }
       } else if (source.id === "lrclib") {
+        if (isStale()) return;
         const query = `${songInfo.title} ${songInfo.artist}`.trim();
         const response = await fetch(
           `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`,
+          { signal: combineSignals(3500, currentFetchAbortController?.signal) },
         );
         const results = await response.json();
         if (Array.isArray(results) && results.length > 0) {
@@ -5609,6 +5654,11 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   const enabledSources = (sourcePreferences || []).filter((s) => s.enabled);
   resetCurrentFetchSourceGuard();
   log("New video detected:", videoId);
+
+  // Abort any prior in-flight fetch and allocate fresh controller for this video session
+  abortCurrentFetch("New video detected");
+  currentFetchAbortController = new AbortController();
+  const fetchAbortSignal = currentFetchAbortController.signal;
 
   const isStaleFetch = () =>
     fetchSessionId !== activeFetchSessionId ||
@@ -5738,7 +5788,7 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
           found = await tryFetchCubey(songInfo, "musixmatch");
           break;
         case "lrclib":
-          found = await tryFetchLRCLib(songInfo);
+          found = await tryFetchLRCLib(songInfo, fetchAbortSignal);
           break;
         case "captions":
           captionsTried = true;
@@ -6246,7 +6296,29 @@ async function autoProcessLyrics() {
     log("No lyrics to auto-process");
     return;
   }
+
+  const processSessionId = ++activeProcessSessionId;
+  const targetVideoId =
+    getCurrentVideoId(currentSongInfo) ||
+    (storeState.songInfo as any)?.videoId ||
+    new URLSearchParams(window.location.search).get("v") ||
+    "";
+
+  const isStaleProcess = () => {
+    const liveVideoId =
+      new URLSearchParams(window.location.search).get("v") ||
+      getCurrentVideoId(currentSongInfo) ||
+      "";
+    return (
+      processSessionId !== activeProcessSessionId ||
+      (Boolean(targetVideoId) &&
+        Boolean(liveVideoId) &&
+        targetVideoId !== liveVideoId)
+    );
+  };
+
   try {
+    if (isStaleProcess()) return;
     const isCaptions =
       storeState.lyricsSource === "captions" ||
       currentFetchWinningSourceId === "captions";
@@ -6407,6 +6479,15 @@ async function autoProcessLyrics() {
       romanizePromise,
       translatePromise,
     ]);
+
+    if (isStaleProcess()) {
+      log(
+        "[Lyrical Panel] Discarding stale translation/romanization result for video:",
+        targetVideoId,
+      );
+      return;
+    }
+
     romanizedData = resolvedRomanized;
     translatedData = resolvedTranslated;
 
@@ -6426,6 +6507,7 @@ async function autoProcessLyrics() {
       });
     }
   } catch (err) {
+    if (isStaleProcess()) return;
     useAppStore.getState().setIsProcessingLyrics(false);
     if (err.message?.includes("Extension context invalidated")) return;
     console.error("[Lyrical Panel] Auto-process error:", err);
@@ -6820,6 +6902,8 @@ async function initialize() {
         window.location.href.includes("v=");
 
       if (!isWatchUrl) {
+        abortCurrentFetch("Left watch page");
+        activeProcessSessionId++;
         if (lyricsPanel) {
           lyricsPanel.remove();
           lyricsPanel = null;
@@ -6836,6 +6920,8 @@ async function initialize() {
       log(
         "[Lyrical Panel] On watch page, using waitForStableVideo for injection",
       );
+      abortCurrentFetch("YouTube navigation");
+      activeProcessSessionId++;
       useAppStore.getState().clearLyricsForNewTrack();
       lyricsRendered = false;
       lastInjectedVideoId = null; // Reset to allow reinjection

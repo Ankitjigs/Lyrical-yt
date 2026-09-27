@@ -50,8 +50,9 @@ interface SponsorBlockSegment {
 export async function fetchSponsorBlockIntroOffset(
   videoId: string,
   timeoutMs = 3500,
+  signal?: AbortSignal,
 ): Promise<{ offset: number; outroStart?: number } | null> {
-  if (!videoId || videoId.length < 5) {
+  if (!videoId || videoId.length < 5 || signal?.aborted) {
     return null;
   }
 
@@ -60,6 +61,11 @@ export async function fetchSponsorBlockIntroOffset(
   const timeoutId = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
+
+  const onAbort = () => controller.abort();
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
 
   try {
     const url =
@@ -184,6 +190,9 @@ export async function fetchSponsorBlockIntroOffset(
     return null;
   } finally {
     clearTimeout(timeoutId);
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 }
 
@@ -411,13 +420,14 @@ export function detectChapterIntroOffset(): number | null {
  */
 export async function detectNonCaptionIntroOffset(
   videoId: string,
+  signal?: AbortSignal,
 ): Promise<DetectedIntroOffset | null> {
   /*
    * ------------------------------------------------------------
    * 1. SponsorBlock
    * ------------------------------------------------------------
    */
-  const sbResult = await fetchSponsorBlockIntroOffset(videoId);
+  const sbResult = await fetchSponsorBlockIntroOffset(videoId, 3500, signal);
 
   if (sbResult !== null && sbResult.offset > 0) {
     return {
