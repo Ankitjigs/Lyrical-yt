@@ -6,6 +6,10 @@
  * @param {number} lineIndex - Line index for unique SVG element IDs
  * @returns {HTMLDivElement} Container div with animated music note SVG
  */
+import { INSTRUMENTAL_NOTE_PATH } from "../lyrics/lyricsNormalizer";
+
+export { INSTRUMENTAL_NOTE_PATH };
+export const NOTE_PATH = INSTRUMENTAL_NOTE_PATH;
 export const INSTRUMENTAL_WAVE_PATH_HIGH =
   'path("M -4 3 Q 1 2 5 3 Q 10 4 14 3 Q 18 2 22 3 Q 26 4 30 3 L 30 4 L -4 4 Z")';
 export const INSTRUMENTAL_WAVE_PATH_LOW =
@@ -213,8 +217,6 @@ export function createInstrumentalElement(durationMs: number, lineIndex: number)
   svg.appendChild(defs);
 
   // Background note (inactive color)
-  const NOTE_PATH = "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
-
   const bgPath = document.createElementNS(svgNS, "path");
   bgPath.classList.add("blyrics--instrumental-bg");
   bgPath.setAttribute("d", NOTE_PATH);

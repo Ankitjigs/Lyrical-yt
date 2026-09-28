@@ -4,6 +4,7 @@ import {
   InstrumentalAnimations,
   INSTRUMENTAL_WAVE_CYCLE_MS,
 } from "./createInstrumentalElement";
+import { isInstrumentalLine } from "../lyrics/lyricsNormalizer";
 import { normalizeLyricPartSpacing } from "../../utils/lyricSpacing";
 
 const LYRIC_ENDING_THRESHOLD_S = 0.5;
@@ -365,7 +366,9 @@ export class ArchiveTuneStrategy {
         `${Math.max(lineData.duration * 1000, 180)}ms`,
       );
 
-      if (line.isInstrumental) {
+      const isInst = isInstrumentalLine(line);
+
+      if (isInst) {
         lineData.isInstrumental = true;
         const durationMs = Math.round(lineData.duration * 1000);
         const instrumentalEl = createInstrumentalElement(
@@ -383,7 +386,7 @@ export class ArchiveTuneStrategy {
       }
       this.createBreakElem(lineDiv, 1);
 
-      if (!line.isInstrumental) {
+      if (!isInst) {
         const romanized = romanizedLyrics?.[lineIndex]?.romanized;
         if (romanized) {
           const break4 = this.createBreakElem(lineDiv, 4);

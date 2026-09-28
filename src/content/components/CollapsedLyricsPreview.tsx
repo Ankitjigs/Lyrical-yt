@@ -2,6 +2,10 @@ import React, { useState, useEffect, useMemo } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { t } from "../../i18n";
 import type { LyricalLyricLine, SongInfo } from "../../types/lyrics";
+import {
+  isInstrumentalLine,
+  INSTRUMENTAL_NOTE_PATH,
+} from "../../modules/lyrics/lyricsNormalizer";
 
 interface CollapsedLyricsPreviewProps {
   lyrics: LyricalLyricLine[];
@@ -135,26 +139,26 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
 
   const collapsedLine =
     collapsedLineIndex >= 0 ? lyrics[collapsedLineIndex] : null;
+  const isInstrumental = isInstrumentalLine(collapsedLine);
   const collapsedOriginalText =
-    collapsedLine?.text?.trim() ||
-    (collapsedLine?.isInstrumental ? "Instrumental" : "");
+    collapsedLine?.text?.trim() || "";
   const collapsedRomanized =
-    collapsedLineIndex >= 0
+    !isInstrumental && collapsedLineIndex >= 0
       ? romanizedLyrics?.[collapsedLineIndex]?.romanized || ""
       : "";
   const collapsedTranslated =
-    collapsedLineIndex >= 0
+    !isInstrumental && collapsedLineIndex >= 0
       ? translatedLyrics?.[collapsedLineIndex]?.translated || ""
       : "";
 
   const renderCollapsedOriginal = () => {
-    // Instrumental: show a music note icon with rising fill instead of text
-    if (collapsedLine?.isInstrumental) {
-      const lineStart = Number(collapsedLine.time ?? 0);
+    // Instrumental: show a single music note with rising liquid wave fill
+    if (isInstrumental) {
+      const lineStart = Number(collapsedLine?.time ?? 0);
       const nextLine = lyrics?.[collapsedLineIndex + 1];
       const lineDuration = Math.max(
         Number(
-          collapsedLine.duration ?? (nextLine ? nextLine.time - lineStart : 3),
+          collapsedLine?.duration ?? (nextLine ? nextLine.time - lineStart : 3),
         ),
         0.5,
       );
@@ -169,10 +173,19 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
         );
       }
 
-      // clipPath rect Y: 21 = fully hidden (bottom), 3 = fully revealed (top)
-      const clipY = 21 - progress * 18;
-      const NOTE_PATH =
-        "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
+      const liquidY = 22.5 - progress * 20.5;
+      const waveAmp = reduceAnimations ? 0 : 0.65;
+      const phase = collapsedPreviewTime * 4.2;
+      const y1 = liquidY + Math.sin(phase) * waveAmp;
+      const y2 = liquidY - Math.sin(phase) * waveAmp;
+
+      const wavePath =
+        progress >= 1
+          ? "M -2 0 L 26 0 L 26 26 L -2 26 Z"
+          : progress <= 0
+          ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
+          : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
+
       const clipId = `collapsed-inst-clip-${collapsedLineIndex}`;
       const filterId = `collapsed-inst-glow-${collapsedLineIndex}`;
 
@@ -184,7 +197,7 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
         >
           <defs>
             <clipPath id={clipId}>
-              <rect x="0" y={clipY} width="24" height={24 - clipY} />
+              <path d={wavePath} />
             </clipPath>
             <filter
               id={filterId}
@@ -210,14 +223,14 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
               </feMerge>
             </filter>
           </defs>
-          <path d={NOTE_PATH} className="lyrical-collapsed-inst-bg" />
+          <path d={INSTRUMENTAL_NOTE_PATH} className="lyrical-collapsed-inst-bg" />
           <g
             filter={
               progress > 0 && progress < 1 ? `url(#${filterId})` : undefined
             }
           >
             <path
-              d={NOTE_PATH}
+              d={INSTRUMENTAL_NOTE_PATH}
               className="lyrical-collapsed-inst-fill"
               clipPath={`url(#${clipId})`}
             />

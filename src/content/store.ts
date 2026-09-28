@@ -372,6 +372,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
         lyrics: cleanLyrics,
         lyricsSource: nextSource,
         lyricsLanguage: language || null,
+        isLoading: false,
+        headerText: cleanLyrics && cleanLyrics.length > 0 ? "" : state.headerText,
         ...(isCaptions ? { offset: 0, userOffset: 0 } : {}),
         ...(isDifferentSource
           ? {

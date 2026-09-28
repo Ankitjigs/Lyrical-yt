@@ -8,6 +8,10 @@ import {
   generateLineSyncedWords,
   TimedKaraokeWord,
 } from "./KaraokeLyricDisplay";
+import {
+  isInstrumentalLine,
+  INSTRUMENTAL_NOTE_PATH,
+} from "../../modules/lyrics/lyricsNormalizer";
 
 // Motion animations matching Lyrical's configuration
 const getAlbumArtMotion = (
@@ -562,8 +566,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   }, [activeLineIndex, storeActiveIndex]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
+  const isInstrumental = isInstrumentalLine(activeLine);
   const activeText = activeLine?.text?.trim() || "";
-  const isInstrumental = Boolean(activeLine?.isInstrumental);
 
   // Resolve romanized text for the active line, matching LyricsPanel's alignment logic:
   // 1. Check the lyrics line's own .romanized property
@@ -571,7 +575,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   // 3. Fall back to time-proximity matching against the raw array
   const activeRomanized = useMemo(() => {
     if (!isRomanizationEnabled || activeLineIndex < 0 || !activeLine) return "";
-    if (activeLine.isInstrumental) return "";
+    if (isInstrumental) return "";
 
     // Direct property on the lyrics line itself
     if (activeLine.romanized) return activeLine.romanized;
@@ -613,12 +617,12 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
     return "";
-  }, [isRomanizationEnabled, activeLineIndex, activeLine, rawRomanizedLyrics]);
+  }, [isRomanizationEnabled, activeLineIndex, activeLine, isInstrumental, rawRomanizedLyrics]);
 
   // Resolve timedRomanization for the active line
   const activeTimedRomanization = useMemo(() => {
     if (!isRomanizationEnabled || activeLineIndex < 0 || !activeLine) return null;
-    if (activeLine.isInstrumental) return null;
+    if (isInstrumental) return null;
 
     if (Array.isArray(activeLine.timedRomanization) && activeLine.timedRomanization.length > 0) {
       return activeLine.timedRomanization;
@@ -641,12 +645,12 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
     return null;
-  }, [isRomanizationEnabled, activeLineIndex, activeLine, rawRomanizedLyrics]);
+  }, [isRomanizationEnabled, activeLineIndex, activeLine, isInstrumental, rawRomanizedLyrics]);
 
   // Resolve translated text for the active line (same approach)
   const activeTranslated = useMemo(() => {
     if (!isTranslateEnabled || activeLineIndex < 0 || !activeLine) return "";
-    if (activeLine.isInstrumental) return "";
+    if (isInstrumental) return "";
 
     if (activeLine.translated) return activeLine.translated;
 
@@ -873,8 +877,6 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
         : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
 
-    const NOTE_PATH =
-      "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
     const clipId = `mini-inst-clip-${activeLineIndex}`;
 
     return (
@@ -904,10 +906,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             </clipPath>
           </defs>
           {/* Background unfilled note (translucent white) */}
-          <path d={NOTE_PATH} fill="rgba(255, 255, 255, 0.32)" />
+          <path d={INSTRUMENTAL_NOTE_PATH} fill="rgba(255, 255, 255, 0.32)" />
           {/* Liquid filling note (luminous white matching karaoke) */}
           <path
-            d={NOTE_PATH}
+            d={INSTRUMENTAL_NOTE_PATH}
             fill="#ffffff"
             clipPath={`url(#${clipId})`}
           />

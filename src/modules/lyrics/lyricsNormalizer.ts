@@ -372,6 +372,39 @@ export function stripOpeningMetadataLines(
   return result;
 }
 
+export const INSTRUMENTAL_NOTE_PATH =
+  "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
+
+const INSTRUMENTAL_TAG_REGEX =
+  /^[[(（【]?(?:music|संगीत|musique|música|musik|musica|instrumental|instrumental\s*only|instrumental\s*break|applause|cheering|sound|noise|beat|intro|outro|solo|guitar\s*solo|piano\s*solo|drum\s*solo|interlude)[\])）】]?$/i;
+
+/**
+ * Checks if raw text indicates an instrumental break or non-sung musical section.
+ * Covers Unicode music notes (♪, ♫, 🎵, 🎶, ♩, ♬, etc.) and tags like [instrumental].
+ */
+export function isInstrumentalText(text?: string | null): boolean {
+  if (text == null) return false;
+  const clean = text.trim();
+  if (!clean) return true;
+  // If it consists entirely of music notes/symbols/punctuation/whitespace
+  if (/^[♪♫🎵🎶♩♬♭♯\s.,!?:;—\-–()[\]{}]+$/u.test(clean)) return true;
+  return INSTRUMENTAL_TAG_REGEX.test(clean);
+}
+
+/**
+ * Evaluates whether a lyric line represents an instrumental section.
+ */
+export function isInstrumentalLine(line?: any): boolean {
+  if (!line) return false;
+  if (line.isInstrumental === true) return true;
+  const text = typeof line === "string" ? line : line.text;
+  if (!text || !String(text).trim()) {
+    // Empty text with duration or empty parts is an instrumental break
+    return Boolean(line.isInstrumental || (line.duration && line.duration > 0 && !line.parts?.length));
+  }
+  return isInstrumentalText(String(text));
+}
+
 const INSTRUMENTAL_GAP_THRESHOLD_S = 4.5;
 
 /**
@@ -394,7 +427,7 @@ export function insertInstrumentalBreaks(lyrics: any[], songDurationSec?: number
 
   // 1. Intro instrumental: If first vocal line starts after threshold
   const firstVocalTime = Number(lyrics[0]?.time ?? 0);
-  if (firstVocalTime >= INSTRUMENTAL_GAP_THRESHOLD_S && !lyrics[0]?.isInstrumental) {
+  if (firstVocalTime >= INSTRUMENTAL_GAP_THRESHOLD_S && !isInstrumentalLine(lyrics[0])) {
     result.push(createInstrumental(0, firstVocalTime));
   }
 
@@ -406,7 +439,7 @@ export function insertInstrumentalBreaks(lyrics: any[], songDurationSec?: number
       const current = lyrics[i];
       const next = lyrics[i + 1];
 
-      if (current.isInstrumental || next.isInstrumental) continue;
+      if (isInstrumentalLine(current) || isInstrumentalLine(next)) continue;
 
       const currentStart = Number(current.time ?? 0);
       const currentDuration = Number(current.duration ?? 0.5);
@@ -426,7 +459,7 @@ export function insertInstrumentalBreaks(lyrics: any[], songDurationSec?: number
     const lastEnd = Number(last.time ?? 0) + Number(last.duration ?? 0.5);
     const outroGap = songDurationSec - lastEnd;
 
-    if (outroGap >= INSTRUMENTAL_GAP_THRESHOLD_S && !last.isInstrumental) {
+    if (outroGap >= INSTRUMENTAL_GAP_THRESHOLD_S && !isInstrumentalLine(last)) {
       result.push(createInstrumental(lastEnd, outroGap));
     }
   }
@@ -437,9 +470,10 @@ export function insertInstrumentalBreaks(lyrics: any[], songDurationSec?: number
 /**
  * Complete, maintainable normalization pipeline for any lyrics source:
  * 1. Sorts by timestamp
- * 2. Filters opening metadata/credit header lines
- * 3. Automatically inserts instrumental breaks (intros & interludes)
- * 4. Normalizes spacing and duplicate timestamps
+ * 2. Normalizes any existing instrumental lines (e.g. Musixmatch "♪", "♫", "[instrumental]")
+ * 3. Filters opening metadata/credit header lines
+ * 4. Automatically inserts instrumental breaks (intros & interludes)
+ * 5. Normalizes spacing and duplicate timestamps
  */
 export function normalizeLyricsPipeline(
   lyrics: any[],
@@ -454,10 +488,26 @@ export function normalizeLyricsPipeline(
   // 1. Sort by time
   processed.sort((a, b) => (Number(a.time) || 0) - (Number(b.time) || 0));
 
-  // 2. Strip opening metadata lines (原唱, 作词, title banners, etc.)
+  // 2. Identify & normalize existing instrumental lines (e.g. Musixmatch "♪", "♫", "[instrumental]")
+  for (let i = 0; i < processed.length; i++) {
+    if (isInstrumentalLine(processed[i])) {
+      processed[i].isInstrumental = true;
+      processed[i].text = "";
+      processed[i].parts = [];
+      // If duration is missing, calculate from next line
+      if (!processed[i].duration || processed[i].duration <= 0) {
+        const next = processed[i + 1];
+        if (next && typeof next.time === "number") {
+          processed[i].duration = Math.max(0.5, next.time - processed[i].time);
+        }
+      }
+    }
+  }
+
+  // 3. Strip opening metadata lines (原唱, 作词, title banners, etc.)
   processed = stripOpeningMetadataLines(processed, songInfo);
 
-  // 3. Fix backward timestamps
+  // 4. Fix backward timestamps
   for (let i = 0; i < processed.length; i++) {
     if (processed[i].text) {
       processed[i].text = String(processed[i].text).trim();
@@ -467,7 +517,7 @@ export function normalizeLyricsPipeline(
     }
   }
 
-  // 4. Insert instrumental breaks
+  // 5. Insert instrumental breaks
   processed = insertInstrumentalBreaks(processed, songDurationSec);
 
   return processed;

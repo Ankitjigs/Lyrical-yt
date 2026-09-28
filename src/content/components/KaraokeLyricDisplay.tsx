@@ -1,6 +1,10 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import type { LyricalLyricLine, SongInfo } from "../../types/lyrics";
+import {
+  isInstrumentalLine,
+  INSTRUMENTAL_NOTE_PATH,
+} from "../../modules/lyrics/lyricsNormalizer";
 
 interface KaraokeLyricDisplayProps {
   lyrics: LyricalLyricLine[];
@@ -239,17 +243,17 @@ export default function KaraokeLyricDisplay({
   }, [lyrics, currentTime]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
+  const isInstrumental = isInstrumentalLine(activeLine);
   const activeOriginalText =
-    activeLine?.text?.trim() ||
-    (activeLine?.isInstrumental ? "Instrumental" : "");
+    activeLine?.text?.trim() || "";
   const activeRomanized =
-    activeLineIndex >= 0
+    !isInstrumental && activeLineIndex >= 0
       ? romanizedLyrics?.[activeLineIndex]?.romanized ||
         activeLine?.romanized ||
         ""
       : "";
   const activeTranslated =
-    activeLineIndex >= 0
+    !isInstrumental && activeLineIndex >= 0
       ? translatedLyrics?.[activeLineIndex]?.translated ||
         activeLine?.translated ||
         ""
@@ -260,8 +264,8 @@ export default function KaraokeLyricDisplay({
       return songInfo?.title || "";
     }
 
-    // Instrumental section
-    if (activeLine.isInstrumental) {
+    // Instrumental section: single unified music note with rising liquid filling
+    if (isInstrumental) {
       const lineStart = Number(activeLine.time ?? 0);
       const nextLine = lyrics?.[activeLineIndex + 1];
       const lineDuration = Math.max(
@@ -296,8 +300,6 @@ export default function KaraokeLyricDisplay({
           ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
           : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
 
-      const NOTE_PATH =
-        "M10 21q-1.65 0-2.825-1.175T6 17t1.175-2.825T10 13q.575 0 1.063.138t.937.412V4q0-.425.288-.712T13 3h4q.425 0 .713.288T18 4v2q0 .425-.288.713T17 7h-3v10q0 1.65-1.175 2.825T10 21";
       const clipId = `karaoke-inst-clip-${activeLineIndex}`;
 
       return (
@@ -309,10 +311,10 @@ export default function KaraokeLyricDisplay({
               </clipPath>
             </defs>
             {/* Background unfilled note (translucent) */}
-            <path d={NOTE_PATH} fill="rgba(255, 255, 255, 0.32)" />
-            {/* Liquid filling note (luminous white with subtle theme aura) */}
+            <path d={INSTRUMENTAL_NOTE_PATH} fill="rgba(255, 255, 255, 0.32)" />
+            {/* Liquid filling note (luminous white, filling from bottom to top) */}
             <path
-              d={NOTE_PATH}
+              d={INSTRUMENTAL_NOTE_PATH}
               fill="#ffffff"
               clipPath={`url(#${clipId})`}
             />
@@ -541,7 +543,7 @@ export default function KaraokeLyricDisplay({
         >
           <div className="lyrical-karaoke-original">{renderOriginal()}</div>
 
-          {!activeLine?.isInstrumental && activeRomanized && isRomanizationEnabled && (
+          {!isInstrumental && activeRomanized && isRomanizationEnabled && (
             <motion.div
               className="lyrical-karaoke-romanized"
               initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
@@ -552,7 +554,7 @@ export default function KaraokeLyricDisplay({
             </motion.div>
           )}
 
-          {!activeLine?.isInstrumental && activeTranslated && isTranslateEnabled && (
+          {!isInstrumental && activeTranslated && isTranslateEnabled && (
             <motion.div
               className="lyrical-karaoke-translated"
               initial={reduceAnimations ? false : { opacity: 0, y: 4 }}

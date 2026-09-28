@@ -840,6 +840,27 @@ window.addEventListener("message", (event) => {
     event.data?.type === "LYRICAL_CLEAR_CAPTIONS" ||
     event.data?.type === "LYRICAL_CLEAR_AD_CAPTIONS"
   ) {
+    const clearVideoId = event.data?.videoId || null;
+    const currentVid = getCurrentVideoId(currentSongInfo);
+    const isSameVideoClear = Boolean(
+      clearVideoId && currentVid && clearVideoId === currentVid,
+    );
+
+    // If it's a routine caption reset for the SAME video (e.g. miniplayer expanded to watch page,
+    // or player response re-request), do NOT destroy already loaded captions!
+    if (
+      isSameVideoClear &&
+      event.data?.type === "LYRICAL_CLEAR_CAPTIONS" &&
+      fetchedLyrics &&
+      fetchedLyrics.length > 0
+    ) {
+      log(
+        "[Lyrical] Preserving active captions across same-video tracking reset:",
+        clearVideoId,
+      );
+      return;
+    }
+
     log(
       "[Lyrical] Clearing captions and resetting caption state for video:",
       event.data?.videoId || "unknown",
@@ -853,6 +874,7 @@ window.addEventListener("message", (event) => {
     if (useAppStore.getState().lyricsSource === "captions") {
       fetchedLyrics = null;
       currentFetchWinningSourceId = null;
+      stopLyricsTimer();
       useAppStore.getState().clearLyricsForNewTrack();
     }
     return;
@@ -2665,6 +2687,113 @@ function getCurrentVideoId(songInfo?: any): string | null {
   return null;
 }
 
+function extractFastSongInfo(videoId: string | null): any {
+  const isWatchUrl =
+    typeof window !== "undefined" &&
+    window.location.hostname.includes("youtube.com") &&
+    window.location.pathname.includes("/watch");
+  const currentVid =
+    videoId || (isWatchUrl ? new URLSearchParams(window.location.search).get("v") : null) || getCurrentVideoId();
+  let title = "";
+  let artist = "";
+  let artwork = currentVid ? `https://i.ytimg.com/vi/${currentVid}/hqdefault.jpg` : null;
+
+  // 1. Try playlist selected item if in playlist queue
+  try {
+    const selItem = document.querySelector(
+      "ytd-playlist-panel-video-renderer[selected], ytd-playlist-panel-video-renderer.selected, ytd-playlist-panel-video-renderer[aria-selected='true']"
+    );
+    if (selItem) {
+      const titleEl = selItem.querySelector<HTMLElement>("#video-title");
+      const bylineEl = selItem.querySelector<HTMLElement>("#byline, .byline, #channel-name");
+      const rawTitle = titleEl?.innerText?.trim();
+      const rawByline = bylineEl?.innerText?.trim() || "";
+      if (rawTitle) {
+        if (rawTitle.includes(" - ")) {
+          const parts = rawTitle.split(" - ");
+          artist = parts[0].trim();
+          title = parts.slice(1).join(" - ").trim();
+        } else {
+          title = rawTitle;
+          artist = rawByline;
+        }
+      }
+    }
+  } catch {}
+
+  // 2. Try movie_player.getVideoData()
+  if (!title || !artist) {
+    try {
+      const player = document.getElementById("movie_player") as any;
+      if (player && !player.closest?.("ytd-inline-preview-player, #inline-preview-player")) {
+        const data = player.getVideoData?.();
+        if (data && (!currentVid || data.video_id === currentVid)) {
+          if (data.title && !title) {
+            if (data.title.includes(" - ")) {
+              const parts = data.title.split(" - ");
+              artist = artist || parts[0].trim();
+              title = parts.slice(1).join(" - ").trim();
+            } else {
+              title = data.title;
+              artist = artist || data.author || "";
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // 3. Try window.getSongInfoFromPage()
+  if (!title || !artist) {
+    try {
+      const pageInfo = window.getSongInfoFromPage?.();
+      if (pageInfo && !pageInfo.isAd && (pageInfo.title || pageInfo.artist)) {
+        if (!currentVid || !pageInfo.videoId || pageInfo.videoId === currentVid) {
+          title = title || pageInfo.title || "";
+          artist = artist || pageInfo.artist || "";
+          artwork = pageInfo.artwork || artwork;
+        }
+      }
+    } catch {}
+  }
+
+  // 4. Try document.title
+  if (!title && typeof document !== "undefined" && document.title && document.title !== "YouTube") {
+    const cleanDoc = document.title.replace(/\s*-\s*YouTube$/i, "").trim();
+    if (cleanDoc && cleanDoc.includes(" - ")) {
+      const parts = cleanDoc.split(" - ");
+      artist = artist || parts[0].trim();
+      title = parts.slice(1).join(" - ").trim();
+    } else if (cleanDoc) {
+      title = cleanDoc;
+    }
+  }
+
+  // Clean metadata from title like (Official Video), [Official Audio]
+  if (title) {
+    title = title
+      .replace(/\(.*?(official|music|lyric|audio|video).*?\)/gi, "")
+      .replace(/\[.*?(official|music|lyric|audio|video).*?\]/gi, "")
+      .replace(/\|.*$/g, "")
+      .trim();
+  }
+
+  // Preload artwork image into browser image cache immediately
+  if (artwork && typeof Image !== "undefined") {
+    try {
+      const img = new Image();
+      img.src = artwork;
+    } catch {}
+  }
+
+  return {
+    videoId: currentVid,
+    title: title || "",
+    artist: artist || (title ? "Playing on YouTube" : ""),
+    artwork: artwork,
+  };
+}
+
 function isMiniplayerActive(): boolean {
   const isWatchUrl =
     window.location.href.includes("/watch") &&
@@ -2770,7 +2899,14 @@ function checkAndManageMiniCompanion() {
   if (isWatchUrl) {
     isMiniCompanionDismissed = false;
     removeMiniCompanion();
-    ensureWatchPanelMounted();
+    const existing = document.getElementById("lyrical-panel-wrapper");
+    if (
+      !existing ||
+      !document.body.contains(existing) ||
+      existing.parentElement?.id !== "secondary"
+    ) {
+      ensureWatchPanelMounted();
+    }
     return;
   }
 
@@ -2939,16 +3075,19 @@ function applyWrapperPlacement(wrapper = lyricsPanel) {
 
     const secondary = findVisibleSecondaryColumn();
     if (secondary) {
-      const targetContainer =
-        secondary.querySelector<HTMLElement>("#secondary-inner") || secondary;
-      if (wrapper.parentElement !== targetContainer || targetContainer.firstChild !== wrapper) {
-        targetContainer.insertBefore(wrapper, targetContainer.firstChild);
+      // Mount directly at top of #secondary, above #secondary-inner.
+      // Once placed in #secondary, NEVER re-insert it! Re-inserting a node that is already
+      // inside secondary detaches it from the layout tree and destroys compositor layers.
+      if (wrapper.parentElement === secondary && document.body.contains(wrapper)) {
+        return;
       }
+      secondary.insertBefore(wrapper, secondary.firstChild);
     }
   }
 }
 
 let secondaryColumnObserver: MutationObserver | null = null;
+let secondaryColumnDebounceRaf: number | null = null;
 
 function ensureWatchPanelMounted() {
   if (!isStandardYouTubeWatchPage()) return;
@@ -2959,36 +3098,44 @@ function ensureWatchPanelMounted() {
   const secondary = findVisibleSecondaryColumn();
   if (!secondary) return;
 
-  const targetContainer =
-    secondary.querySelector<HTMLElement>("#secondary-inner") || secondary;
-  const existing = document.getElementById("lyrical-panel-wrapper");
+  const existing = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
 
-  if (!existing || !document.body.contains(existing)) {
-    log("[Lyrical Panel] Panel detached from watch layout, re-injecting...");
-    injectIntoYouTube();
-  } else if (existing.parentElement !== targetContainer || targetContainer.firstChild !== existing) {
-    log("[Lyrical Panel] Moving panel back to top of secondary container...");
-    targetContainer.insertBefore(existing, targetContainer.firstChild);
+  if (!existing || !document.body.contains(existing) || existing.parentElement !== secondary) {
+    if (existing && (existing._reactRoot || existing.shadowRoot)) {
+      lyricsPanel = existing;
+      log("[Lyrical Panel] Ensuring existing panel is placed in visible secondary column...");
+      secondary.insertBefore(existing, secondary.firstChild);
+    } else {
+      log("[Lyrical Panel] Panel detached from watch layout, re-injecting...");
+      injectIntoYouTube();
+    }
   }
 
-  // Set up observer on targetContainer to survive playlist mounting/DOM churn
-  if (!secondaryColumnObserver && targetContainer) {
+  // Set up observer on secondary to ensure panel stays attached if YouTube removes it
+  if (!secondaryColumnObserver && secondary) {
     secondaryColumnObserver = new MutationObserver(() => {
       if (!isStandardYouTubeWatchPage()) {
         secondaryColumnObserver?.disconnect();
         secondaryColumnObserver = null;
         return;
       }
-      const panel = document.getElementById("lyrical-panel-wrapper");
-      const currentContainer =
-        findVisibleSecondaryColumn()?.querySelector<HTMLElement>("#secondary-inner") ||
-        findVisibleSecondaryColumn();
-      if (currentContainer && (!panel || !document.body.contains(panel) || panel.parentElement !== currentContainer || currentContainer.firstChild !== panel)) {
-        ensureWatchPanelMounted();
-      }
+      if (secondaryColumnDebounceRaf) cancelAnimationFrame(secondaryColumnDebounceRaf);
+      secondaryColumnDebounceRaf = requestAnimationFrame(() => {
+        secondaryColumnDebounceRaf = null;
+        const panel = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+        const currentSecondary = findVisibleSecondaryColumn();
+        if (
+          currentSecondary &&
+          (!panel ||
+            !document.body.contains(panel) ||
+            panel.parentElement !== currentSecondary)
+        ) {
+          ensureWatchPanelMounted();
+        }
+      });
     });
 
-    secondaryColumnObserver.observe(targetContainer, {
+    secondaryColumnObserver.observe(secondary, {
       childList: true,
     });
   }
@@ -2997,16 +3144,6 @@ function ensureWatchPanelMounted() {
 // Inject panel into YouTube page
 function injectIntoYouTube() {
   log("Attempting YouTube injection...");
-
-  // ✅ Remove any existing panel from DOM before re-injecting
-  const existingPanel = document.getElementById("lyrical-panel-wrapper");
-  if (existingPanel) {
-    if (existingPanel._reactRoot) {
-      existingPanel._reactRoot.unmount();
-    }
-    existingPanel.remove();
-  }
-  lyricsPanel = null;
 
   // ✅ Watch-page intent check (flexible OR logic)
   const isWatchLikePage = () => {
@@ -3036,12 +3173,33 @@ function injectIntoYouTube() {
       log("[Lyrical Panel] Found #secondary for sidebar mode");
     }
 
-    // 🔧 Prevent duplicate - double-check DOM for any stale panels
-    const stalePanel = document.getElementById("lyrical-panel-wrapper");
-    if (stalePanel) {
-      log("Found stale panel in DOM, removing before inject");
-      if (stalePanel._reactRoot) stalePanel._reactRoot.unmount();
-      stalePanel.remove();
+    // ⚡ SMART RE-USE: Keep React root alive across watch-to-watch navigations
+    const existingPanel = (document.getElementById("lyrical-panel-wrapper") || lyricsPanel) as any;
+    if (existingPanel && (existingPanel._reactRoot || existingPanel.shadowRoot)) {
+      lyricsPanel = existingPanel;
+      log("[Lyrical Panel] ⚡ Reusing existing panel & React root");
+
+      // Smart Re-parent: Ensure it is placed into current secondary container
+      applyWrapperPlacement(lyricsPanel);
+      ensureKaraokeOverlay();
+
+      lyricsPanel.style.display = "block";
+      lyricsPanel.style.visibility = "visible";
+      lyricsPanel.style.opacity = "1";
+
+      const videoId = new URLSearchParams(window.location.search).get("v");
+      lastInjectedVideoId = videoId;
+      return true;
+    }
+
+    // If an existing panel was detached or has no React root, clean it up before fresh mount
+    if (existingPanel) {
+      log("Found stale panel in DOM without active React root, removing before inject");
+      if (existingPanel._reactRoot) {
+        try { existingPanel._reactRoot.unmount(); } catch (e) {}
+      }
+      existingPanel.remove();
+      lyricsPanel = null;
     }
 
     log("Watch layout confirmed, injecting panel");
@@ -3081,7 +3239,7 @@ function injectIntoYouTube() {
           ")",
         );
         setTimeout(() => {
-          if (!lyricsPanel) {
+          if (!lyricsPanel || !(lyricsPanel as any)._reactRoot) {
             lyricsPanel = createLyricsPanel();
           }
           applyWrapperPlacement(lyricsPanel);
@@ -3492,7 +3650,6 @@ function attachEventListeners() {
 }
 
 // Update song info
-// Update song info
 function updateSongInfo(songInfo) {
   log("React Update: Song Info", songInfo);
   if (!songInfo) return;
@@ -3524,9 +3681,24 @@ function updateSongInfo(songInfo) {
     merged.artwork = currentSongInfo.artwork;
   }
 
+  // Parse "Artist - Title" if artist is missing or generic
+  if (merged.title && (!merged.artist || merged.artist === "YouTube" || merged.artist === "Playing on YouTube") && merged.title.includes(" - ")) {
+    const parts = merged.title.split(" - ");
+    merged.artist = parts[0].trim();
+    merged.title = parts.slice(1).join(" - ").trim();
+  }
+
   // Ensure high-resolution thumbnail if artwork is not set but videoId is known
   if (!merged.artwork && merged.videoId) {
     merged.artwork = `https://i.ytimg.com/vi/${merged.videoId}/hqdefault.jpg`;
+  }
+
+  // Preload artwork into browser image cache for zero-lag smooth animations
+  if (merged.artwork && typeof Image !== "undefined") {
+    try {
+      const img = new Image();
+      img.src = merged.artwork;
+    } catch {}
   }
 
   currentSongInfo = merged;
@@ -4302,7 +4474,11 @@ function resetLyricsState(reason = "", options: any = {}) {
     useAppStore.getState().resetLyricsOnly();
   } else {
     // When video changes or initializing search, immediately set clean loading state
-    useAppStore.getState().clearLyricsForNewTrack();
+    // Avoid double-clearing if already in clean loading state for this new track
+    const s = useAppStore.getState();
+    if (s.lyrics?.length > 0 || s.activeIndex !== -1 || !s.isLoading) {
+      s.clearLyricsForNewTrack();
+    }
   }
 }
 
@@ -5621,8 +5797,15 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
     fetchedLyrics &&
     fetchedLyrics.length > 0 &&
     lastFetchedVideoId === videoId &&
-    useAppStore.getState().lyricsSource === "captions"
+    (useAppStore.getState().lyricsSource === "captions" ||
+      currentFetchWinningSourceId === "captions")
   ) {
+    const storeLyrics = useAppStore.getState().lyrics;
+    if (!storeLyrics || storeLyrics.length === 0) {
+      log("[Lyrical] Restoring captions into store for current video:", videoId);
+      useAppStore.getState().setLyrics(fetchedLyrics, "captions");
+      useAppStore.setState({ isLoading: false, headerText: "" });
+    }
     log(
       "Skipping fetch loop: captions already loaded for current video",
       videoId,
@@ -5630,8 +5813,43 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
     return;
   }
 
-  // Same video → do nothing
-  if (videoId === lastFetchedVideoId) return;
+  // Same video → check if store needs restoring (e.g. navigation from miniplayer to watch page)
+  if (
+    videoId === lastFetchedVideoId &&
+    !options.force &&
+    options.reason !== "source changed" &&
+    options.reason !== "ad finished"
+  ) {
+    const storeLyrics = useAppStore.getState().lyrics;
+    const hasStoreLyrics = Array.isArray(storeLyrics) && storeLyrics.length > 0;
+    const hasFetchedLyrics =
+      Array.isArray(fetchedLyrics) && fetchedLyrics.length > 0;
+
+    if (!hasStoreLyrics && hasFetchedLyrics) {
+      log(
+        "[Lyrical] Restoring existing fetchedLyrics into store for same video:",
+        videoId,
+      );
+      const currentSource =
+        currentFetchWinningSourceId ||
+        lyricsByVersion.default?.id ||
+        useAppStore.getState().lyricsSource ||
+        "default";
+      useAppStore.getState().setLyrics(fetchedLyrics, currentSource);
+      useAppStore.setState({ isLoading: false, headerText: "" });
+      return;
+    } else if (hasStoreLyrics) {
+      useAppStore.setState({ isLoading: false, headerText: "" });
+      return;
+    }
+
+    // If neither storeLyrics nor fetchedLyrics has data, DO NOT return!
+    // Fall through so lyrics can actually be fetched.
+    log(
+      "[Lyrical] Same video detected but no lyrics in store or memory; proceeding with fresh fetch for:",
+      videoId,
+    );
+  }
 
   // GUARD: Ensure panel is ready before updating ONLY on watch page
   // On homepage/search with miniplayer, lyricsPanel is not in the DOM
@@ -5692,7 +5910,6 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
     songInfo.artwork = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
   }
 
-  currentSongInfo = songInfo;
   updateSongInfo(songInfo);
 
   if (useAppStore.getState().isAdPlaying || isYouTubeAdPlaying()) {
@@ -6916,16 +7133,40 @@ async function initialize() {
         removeMiniCompanion();
       }
 
-      // ✅ On watch page → reset state and use video-driven injection
-      log(
-        "[Lyrical Panel] On watch page, using waitForStableVideo for injection",
+      // ✅ On watch page → check if same video
+      const currentUrlVideoId = new URLSearchParams(window.location.search).get("v");
+      const isSameVideo = Boolean(
+        currentUrlVideoId &&
+        lastFetchedVideoId &&
+        currentUrlVideoId === lastFetchedVideoId
       );
+
+      if (isSameVideo) {
+        log(
+          "[Lyrical Panel] Same video navigation detected (e.g. miniplayer expanded to watch), preserving lyrics",
+        );
+        waitForVideoInProgress = false;
+        if (fetchedLyrics && fetchedLyrics.length > 0) {
+          const currentSource =
+            currentFetchWinningSourceId ||
+            lyricsByVersion.default?.id ||
+            useAppStore.getState().lyricsSource ||
+            "default";
+          useAppStore.getState().setLyrics(fetchedLyrics, currentSource);
+          useAppStore.setState({ isLoading: false, headerText: "" });
+        } else if (useAppStore.getState().lyrics?.length) {
+          useAppStore.setState({ isLoading: false, headerText: "" });
+        }
+        return;
+      }
+
+      // ⚡ DIFFERENT VIDEO ON WATCH PAGE:
       abortCurrentFetch("YouTube navigation");
       activeProcessSessionId++;
-      useAppStore.getState().clearLyricsForNewTrack();
+      stopLyricsTimer();
       lyricsRendered = false;
-      lastInjectedVideoId = null; // Reset to allow reinjection
-      waitForVideoInProgress = false; // Reset waiting flag for fresh navigation
+      lastInjectedVideoId = null;
+      waitForVideoInProgress = false;
 
       // Re-hydrate floating & transition settings from storage to ensure perfect sync across video navigations
       if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
@@ -6955,22 +7196,58 @@ async function initialize() {
         );
       }
 
-      waitForStableVideo(() => {
-        injectIntoYouTube();
+      // Extract complete fast song info immediately at t = 0ms
+      const fastInfo = extractFastSongInfo(currentUrlVideoId);
+      log("[Lyrical Panel] ⚡ Fast song info extracted at t=0:", fastInfo);
+
+      // Trigger synchronized header animation and clean loading state AT ONCE
+      if (fastInfo) {
+        updateSongInfo(fastInfo);
+      }
+      useAppStore.getState().clearLyricsForNewTrack();
+
+      // Check if panel is already mounted and healthy in DOM
+      const existingPanel = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+      const rawDisplayMode = useAppStore.getState().displayMode || "sidebar";
+      const isFloating = rawDisplayMode === "floating" && isStandardYouTubeWatchPage();
+      const secondary = findVisibleSecondaryColumn();
+      const isAlreadyMounted = Boolean(
+        existingPanel &&
+        document.body.contains(existingPanel) &&
+        (isFloating
+          ? existingPanel.parentElement === document.body
+          : (secondary && existingPanel.parentElement === secondary))
+      );
+
+      if (isAlreadyMounted) {
+        // 🔒 ZERO-FLICKER FAST PATH:
+        // Panel is ALREADY attached in the correct DOM position!
+        // DO NOT touch DOM, DO NOT re-insert, DO NOT wait for video readyState!
+        lyricsPanel = existingPanel;
+        lastInjectedVideoId = currentUrlVideoId;
         setupAdObserver();
-        ensureWatchPanelMounted();
-        const info = window.getSongInfoFromPage?.();
-        if (info && !info.isAd) {
-          // Guard against stale hover preview metadata:
-          // Ensure info.videoId matches current URL videoId if on watch page
-          const urlV = new URLSearchParams(window.location.search).get("v");
-          if (urlV && info.videoId && info.videoId !== urlV) {
-            log("[Lyrical Panel] Detected stale hover preview info on navigation, correcting videoId:", urlV);
-            info.videoId = urlV;
-          }
-          autoFetchLyrics(info);
+
+        if (fastInfo && !fastInfo.isAd) {
+          autoFetchLyrics(fastInfo);
+        } else {
+          hydrateSongInfoWithRetry(6, 250).then((hasInfo) => {
+            if (hasInfo && currentSongInfo) {
+              autoFetchLyrics(currentSongInfo);
+            }
+          });
         }
-      });
+      } else {
+        // Cold injection path (e.g. user came from home feed/search page into watch page)
+        waitForStableVideo(() => {
+          injectIntoYouTube();
+          ensureWatchPanelMounted();
+          setupAdObserver();
+          const info = extractFastSongInfo(currentUrlVideoId) || window.getSongInfoFromPage?.();
+          if (info && !info.isAd) {
+            autoFetchLyrics(info);
+          }
+        });
+      }
     }
 
     // ✅ FIX 2: Attach listener only once

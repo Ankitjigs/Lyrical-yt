@@ -30,7 +30,7 @@ import { getThemeCssVariables } from "../../themes";
 import { useShallow } from "zustand/react/shallow";
 import { t } from "../../i18n";
 import LyricsDock from "./LyricsDock";
-import { isMetadataLine } from "../../modules/lyrics/lyricsNormalizer";
+import { isMetadataLine, isInstrumentalLine } from "../../modules/lyrics/lyricsNormalizer";
 
 const GeniusIcon = ({ size = 14 }: { size?: number }) => (
   <svg
@@ -685,13 +685,13 @@ function alignSecondaryLyrics(lyrics: any[] = [], sourceLines: any[] = []) {
 
   // Filter out any metadata/credit lines that may be lingering in sourceLines
   const cleanSourceLines = sourceLines.filter(
-    (item) => item && !isMetadataLine(item.text || "") && !item.isInstrumental,
+    (item) => item && !isMetadataLine(item.text || "") && !isInstrumentalLine(item),
   );
 
   return lyrics.reduce(
     (acc, line, index) => {
       // 1. Instrumental lines NEVER receive secondary lyrics
-      if (line?.isInstrumental || (!line?.text && !line?.parts?.length)) {
+      if (isInstrumentalLine(line) || (!line?.text && !line?.parts?.length)) {
         acc.romanizedLyrics.push({
           time: line?.time,
           text: "",
@@ -1306,6 +1306,17 @@ const LyricsPanel = () => {
     "translated",
   );
   const hasLyrics = Boolean(lyrics && lyrics.length > 0);
+  const urlVideoId =
+    typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null;
+  const currentArtwork =
+    songInfo?.artwork ||
+    (songInfo?.videoId
+      ? `https://i.ytimg.com/vi/${songInfo.videoId}/hqdefault.jpg`
+      : urlVideoId
+        ? `https://i.ytimg.com/vi/${urlVideoId}/hqdefault.jpg`
+        : null);
   const engineExtraData = useMemo(
     () => ({
       romanizedLyrics: alignedRomanizedLyrics,
@@ -1630,9 +1641,8 @@ const LyricsPanel = () => {
       "";
     const title = songInfo?.title || "";
     const artist = songInfo?.artist || "";
-    return `${lyricsSource || "none"}|${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
+    return `${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
   }, [
-    lyricsSource,
     songInfo?.artist,
     songInfo?.title,
     (songInfo as any)?.videoId,
@@ -1650,6 +1660,17 @@ const LyricsPanel = () => {
     engineResetKey,
     lyricsAnimationStyle,
   );
+
+  // Reset scroll and manual pause state on track/video change
+  useEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = 0;
+    }
+    setLegacyScrollPaused(false);
+    setShowResumeAutoscroll(false);
+    setIsUserScrolled(false);
+    lastLegacyActiveIndexRef.current = -1;
+  }, [engineResetKey, setIsUserScrolled]);
 
   useEffect(() => {
     if (
@@ -2254,49 +2275,44 @@ const LyricsPanel = () => {
                   ].join(", "),
                 }}
               >
-                <AnimatePresence mode="popLayout" initial={false}>
-                  <motion.div
-                    key={songInfo?.artwork || "fallback-art"}
-                    {...getAlbumArtMotion(albumArtTransition, reduceAnimations)}
+                {currentArtwork ? (
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <motion.img
+                      key={currentArtwork}
+                      src={currentArtwork}
+                      alt={t("lyricsPanel_albumArt")}
+                      {...getAlbumArtMotion(albumArtTransition, reduceAnimations)}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        display: "block",
+                        borderRadius: "inherit",
+                      }}
+                    />
+                  </AnimatePresence>
+                ) : (
+                  <div
                     style={{
                       position: "absolute",
                       inset: 0,
                       width: "100%",
                       height: "100%",
+                      background: "var(--lyrical-album-fallback)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
                       borderRadius: "inherit",
-                      overflow: "hidden",
                     }}
                   >
-                    {songInfo?.artwork ? (
-                      <img
-                        src={songInfo.artwork}
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          objectFit: "cover",
-                          display: "block",
-                        }}
-                        alt={t("lyricsPanel_albumArt")}
-                      />
-                    ) : (
-                      <div
-                        style={{
-                          width: "100%",
-                          height: "100%",
-                          background: "var(--lyrical-album-fallback)",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                        }}
-                      >
-                        <Music
-                          size={compactMode ? 24 : 40}
-                          color="var(--lyrical-text-subtle)"
-                        />
-                      </div>
-                    )}
-                  </motion.div>
-                </AnimatePresence>
+                    <Music
+                      size={compactMode ? 24 : 40}
+                      color="var(--lyrical-text-subtle)"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Info */}
@@ -2326,25 +2342,51 @@ const LyricsPanel = () => {
                   />
                 </Tooltip>
                 <Tooltip
-                  content={songInfo?.artist || t("lyricsPanel_playSong")}
+                  content={
+                    songInfo?.artist ||
+                    (songInfo?.title ? "Playing on YouTube" : t("lyricsPanel_playSong"))
+                  }
                 >
-                  <p
-                    className="songArtist"
+                  <div
                     style={{
-                      fontSize: compactMode ? "12px" : "14px",
-                      fontWeight: compactMode ? "500" : "normal",
-                      color: "var(--lyrical-text-secondary)",
-                      margin: "0",
+                      height: compactMode ? "18px" : "20px",
                       overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      maxWidth: "100%",
-                      transition:
-                        "font-size 0.3s cubic-bezier(0.4, 0, 0.2, 1) 0.1s",
+                      position: "relative",
+                      width: "100%",
                     }}
                   >
-                    {songInfo?.artist || t("lyricsPanel_playSong")}
-                  </p>
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.p
+                        key={
+                          songInfo?.artist ||
+                          (songInfo?.title ? "Playing on YouTube" : "empty-artist")
+                        }
+                        initial={
+                          reduceAnimations ? { opacity: 0 } : { opacity: 0, y: 6 }
+                        }
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={
+                          reduceAnimations ? { opacity: 0 } : { opacity: 0, y: -6 }
+                        }
+                        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                        className="songArtist"
+                        style={{
+                          fontSize: compactMode ? "12px" : "14px",
+                          fontWeight: compactMode ? "500" : "normal",
+                          color: "var(--lyrical-text-secondary)",
+                          margin: "0",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          maxWidth: "100%",
+                          textAlign: compactMode ? "left" : "center",
+                        }}
+                      >
+                        {songInfo?.artist ||
+                          (songInfo?.title ? "Playing on YouTube" : t("lyricsPanel_playSong"))}
+                      </motion.p>
+                    </AnimatePresence>
+                  </div>
                 </Tooltip>
                 {showProgressBar && (
                   <div style={{ width: "100%", marginTop: "4px" }}>
@@ -2370,11 +2412,9 @@ const LyricsPanel = () => {
                 position: "relative",
                 height: isKaraokeMode
                   ? "auto"
-                  : !hasLyrics
-                    ? "auto"
-                    : compactMode
-                      ? "clamp(220px, 30vh, 260px)"
-                      : "clamp(320px, 50vh, 460px)",
+                  : compactMode
+                    ? "clamp(220px, 30vh, 260px)"
+                    : "clamp(320px, 50vh, 460px)",
                 maxHeight: isKaraokeMode
                   ? "none"
                   : compactMode
@@ -2383,8 +2423,8 @@ const LyricsPanel = () => {
                 minHeight: isKaraokeMode
                   ? "auto"
                   : compactMode
-                    ? "160px"
-                    : "180px",
+                    ? "220px"
+                    : "320px",
                 display: isKaraokeMode || !hasLyrics ? "flex" : "block",
                 flexDirection:
                   isKaraokeMode || !hasLyrics ? "column" : undefined,
@@ -2401,7 +2441,7 @@ const LyricsPanel = () => {
                 background: "var(--lyrical-panel-surface)",
                 borderRadius: "12px",
                 boxShadow: "inset 0 4px 12px rgba(0,0,0,0.3)",
-                transition: "all 0.4s cubic-bezier(0.4, 0, 0.2, 1)",
+                transition: "background 0.3s ease, border-color 0.3s ease",
               }}
             >
               {isKaraokeMode ? (
@@ -2478,12 +2518,7 @@ const LyricsPanel = () => {
                           const isActive = idx === activeIndex;
                           const isPast = activeIndex >= 0 && idx < activeIndex;
                           const lyricText = line.text?.trim() ?? "";
-                          const isInstrumental =
-                            line.isInstrumental ||
-                            !lyricText ||
-                            lyricText === "♪" ||
-                            lyricText === "♫" ||
-                            /^\[?instrumental\s*only\]?$/i.test(lyricText);
+                          const isInstrumental = isInstrumentalLine(line);
                           const nextLine = lyrics[idx + 1];
                           const lineDuration =
                             line.duration ??

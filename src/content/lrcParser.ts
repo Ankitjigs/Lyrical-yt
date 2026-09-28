@@ -5,6 +5,7 @@
  */
 
 import type { LyricalLyricLine, LyricalLyricPart } from "../types/lyrics";
+import { isInstrumentalText } from "../modules/lyrics/lyricsNormalizer";
 
 // Helper: Parse time string to seconds (float)
 export function parseTime(timeStr: string | number | null | undefined): number {
@@ -65,6 +66,18 @@ export function parseLRC(lrcText: string): LyricalLyricLine[] {
     // Remove the start tag to process content
     let content = line.replace(timeTagRegex, "").trim();
     if (!content) continue;
+
+    // Check if this line is an instrumental break or musical symbol (e.g. Musixmatch ♪, ♫, [instrumental])
+    if (isInstrumentalText(content)) {
+      result.push({
+        time: startTime,
+        text: "",
+        duration: 0,
+        parts: null,
+        isInstrumental: true,
+      });
+      continue;
+    }
 
     // 2. Check for Enhanced LRC (Word Timestamps)
     // Format: "Word <time> Word <time>" or "<time>Word <time>Word"
