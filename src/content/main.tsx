@@ -69,10 +69,7 @@ function getSongVideoCacheKey(
   explicitVideoId?: string | null,
 ): string {
   const info = songInfo || currentSongInfo;
-  const v =
-    explicitVideoId ||
-    getCurrentVideoId(info) ||
-    "unknown_video";
+  const v = explicitVideoId || getCurrentVideoId(info) || "unknown_video";
   const title = (info?.title || "").trim();
   if (title) {
     return `${title} - ${v}`;
@@ -1073,7 +1070,11 @@ window.addEventListener("message", (event) => {
                 Math.abs(stored) <= 0.05 &&
                 state.lyricsSource !== "captions";
 
-              if (stored === null || isInvalidStoredIntro || isZeroNonCaptionOffset) {
+              if (
+                stored === null ||
+                isInvalidStoredIntro ||
+                isZeroNonCaptionOffset
+              ) {
                 tryAutoDetectOffset(
                   activeLyrics,
                   activeSongKey,
@@ -1214,10 +1215,7 @@ function splitLongChunk(chunk: string): string[] {
   // Fallback: split roughly in half at a word boundary
   if (words.length >= 12) {
     const mid = Math.ceil(words.length / 2);
-    return [
-      words.slice(0, mid).join(" "),
-      words.slice(mid).join(" "),
-    ];
+    return [words.slice(0, mid).join(" "), words.slice(mid).join(" ")];
   }
 
   return [chunk];
@@ -1348,7 +1346,6 @@ function splitCaptionLine(
 
   return results;
 }
-
 
 /**
  * Fetch caption content from content script (ISOLATED world)
@@ -1494,8 +1491,15 @@ async function fetchCaptionsFromContentScript(
           const captionData = JSON.parse(text);
           log("Caption data events:", captionData.events?.length);
 
-          if (Array.isArray(captionData.events) && captionData.events.length > 0) {
-            const lyrics: Array<{ time: number; text: string; duration: number }> = [];
+          if (
+            Array.isArray(captionData.events) &&
+            captionData.events.length > 0
+          ) {
+            const lyrics: Array<{
+              time: number;
+              text: string;
+              duration: number;
+            }> = [];
 
             for (const event of captionData.events) {
               if (!event) continue;
@@ -1548,7 +1552,11 @@ async function fetchCaptionsFromContentScript(
         text.includes("<?xml")
       ) {
         try {
-          const lyrics: Array<{ time: number; text: string; duration: number }> = [];
+          const lyrics: Array<{
+            time: number;
+            text: string;
+            duration: number;
+          }> = [];
           const textNodeRegex = /<text\b([^>]*)>([\s\S]*?)<\/text>/gi;
           let match;
 
@@ -1613,7 +1621,11 @@ async function fetchCaptionsFromContentScript(
               const sNodeRegex = /<s\b([^>]*)>([\s\S]*?)<\/s>/gi;
               let sMatch;
               let hasTimedSpans = false;
-              const sCues: Array<{ time: number; duration: number; text: string }> = [];
+              const sCues: Array<{
+                time: number;
+                duration: number;
+                text: string;
+              }> = [];
 
               while ((sMatch = sNodeRegex.exec(pBody)) !== null) {
                 const sAttrs = sMatch[1] || "";
@@ -1633,14 +1645,24 @@ async function fetchCaptionsFromContentScript(
                     readAttr(sAttrs, "t") || readAttr(sAttrs, "d"),
                   );
                   const sTime = parseXmlTimeToSeconds(sStart, sIsMs);
-                  const sDuration = sDur ? parseXmlTimeToSeconds(sDur, sIsMs) : 0;
-                  sCues.push({ time: sTime, duration: sDuration, text: sCleaned });
+                  const sDuration = sDur
+                    ? parseXmlTimeToSeconds(sDur, sIsMs)
+                    : 0;
+                  sCues.push({
+                    time: sTime,
+                    duration: sDuration,
+                    text: sCleaned,
+                  });
                 }
               }
 
               if (hasTimedSpans && sCues.length > 0) {
                 for (const sc of sCues) {
-                  const sublines = splitCaptionLine(sc.time, sc.duration, sc.text);
+                  const sublines = splitCaptionLine(
+                    sc.time,
+                    sc.duration,
+                    sc.text,
+                  );
                   for (const sub of sublines) {
                     if (sub.text) lyrics.push(sub);
                   }
@@ -1655,11 +1677,17 @@ async function fetchCaptionsFromContentScript(
 
                 if (!lineText.trim()) {
                   lineText = decodeXmlEntities(
-                    pBody.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, " "),
+                    pBody
+                      .replace(/<br\s*\/?>/gi, "\n")
+                      .replace(/<[^>]+>/g, " "),
                   );
                 }
 
-                const sublines = splitCaptionLine(pStartTime, pDuration, lineText);
+                const sublines = splitCaptionLine(
+                  pStartTime,
+                  pDuration,
+                  lineText,
+                );
                 for (const sub of sublines) {
                   if (sub.text) lyrics.push(sub);
                 }
@@ -1709,7 +1737,10 @@ function abortCurrentFetch(reason = "Navigation") {
   }
 }
 
-function combineSignals(timeoutMs: number, externalSignal?: AbortSignal | null): AbortSignal {
+function combineSignals(
+  timeoutMs: number,
+  externalSignal?: AbortSignal | null,
+): AbortSignal {
   if (!externalSignal) return AbortSignal.timeout(timeoutMs);
   if (externalSignal.aborted) return externalSignal;
   const controller = new AbortController();
@@ -1782,9 +1813,14 @@ async function getStoredSongOffset(
     }
 
     // 4. Fallback key if explicitly provided and sourceId matches
-    if (fallbackKey && isValidOffset(offsets[fallbackKey]) && Math.abs(offsets[fallbackKey]) > 0.05) {
+    if (
+      fallbackKey &&
+      isValidOffset(offsets[fallbackKey]) &&
+      Math.abs(offsets[fallbackKey]) > 0.05
+    ) {
       // Do not allow fallbackKey to cross contaminate across different sources!
-      const currentSource = sourceIdOverride || useAppStore.getState().lyricsSource || "default";
+      const currentSource =
+        sourceIdOverride || useAppStore.getState().lyricsSource || "default";
       if (fallbackKey.includes(currentSource)) {
         return offsets[fallbackKey];
       }
@@ -1863,9 +1899,7 @@ async function saveStoredSongOffset(
   } catch {}
 }
 
-function requestCaptionTrackFromMainWorld(
-  track: any,
-): Promise<any[] | null> {
+function requestCaptionTrackFromMainWorld(track: any): Promise<any[] | null> {
   return new Promise((resolve) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const timer = setTimeout(() => {
@@ -2261,9 +2295,11 @@ async function tryAutoDetectOffset(
         const lastVocalTime = getLastVocalLyricTime(lyrics);
         const video = getActiveMediaVideoElement();
         const videoDuration =
-          video?.duration && Number.isFinite(video.duration) && video.duration > 0
+          video?.duration &&
+          Number.isFinite(video.duration) &&
+          video.duration > 0
             ? video.duration
-            : (Number(currentSongInfo?.duration) || 0);
+            : Number(currentSongInfo?.duration) || 0;
 
         // Check if lyrics are already pre-synced to the video:
         // Video-native sources (Better Lyrics Unison, YouTube Captions)
@@ -2289,7 +2325,8 @@ async function tryAutoDetectOffset(
           outroStart > 0 &&
           lastVocalTime !== null &&
           lastVocalTime >= outroStart - 5.0 &&
-          lastVocalTime + sbOffset > outroStart + Math.max(10.0, sbOffset * 0.85);
+          lastVocalTime + sbOffset >
+            outroStart + Math.max(10.0, sbOffset * 0.85);
 
         const isPreSyncedToVideo =
           isVideoNativeSource || overshootsVideo || overshootsOutro;
@@ -2406,23 +2443,36 @@ function hasLocalStorageApi() {
 // is the only reliable indicator that the watch layout is finalized.
 export function getActiveMediaVideoElement(): HTMLVideoElement | null {
   // 1. If in miniplayer, prefer the miniplayer's video
-  const miniVideo = document.querySelector<HTMLVideoElement>("ytd-miniplayer video");
+  const miniVideo = document.querySelector<HTMLVideoElement>(
+    "ytd-miniplayer video",
+  );
   if (miniVideo) return miniVideo;
 
   // 2. Main YouTube watch video (exclude inline hover preview players)
   const player = document.getElementById("movie_player");
-  if (player && !player.closest("ytd-inline-preview-player, #inline-preview-player")) {
+  if (
+    player &&
+    !player.closest("ytd-inline-preview-player, #inline-preview-player")
+  ) {
     const v = player.querySelector<HTMLVideoElement>("video");
     if (v) return v;
   }
 
-  const watchFlexyVideo = document.querySelector<HTMLVideoElement>("ytd-watch-flexy video");
+  const watchFlexyVideo = document.querySelector<HTMLVideoElement>(
+    "ytd-watch-flexy video",
+  );
   if (watchFlexyVideo) return watchFlexyVideo;
 
   // 3. Fallback: filter out any video elements belonging to inline previews or thumbnail hover cards
-  const allVideos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"));
+  const allVideos = Array.from(
+    document.querySelectorAll<HTMLVideoElement>("video"),
+  );
   for (const v of allVideos) {
-    if (!v.closest("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")) {
+    if (
+      !v.closest(
+        "ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview",
+      )
+    ) {
       return v;
     }
   }
@@ -2431,53 +2481,86 @@ export function getActiveMediaVideoElement(): HTMLVideoElement | null {
 }
 
 let waitForVideoInProgress = false;
-function waitForStableVideo(callback) {
-  if (waitForVideoInProgress) {
-    log("[Lyrical Panel] waitForStableVideo already in progress, skipping");
-    return;
+let activeWaitForVideoRaf: number | null = null;
+let activeWaitForVideoSession = 0;
+
+function waitForStableVideo(callback: () => void) {
+  // Cancel any prior loop so the latest navigation/call takes over
+  if (activeWaitForVideoRaf !== null) {
+    cancelAnimationFrame(activeWaitForVideoRaf);
+    activeWaitForVideoRaf = null;
   }
   waitForVideoInProgress = true;
+  const sessionId = ++activeWaitForVideoSession;
+
+  // Fast path: if secondary column is already visible in DOM, inject immediately!
+  const secondary = findVisibleSecondaryColumn();
+  if (secondary && secondary.offsetWidth > 0) {
+    log("[Lyrical Panel] ✅ Secondary column ready immediately - injecting");
+    waitForVideoInProgress = false;
+    callback();
+    return;
+  }
 
   let checkCount = 0;
   const maxChecks = 600; // ~10 seconds at 60fps
 
   const check = () => {
+    if (sessionId !== activeWaitForVideoSession) {
+      return; // Stale session, newer call took over
+    }
+
     checkCount++;
     const video = getActiveMediaVideoElement();
-    const secondary = findVisibleSecondaryColumn() || document.querySelector("#secondary");
+    const currentSecondary =
+      findVisibleSecondaryColumn() || document.querySelector("#secondary");
 
     // Log every 60 frames (~1 second) for debugging
     if (checkCount % 60 === 0) {
       log("waitForStableVideo check #" + checkCount, {
         hasVideo: !!video,
         videoReadyState: video?.readyState,
-        hasSecondary: !!secondary,
+        hasSecondary: !!currentSecondary,
       });
     }
 
-    // Video ready + layout container exists = safe to inject
-    if (video && video.readyState >= 2 && secondary) {
+    // Ready if:
+    // 1) Secondary layout exists and is rendered (or after 30 frames ~0.5s if in DOM), OR
+    // 2) Video is ready and secondary exists
+    const hasRenderedSecondary = Boolean(
+      currentSecondary &&
+      ((currentSecondary as HTMLElement).offsetWidth > 0 || checkCount >= 30),
+    );
+    const isVideoStable = Boolean(
+      video && (video.readyState >= 1 || checkCount >= 60),
+    );
+
+    if (currentSecondary && (hasRenderedSecondary || isVideoStable)) {
       log(
-        "[Lyrical Panel] ✅ Video stable, layout ready - proceeding with injection",
+        "[Lyrical Panel] ✅ Layout ready - proceeding with injection (check #" +
+          checkCount +
+          ")",
       );
       waitForVideoInProgress = false;
+      activeWaitForVideoRaf = null;
       callback();
       return;
     }
 
-    // Timeout fallback - if we've waited 10 seconds, try anyway with MutationObserver
+    // Timeout fallback - if we've waited 10 seconds, try anyway
     if (checkCount >= maxChecks) {
       log(
         "[Lyrical Panel] ⚠️ Timeout waiting for stable video, falling back to injection",
       );
       waitForVideoInProgress = false;
+      activeWaitForVideoRaf = null;
       callback();
       return;
     }
 
-    requestAnimationFrame(check);
+    activeWaitForVideoRaf = requestAnimationFrame(check);
   };
-  check();
+  activeWaitForVideoRaf = requestAnimationFrame(check);
 }
 log("waitForStableVideo helper registered");
 
@@ -2626,7 +2709,10 @@ function getCurrentVideoId(songInfo?: any): string | null {
     if (urlV) return urlV;
     try {
       const player = document.getElementById("movie_player") as any;
-      if (player && !player.closest?.("ytd-inline-preview-player, #inline-preview-player")) {
+      if (
+        player &&
+        !player.closest?.("ytd-inline-preview-player, #inline-preview-player")
+      ) {
         const playerV = player?.getVideoData?.()?.video_id;
         if (playerV) return playerV;
       }
@@ -2637,7 +2723,7 @@ function getCurrentVideoId(songInfo?: any): string | null {
     if (mini) {
       // 1. The playing video title link inside the HTML5 video player chrome
       const titleLink = mini.querySelector<HTMLAnchorElement>(
-        ".ytp-title-link[href*='watch?v='], a.ytp-title-link"
+        ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
       );
       if (titleLink?.href) {
         try {
@@ -2648,7 +2734,7 @@ function getCurrentVideoId(songInfo?: any): string | null {
 
       // 2. Selected playlist queue item inside miniplayer
       const selItem = mini.querySelector<HTMLAnchorElement>(
-        "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']"
+        "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']",
       );
       if (selItem?.href) {
         try {
@@ -2658,7 +2744,10 @@ function getCurrentVideoId(songInfo?: any): string | null {
       }
 
       // 3. MediaSession artwork
-      if ("mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+      if (
+        "mediaSession" in navigator &&
+        navigator.mediaSession.metadata?.artwork
+      ) {
         const arts = navigator.mediaSession.metadata.artwork;
         for (let i = arts.length - 1; i >= 0; i--) {
           const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
@@ -2668,7 +2757,7 @@ function getCurrentVideoId(songInfo?: any): string | null {
 
       // 4. Fallback: info-bar or any watch link in miniplayer
       const fallbackLink = mini.querySelector<HTMLAnchorElement>(
-        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']"
+        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']",
       );
       if (fallbackLink?.href) {
         try {
@@ -2693,19 +2782,27 @@ function extractFastSongInfo(videoId: string | null): any {
     window.location.hostname.includes("youtube.com") &&
     window.location.pathname.includes("/watch");
   const currentVid =
-    videoId || (isWatchUrl ? new URLSearchParams(window.location.search).get("v") : null) || getCurrentVideoId();
+    videoId ||
+    (isWatchUrl
+      ? new URLSearchParams(window.location.search).get("v")
+      : null) ||
+    getCurrentVideoId();
   let title = "";
   let artist = "";
-  let artwork = currentVid ? `https://i.ytimg.com/vi/${currentVid}/hqdefault.jpg` : null;
+  let artwork = currentVid
+    ? `https://i.ytimg.com/vi/${currentVid}/hqdefault.jpg`
+    : null;
 
   // 1. Try playlist selected item if in playlist queue
   try {
     const selItem = document.querySelector(
-      "ytd-playlist-panel-video-renderer[selected], ytd-playlist-panel-video-renderer.selected, ytd-playlist-panel-video-renderer[aria-selected='true']"
+      "ytd-playlist-panel-video-renderer[selected], ytd-playlist-panel-video-renderer.selected, ytd-playlist-panel-video-renderer[aria-selected='true']",
     );
     if (selItem) {
       const titleEl = selItem.querySelector<HTMLElement>("#video-title");
-      const bylineEl = selItem.querySelector<HTMLElement>("#byline, .byline, #channel-name");
+      const bylineEl = selItem.querySelector<HTMLElement>(
+        "#byline, .byline, #channel-name",
+      );
       const rawTitle = titleEl?.innerText?.trim();
       const rawByline = bylineEl?.innerText?.trim() || "";
       if (rawTitle) {
@@ -2725,7 +2822,10 @@ function extractFastSongInfo(videoId: string | null): any {
   if (!title || !artist) {
     try {
       const player = document.getElementById("movie_player") as any;
-      if (player && !player.closest?.("ytd-inline-preview-player, #inline-preview-player")) {
+      if (
+        player &&
+        !player.closest?.("ytd-inline-preview-player, #inline-preview-player")
+      ) {
         const data = player.getVideoData?.();
         if (data && (!currentVid || data.video_id === currentVid)) {
           if (data.title && !title) {
@@ -2748,7 +2848,11 @@ function extractFastSongInfo(videoId: string | null): any {
     try {
       const pageInfo = window.getSongInfoFromPage?.();
       if (pageInfo && !pageInfo.isAd && (pageInfo.title || pageInfo.artist)) {
-        if (!currentVid || !pageInfo.videoId || pageInfo.videoId === currentVid) {
+        if (
+          !currentVid ||
+          !pageInfo.videoId ||
+          pageInfo.videoId === currentVid
+        ) {
           title = title || pageInfo.title || "";
           artist = artist || pageInfo.artist || "";
           artwork = pageInfo.artwork || artwork;
@@ -2758,7 +2862,12 @@ function extractFastSongInfo(videoId: string | null): any {
   }
 
   // 4. Try document.title
-  if (!title && typeof document !== "undefined" && document.title && document.title !== "YouTube") {
+  if (
+    !title &&
+    typeof document !== "undefined" &&
+    document.title &&
+    document.title !== "YouTube"
+  ) {
     const cleanDoc = document.title.replace(/\s*-\s*YouTube$/i, "").trim();
     if (cleanDoc && cleanDoc.includes(" - ")) {
       const parts = cleanDoc.split(" - ");
@@ -3078,7 +3187,10 @@ function applyWrapperPlacement(wrapper = lyricsPanel) {
       // Mount directly at top of #secondary, above #secondary-inner.
       // Once placed in #secondary, NEVER re-insert it! Re-inserting a node that is already
       // inside secondary detaches it from the layout tree and destroys compositor layers.
-      if (wrapper.parentElement === secondary && document.body.contains(wrapper)) {
+      if (
+        wrapper.parentElement === secondary &&
+        document.body.contains(wrapper)
+      ) {
         return;
       }
       secondary.insertBefore(wrapper, secondary.firstChild);
@@ -3098,12 +3210,19 @@ function ensureWatchPanelMounted() {
   const secondary = findVisibleSecondaryColumn();
   if (!secondary) return;
 
-  const existing = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+  const existing =
+    document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
 
-  if (!existing || !document.body.contains(existing) || existing.parentElement !== secondary) {
+  if (
+    !existing ||
+    !document.body.contains(existing) ||
+    existing.parentElement !== secondary
+  ) {
     if (existing && (existing._reactRoot || existing.shadowRoot)) {
       lyricsPanel = existing;
-      log("[Lyrical Panel] Ensuring existing panel is placed in visible secondary column...");
+      log(
+        "[Lyrical Panel] Ensuring existing panel is placed in visible secondary column...",
+      );
       secondary.insertBefore(existing, secondary.firstChild);
     } else {
       log("[Lyrical Panel] Panel detached from watch layout, re-injecting...");
@@ -3119,10 +3238,12 @@ function ensureWatchPanelMounted() {
         secondaryColumnObserver = null;
         return;
       }
-      if (secondaryColumnDebounceRaf) cancelAnimationFrame(secondaryColumnDebounceRaf);
+      if (secondaryColumnDebounceRaf)
+        cancelAnimationFrame(secondaryColumnDebounceRaf);
       secondaryColumnDebounceRaf = requestAnimationFrame(() => {
         secondaryColumnDebounceRaf = null;
-        const panel = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+        const panel =
+          document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
         const currentSecondary = findVisibleSecondaryColumn();
         if (
           currentSecondary &&
@@ -3174,8 +3295,12 @@ function injectIntoYouTube() {
     }
 
     // ⚡ SMART RE-USE: Keep React root alive across watch-to-watch navigations
-    const existingPanel = (document.getElementById("lyrical-panel-wrapper") || lyricsPanel) as any;
-    if (existingPanel && (existingPanel._reactRoot || existingPanel.shadowRoot)) {
+    const existingPanel = (document.getElementById("lyrical-panel-wrapper") ||
+      lyricsPanel) as any;
+    if (
+      existingPanel &&
+      (existingPanel._reactRoot || existingPanel.shadowRoot)
+    ) {
       lyricsPanel = existingPanel;
       log("[Lyrical Panel] ⚡ Reusing existing panel & React root");
 
@@ -3194,9 +3319,13 @@ function injectIntoYouTube() {
 
     // If an existing panel was detached or has no React root, clean it up before fresh mount
     if (existingPanel) {
-      log("Found stale panel in DOM without active React root, removing before inject");
+      log(
+        "Found stale panel in DOM without active React root, removing before inject",
+      );
       if (existingPanel._reactRoot) {
-        try { existingPanel._reactRoot.unmount(); } catch (e) {}
+        try {
+          existingPanel._reactRoot.unmount();
+        } catch (e) {}
       }
       existingPanel.remove();
       lyricsPanel = null;
@@ -3667,7 +3796,7 @@ function updateSongInfo(songInfo) {
   // Merge partial updates so first-load sparse metadata doesn't wipe existing fields,
   // BUT do not inherit previous track metadata (especially artwork!) when switching tracks.
   const merged = {
-    ...(isDifferentTrack ? {} : (currentSongInfo || {})),
+    ...(isDifferentTrack ? {} : currentSongInfo || {}),
     ...songInfo,
   };
 
@@ -3682,7 +3811,13 @@ function updateSongInfo(songInfo) {
   }
 
   // Parse "Artist - Title" if artist is missing or generic
-  if (merged.title && (!merged.artist || merged.artist === "YouTube" || merged.artist === "Playing on YouTube") && merged.title.includes(" - ")) {
+  if (
+    merged.title &&
+    (!merged.artist ||
+      merged.artist === "YouTube" ||
+      merged.artist === "Playing on YouTube") &&
+    merged.title.includes(" - ")
+  ) {
     const parts = merged.title.split(" - ");
     merged.artist = parts[0].trim();
     merged.title = parts.slice(1).join(" - ").trim();
@@ -4280,7 +4415,8 @@ function restoreLyricsFromCacheEntry(
 
   const store = useAppStore.getState();
   const hasRom = Array.isArray(activeRomanized) && activeRomanized.length > 0;
-  const hasTrans = Array.isArray(activeTranslated) && activeTranslated.length > 0;
+  const hasTrans =
+    Array.isArray(activeTranslated) && activeTranslated.length > 0;
   const needsRom = store.isRomanizationEnabled && !hasRom;
   const needsTrans = store.isTranslateEnabled && !hasTrans;
 
@@ -4794,8 +4930,7 @@ function normalizeCaptionTiming(lyrics) {
   const isUntimed =
     normalized.length > 2 &&
     (maxTime <= 1.5 ||
-      nonZeroTimes.length <=
-        Math.min(2, Math.floor(normalized.length * 0.08)));
+      nonZeroTimes.length <= Math.min(2, Math.floor(normalized.length * 0.08)));
 
   if (isUntimed) {
     // 🎵 UNTIMED CAPTIONS HANDLER:
@@ -5063,7 +5198,8 @@ async function tryDisplayCaptions(isManual = false) {
       await new Promise((r) => setTimeout(r, 200));
       if (
         pendingMainWorldCaptionLyrics &&
-        (pendingMainWorldCaptionLyrics.length >= 3 || (vDur > 0 && vDur < 25)) &&
+        (pendingMainWorldCaptionLyrics.length >= 3 ||
+          (vDur > 0 && vDur < 25)) &&
         (!pendingMainWorldCaptionVideoId ||
           pendingMainWorldCaptionVideoId === videoId)
       ) {
@@ -5170,7 +5306,11 @@ async function tryDisplayCaptions(isManual = false) {
         asrCandidate,
       );
       if (asrLyrics && asrLyrics.length > 5) {
-        log("Upgraded to better segmented ASR track:", asrLyrics.length, "lines");
+        log(
+          "Upgraded to better segmented ASR track:",
+          asrLyrics.length,
+          "lines",
+        );
         lyrics = asrLyrics;
         selectedTrack = asrCandidate;
         languageCode = getCaptionTrackLang(asrCandidate) || languageCode;
@@ -5195,9 +5335,7 @@ async function tryDisplayCaptions(isManual = false) {
 
     // Clean up any remaining artifacts, ensure subline/sentence splitting, and filter blanks
     lyrics = lyrics
-      .flatMap((line) =>
-        splitCaptionLine(line.time, line.duration, line.text),
-      )
+      .flatMap((line) => splitCaptionLine(line.time, line.duration, line.text))
       .filter((line) => Boolean(line.text && line.text.trim()));
 
     log("Captions loaded:", lyrics.length);
@@ -5569,9 +5707,9 @@ async function preScanAvailableCachedSources(
   // If prefetched captions are already in memory for this video, ensure captions is marked available
   const hasPendingCaptions = Boolean(
     pendingMainWorldCaptionLyrics &&
-      pendingMainWorldCaptionLyrics.length > 0 &&
-      (!pendingMainWorldCaptionVideoId ||
-        pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
+    pendingMainWorldCaptionLyrics.length > 0 &&
+    (!pendingMainWorldCaptionVideoId ||
+      pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
   );
   if (hasPendingCaptions) {
     useAppStore.getState().addAvailableLyricsSource("captions");
@@ -5613,11 +5751,13 @@ async function backgroundPreScanAllSources(
     if (source.id === "captions") {
       const hasPending = Boolean(
         pendingMainWorldCaptionLyrics &&
-          pendingMainWorldCaptionLyrics.length > 0 &&
-          (!pendingMainWorldCaptionVideoId ||
-            pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
+        pendingMainWorldCaptionLyrics.length > 0 &&
+        (!pendingMainWorldCaptionVideoId ||
+          pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo)),
       );
-      const hasTracks = Boolean(availableCaptions && availableCaptions.length > 0);
+      const hasTracks = Boolean(
+        availableCaptions && availableCaptions.length > 0,
+      );
       if (hasPending || hasTracks) {
         useAppStore.getState().addAvailableLyricsSource("captions");
         continue;
@@ -5802,7 +5942,10 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   ) {
     const storeLyrics = useAppStore.getState().lyrics;
     if (!storeLyrics || storeLyrics.length === 0) {
-      log("[Lyrical] Restoring captions into store for current video:", videoId);
+      log(
+        "[Lyrical] Restoring captions into store for current video:",
+        videoId,
+      );
       useAppStore.getState().setLyrics(fetchedLyrics, "captions");
       useAppStore.setState({ isLoading: false, headerText: "" });
     }
@@ -6212,8 +6355,6 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
   }
   useAppStore.setState({ isLoading: false });
 });
-
-
 
 window.addEventListener("lyrical-select-caption-track", async (event: any) => {
   const track = event.detail?.track as CaptionTrackInfo;
@@ -6844,7 +6985,7 @@ async function startLyricsTimer(lyrics) {
       const videoDuration =
         video?.duration && Number.isFinite(video.duration) && video.duration > 0
           ? video.duration
-          : (Number(currentSongInfo?.duration) || 0);
+          : Number(currentSongInfo?.duration) || 0;
 
       const isOvershootingStoredIntro =
         stored !== null &&
@@ -7134,11 +7275,13 @@ async function initialize() {
       }
 
       // ✅ On watch page → check if same video
-      const currentUrlVideoId = new URLSearchParams(window.location.search).get("v");
+      const currentUrlVideoId = new URLSearchParams(window.location.search).get(
+        "v",
+      );
       const isSameVideo = Boolean(
         currentUrlVideoId &&
         lastFetchedVideoId &&
-        currentUrlVideoId === lastFetchedVideoId
+        currentUrlVideoId === lastFetchedVideoId,
       );
 
       if (isSameVideo) {
@@ -7207,16 +7350,18 @@ async function initialize() {
       useAppStore.getState().clearLyricsForNewTrack();
 
       // Check if panel is already mounted and healthy in DOM
-      const existingPanel = document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+      const existingPanel =
+        document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
       const rawDisplayMode = useAppStore.getState().displayMode || "sidebar";
-      const isFloating = rawDisplayMode === "floating" && isStandardYouTubeWatchPage();
+      const isFloating =
+        rawDisplayMode === "floating" && isStandardYouTubeWatchPage();
       const secondary = findVisibleSecondaryColumn();
       const isAlreadyMounted = Boolean(
         existingPanel &&
         document.body.contains(existingPanel) &&
         (isFloating
           ? existingPanel.parentElement === document.body
-          : (secondary && existingPanel.parentElement === secondary))
+          : secondary && existingPanel.parentElement === secondary),
       );
 
       if (isAlreadyMounted) {
@@ -7242,7 +7387,9 @@ async function initialize() {
           injectIntoYouTube();
           ensureWatchPanelMounted();
           setupAdObserver();
-          const info = extractFastSongInfo(currentUrlVideoId) || window.getSongInfoFromPage?.();
+          const info =
+            extractFastSongInfo(currentUrlVideoId) ||
+            window.getSongInfoFromPage?.();
           if (info && !info.isAd) {
             autoFetchLyrics(info);
           }
