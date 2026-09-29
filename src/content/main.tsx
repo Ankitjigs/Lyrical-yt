@@ -2512,8 +2512,7 @@ function waitForStableVideo(callback: () => void) {
 
     checkCount++;
     const video = getActiveMediaVideoElement();
-    const currentSecondary =
-      findVisibleSecondaryColumn() || document.querySelector("#secondary");
+    const currentSecondary = findVisibleSecondaryColumn();
 
     // Log every 60 frames (~1 second) for debugging
     if (checkCount % 60 === 0) {
@@ -3118,36 +3117,42 @@ function setupMiniplayerObserver() {
 
 function findVisibleSecondaryColumn() {
   // YouTube can keep multiple watch layouts in the DOM during SPA transitions.
-  // Only consider sidebars owned by a watch-flexy and prefer the active layout.
-  const activeSidebars = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "ytd-watch-flexy[is-watch-page] #secondary",
-    ),
-  );
-  const watchSidebars = Array.from(
+  // Filter for rendered sidebars before preferring the active layout, because
+  // YouTube can retain a hidden active-layout sidebar during SPA transitions.
+  const candidates = Array.from(
     document.querySelectorAll<HTMLElement>("ytd-watch-flexy #secondary"),
-  );
-  const candidates = activeSidebars.length ? activeSidebars : watchSidebars;
+  ).filter((secondary) => {
+    if (!secondary.isConnected) return false;
+    const rect = secondary.getBoundingClientRect();
+    const style = window.getComputedStyle(secondary);
+    return (
+      rect.width > 0 &&
+      rect.height > 0 &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      Number(style.opacity) !== 0
+    );
+  });
 
   return (
     candidates
-      .filter((secondary) => {
-        if (!secondary.isConnected) return false;
-        const rect = secondary.getBoundingClientRect();
-        const style = window.getComputedStyle(secondary);
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          Number(style.opacity) !== 0
-        );
-      })
       .sort((a, b) => {
+        const aActive = a.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
+        const bActive = b.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
+        if (aActive !== bActive) return bActive - aActive;
+
         const aRect = a.getBoundingClientRect();
         const bRect = b.getBoundingClientRect();
         return bRect.width * bRect.height - aRect.width * aRect.height;
       })[0] || null
+  );
+}
+
+function hasLivePanelRoot(wrapper: HTMLElement | null): boolean {
+  return Boolean(
+    wrapper &&
+      (wrapper as any)._reactRoot &&
+      wrapper.shadowRoot?.getElementById("lyrical-panel-root"),
   );
 }
 
@@ -3231,6 +3236,41 @@ function applyWrapperPlacement(
 
 let secondaryColumnObserver: MutationObserver | null = null;
 let secondaryColumnDebounceRaf: number | null = null;
+let youtubeInjectionObserver: MutationObserver | null = null;
+
+function disconnectYoutubeInjectionObserver() {
+  youtubeInjectionObserver?.disconnect();
+  youtubeInjectionObserver = null;
+}
+
+function cleanupWatchPanelOnLeave() {
+  disconnectYoutubeInjectionObserver();
+  secondaryColumnObserver?.disconnect();
+  secondaryColumnObserver = null;
+
+  if (secondaryColumnDebounceRaf !== null) {
+    cancelAnimationFrame(secondaryColumnDebounceRaf);
+    secondaryColumnDebounceRaf = null;
+  }
+
+  if (activeWaitForVideoRaf !== null) {
+    cancelAnimationFrame(activeWaitForVideoRaf);
+    activeWaitForVideoRaf = null;
+  }
+  activeWaitForVideoSession++;
+  waitForVideoInProgress = false;
+
+  const existingPanel =
+    (document.getElementById("lyrical-panel-wrapper") ||
+      lyricsPanel) as HTMLElement | null;
+  if (existingPanel) {
+    try {
+      (existingPanel as any)._reactRoot?.unmount();
+    } catch (e) {}
+    existingPanel.remove();
+  }
+  lyricsPanel = null;
+}
 
 function isRelevantSecondaryMutation(record: MutationRecord) {
   const isInWatchLayout = (element: Element) =>
@@ -3300,18 +3340,17 @@ function ensureWatchPanelMounted() {
   if (!secondary) return;
 
   const existing =
-    document.getElementById("lyrical-panel-wrapper") || lyricsPanel;
+    (document.getElementById("lyrical-panel-wrapper") ||
+      lyricsPanel) as HTMLElement | null;
 
-  if (
-    !existing ||
-    !document.body.contains(existing) ||
-    existing.parentElement !== secondary
-  ) {
-    log(
-      "[Lyrical Panel] Panel host changed or detached; recreating in the active secondary...",
-    );
-    injectIntoYouTube();
+  if (hasLivePanelRoot(existing)) {
+    lyricsPanel = existing;
+    applyWrapperPlacement(existing, secondary);
+    return;
   }
+
+  log("[Lyrical Panel] No reusable panel root; mounting in the active secondary...");
+  injectIntoYouTube();
 }
 
 // Inject panel into YouTube page
@@ -3345,22 +3384,15 @@ function injectIntoYouTube() {
       log("[Lyrical Panel] Found #secondary for sidebar mode");
     }
 
-    // Keep the React root only while its host is still the active target.
-    // Recreate it when YouTube swaps or replaces the sidebar.
+    // YouTube can replace or detach #secondary while retaining our wrapper.
+    // Keep its live React root and re-parent it into the current host.
     const existingPanel = (document.getElementById("lyrical-panel-wrapper") ||
-      lyricsPanel) as any;
-    const targetParent = isFloatingAllowed ? document.body : secondary;
-    if (
-      existingPanel &&
-      (existingPanel._reactRoot || existingPanel.shadowRoot) &&
-      existingPanel.isConnected &&
-      existingPanel.parentElement === targetParent
-    ) {
+      lyricsPanel) as HTMLElement | null;
+    if (hasLivePanelRoot(existingPanel)) {
       lyricsPanel = existingPanel;
       log("[Lyrical Panel] ⚡ Reusing existing panel & React root");
 
-      // Smart Re-parent: Ensure it is placed into current secondary container
-      applyWrapperPlacement(lyricsPanel, secondary);
+      applyWrapperPlacement(existingPanel, secondary);
       ensureKaraokeOverlay();
 
       lyricsPanel.style.display = "block";
@@ -3372,12 +3404,12 @@ function injectIntoYouTube() {
       return true;
     }
 
-    // If an existing panel was detached or has no React root, clean it up before fresh mount
+    // Only stale wrappers without a usable React root need a fresh mount.
     if (existingPanel) {
       log("[Lyrical Panel] Removing stale panel host before remount");
-      if (existingPanel._reactRoot) {
+      if ((existingPanel as any)._reactRoot) {
         try {
-          existingPanel._reactRoot.unmount();
+          (existingPanel as any)._reactRoot.unmount();
         } catch (e) {}
       }
       existingPanel.remove();
@@ -3400,49 +3432,34 @@ function injectIntoYouTube() {
     lastInjectedVideoId = videoId;
     log("✅ Panel injected for video:", videoId);
 
-    // 🔄 POST-INJECTION VERIFICATION: YouTube may destroy #secondary after injection
-    // Check multiple times to ensure panel survives DOM churn
+    // 🔄 POST-INJECTION VERIFICATION: sidebar refreshes can detach the wrapper.
+    // Re-check placement without creating another React root.
+    const injectedPanel = lyricsPanel;
     let verifyCount = 0;
     const verifyPanel = () => {
-      verifyCount++;
-      if (lyricsPanel && document.body.contains(lyricsPanel)) {
-        if (verifyCount >= 3) {
-          log(
-            "[Lyrical Panel] ✅ Panel verified stable after",
-            verifyCount,
-            "checks",
-          );
-          return; // Panel is stable
-        }
-      } else if (verifyCount <= 10) {
-        log(
-          "[Lyrical Panel] ⚠️ Panel was destroyed or detached, re-injecting (attempt",
-          verifyCount,
-          ")",
-        );
-        setTimeout(() => {
-          if (!lyricsPanel || !(lyricsPanel as any)._reactRoot) {
-            lyricsPanel = createLyricsPanel();
-          }
-          applyWrapperPlacement(lyricsPanel);
-          ensureKaraokeOverlay();
-          lyricsPanel.style.display = "block";
-          lyricsPanel.style.visibility = "visible";
-          lyricsPanel.style.opacity = "1";
-          attachEventListeners();
-          lastInjectedVideoId = videoId;
-          log("✅ Panel re-injected successfully");
-
-          const info = window.getSongInfoFromPage?.();
-          if (info?.title) autoFetchLyrics(info);
-        }, 150);
-      } else {
-        log("[Lyrical Panel] ❌ Panel re-injection failed after max attempts");
+      if (!isWatchLikePage() || lyricsPanel !== injectedPanel) {
         return;
       }
-      setTimeout(verifyPanel, 500); // Check every 500ms
+
+      verifyCount++;
+      ensureWatchPanelMounted();
+
+      if (lyricsPanel !== injectedPanel) {
+        return;
+      }
+
+      if (verifyCount >= 3) {
+        log(
+          "[Lyrical Panel] ✅ Panel placement verified after",
+          verifyCount,
+          "checks",
+        );
+        return;
+      }
+
+      setTimeout(verifyPanel, 500);
     };
-    setTimeout(verifyPanel, 500); // Start verification after 500ms setTimeout(verifyPanel, 500); // Start verification after 500ms
+    setTimeout(verifyPanel, 500);
 
     // �🔧 Trigger song detection immediately after injection (no setTimeout)
     queueMicrotask(() => {
@@ -3460,15 +3477,33 @@ function injectIntoYouTube() {
   };
 
   // Try immediate injection first
-  if (tryInject()) return;
+  if (tryInject()) {
+    disconnectYoutubeInjectionObserver();
+    return;
+  }
+
+  // Keep at most one retry observer active while YouTube creates the sidebar.
+  if (youtubeInjectionObserver) return;
 
   // Observe DOM until watch page is ready
   log("Watch page not ready, starting observer...");
   const observer = new MutationObserver(() => {
+    if (!isWatchLikePage()) {
+      observer.disconnect();
+      if (youtubeInjectionObserver === observer) {
+        youtubeInjectionObserver = null;
+      }
+      return;
+    }
+
     if (tryInject()) {
       observer.disconnect();
+      if (youtubeInjectionObserver === observer) {
+        youtubeInjectionObserver = null;
+      }
     }
   });
+  youtubeInjectionObserver = observer;
 
   // ✅ MUST observe document.body - YouTube creates #secondary outside ytd-app on first load
   observer.observe(document.body, {
@@ -7315,11 +7350,8 @@ async function initialize() {
       if (!isWatchUrl) {
         abortCurrentFetch("Left watch page");
         activeProcessSessionId++;
-        if (lyricsPanel) {
-          lyricsPanel.remove();
-          lyricsPanel = null;
-          log("Left watch page — panel removed");
-        }
+        cleanupWatchPanelOnLeave();
+        log("Left watch page — panel unmounted and removed");
         checkAndManageMiniCompanion();
         setupMiniplayerObserver();
         return;
