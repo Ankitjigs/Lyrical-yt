@@ -6360,7 +6360,9 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   } catch (error) {
     warn("[Lyrical Panel] Fetch error:", error);
   } finally {
-    useAppStore.setState({ isLoading: false });
+    if (fetchSessionId === activeFetchSessionId) {
+      useAppStore.setState({ isLoading: false });
+    }
   }
 }
 
