@@ -397,6 +397,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     rawTranslatedLyrics,
     isRomanizationEnabled,
     isTranslateEnabled,
+    showRomanizedLyrics,
+    showTranslatedLyrics,
     storeActiveIndex,
   } = useAppStore(
     useShallow((state) => ({
@@ -419,6 +421,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       rawTranslatedLyrics: state.translatedLyrics,
       isRomanizationEnabled: state.isRomanizationEnabled,
       isTranslateEnabled: state.isTranslateEnabled,
+      showRomanizedLyrics: state.showRomanizedLyrics,
+      showTranslatedLyrics: state.showTranslatedLyrics,
       storeActiveIndex: state.activeIndex,
     })),
   );
@@ -574,7 +578,14 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   // 2. Fall back to the raw romanized lyrics array by direct index
   // 3. Fall back to time-proximity matching against the raw array
   const activeRomanized = useMemo(() => {
-    if (!isRomanizationEnabled || activeLineIndex < 0 || !activeLine) return "";
+    if (
+      !isRomanizationEnabled ||
+      !showRomanizedLyrics ||
+      activeLineIndex < 0 ||
+      !activeLine
+    ) {
+      return "";
+    }
     if (isInstrumental) return "";
 
     // Direct property on the lyrics line itself
@@ -617,21 +628,39 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
     return "";
-  }, [isRomanizationEnabled, activeLineIndex, activeLine, isInstrumental, rawRomanizedLyrics]);
+  }, [
+    isRomanizationEnabled,
+    showRomanizedLyrics,
+    activeLineIndex,
+    activeLine,
+    isInstrumental,
+    rawRomanizedLyrics,
+  ]);
 
   // Resolve timedRomanization for the active line
   const activeTimedRomanization = useMemo(() => {
-    if (!isRomanizationEnabled || activeLineIndex < 0 || !activeLine) return null;
+    if (
+      !isRomanizationEnabled ||
+      !showRomanizedLyrics ||
+      activeLineIndex < 0 ||
+      !activeLine
+    ) {
+      return null;
+    }
     if (isInstrumental) return null;
 
-    if (Array.isArray(activeLine.timedRomanization) && activeLine.timedRomanization.length > 0) {
+    if (
+      Array.isArray(activeLine.timedRomanization) &&
+      activeLine.timedRomanization.length > 0
+    ) {
       return activeLine.timedRomanization;
     }
 
     const rawArr = Array.isArray(rawRomanizedLyrics) ? rawRomanizedLyrics : [];
     const directMatch = rawArr[activeLineIndex];
     if (directMatch) {
-      const timed = directMatch.timedRomanization || (directMatch as any).timedRomanized;
+      const timed =
+        directMatch.timedRomanization || (directMatch as any).timedRomanized;
       if (Array.isArray(timed) && timed.length > 0) return timed;
     }
 
@@ -645,11 +674,25 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
     return null;
-  }, [isRomanizationEnabled, activeLineIndex, activeLine, isInstrumental, rawRomanizedLyrics]);
+  }, [
+    isRomanizationEnabled,
+    showRomanizedLyrics,
+    activeLineIndex,
+    activeLine,
+    isInstrumental,
+    rawRomanizedLyrics,
+  ]);
 
   // Resolve translated text for the active line (same approach)
   const activeTranslated = useMemo(() => {
-    if (!isTranslateEnabled || activeLineIndex < 0 || !activeLine) return "";
+    if (
+      !isTranslateEnabled ||
+      !showTranslatedLyrics ||
+      activeLineIndex < 0 ||
+      !activeLine
+    ) {
+      return "";
+    }
     if (isInstrumental) return "";
 
     if (activeLine.translated) return activeLine.translated;
@@ -679,7 +722,13 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
     return "";
-  }, [isTranslateEnabled, activeLineIndex, activeLine, rawTranslatedLyrics]);
+  }, [
+    isTranslateEnabled,
+    showTranslatedLyrics,
+    activeLineIndex,
+    activeLine,
+    rawTranslatedLyrics,
+  ]);
 
   // Navigate back to the full watch page
   const handleReturnToWatchPage = () => {

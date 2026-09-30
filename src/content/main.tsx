@@ -239,6 +239,8 @@ if (chrome.storage) {
           typeof res.lineOffsetTrim === "number" ? res.lineOffsetTrim : 0,
         isRomanizationEnabled: res.isRomanizationEnabled,
         isTranslateEnabled: res.isTranslateEnabled,
+        showRomanizedLyrics: res.isRomanizationEnabled,
+        showTranslatedLyrics: res.isTranslateEnabled,
         translationLanguage: res.translationLanguage,
         compactMode: res.compactMode,
         lyricsSizePreset: res.lyricsSizePreset || "standard",
@@ -354,12 +356,20 @@ chrome.storage.onChanged.addListener((changes: any, namespace) => {
   // 2. Romanization/Translation Toggles
   if (changes.isRomanizationEnabled) {
     isRomanizationEnabled = changes.isRomanizationEnabled.newValue;
+    useAppStore.setState({
+      isRomanizationEnabled,
+      showRomanizedLyrics: isRomanizationEnabled,
+    });
     log("Romanization toggle:", isRomanizationEnabled);
     if (fetchedLyrics.length) autoProcessLyrics();
   }
 
   if (changes.isTranslateEnabled) {
     isTranslateEnabled = changes.isTranslateEnabled.newValue;
+    useAppStore.setState({
+      isTranslateEnabled,
+      showTranslatedLyrics: isTranslateEnabled,
+    });
     log("Translation toggle:", isTranslateEnabled);
     if (fetchedLyrics.length) autoProcessLyrics();
   }
@@ -7630,9 +7640,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     } else if (key === "floatingCustomPosition") {
       useAppStore.setState({ floatingCustomPosition: value });
     } else if (key === "romanization") {
-      useAppStore.setState({ isRomanizationEnabled: Boolean(value) });
+      useAppStore.setState({
+        isRomanizationEnabled: Boolean(value),
+        showRomanizedLyrics: Boolean(value),
+      });
     } else if (key === "autoTranslate") {
-      useAppStore.setState({ isTranslateEnabled: Boolean(value) });
+      useAppStore.setState({
+        isTranslateEnabled: Boolean(value),
+        showTranslatedLyrics: Boolean(value),
+      });
     } else if (key === "translationLang") {
       useAppStore.setState({ translationLanguage: value });
     }

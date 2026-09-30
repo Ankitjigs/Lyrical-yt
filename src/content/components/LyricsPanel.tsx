@@ -1207,6 +1207,8 @@ const LyricsPanel = () => {
     rawRomanizedLyrics,
     isTranslateEnabled,
     isRomanizationEnabled,
+    showTranslatedLyrics,
+    showRomanizedLyrics,
     activeIndex, // Note: activeIndex is from store (synced by main.jsx timer).
     isExpanded,
     headerText,
@@ -1240,6 +1242,8 @@ const LyricsPanel = () => {
       rawRomanizedLyrics: state.romanizedLyrics,
       isTranslateEnabled: state.isTranslateEnabled,
       isRomanizationEnabled: state.isRomanizationEnabled,
+      showTranslatedLyrics: state.showTranslatedLyrics,
+      showRomanizedLyrics: state.showRomanizedLyrics,
       activeIndex: state.activeIndex,
       isExpanded: state.isExpanded,
       headerText: state.headerText,
@@ -1294,8 +1298,15 @@ const LyricsPanel = () => {
     [lyrics, rawTranslatedLyrics],
   );
 
-  const translatedLyrics = isTranslateEnabled ? alignedTranslatedLyrics : [];
-  const romanizedLyrics = isRomanizationEnabled ? alignedRomanizedLyrics : [];
+  const canShowTranslatedLyrics = isTranslateEnabled && showTranslatedLyrics;
+  const canShowRomanizedLyrics =
+    isRomanizationEnabled && showRomanizedLyrics;
+  const translatedLyrics = canShowTranslatedLyrics
+    ? alignedTranslatedLyrics
+    : [];
+  const romanizedLyrics = canShowRomanizedLyrics
+    ? alignedRomanizedLyrics
+    : [];
 
   const hasRomanized = hasDisplayableSecondaryText(
     alignedRomanizedLyrics,
@@ -1321,12 +1332,14 @@ const LyricsPanel = () => {
     () => ({
       romanizedLyrics: alignedRomanizedLyrics,
       translatedLyrics: alignedTranslatedLyrics,
-      isRomanizationEnabled,
-      isTranslateEnabled,
+      isRomanizationEnabled: canShowRomanizedLyrics,
+      isTranslateEnabled: canShowTranslatedLyrics,
     }),
     [
       alignedRomanizedLyrics,
       alignedTranslatedLyrics,
+      showRomanizedLyrics,
+      showTranslatedLyrics,
       isRomanizationEnabled,
       isTranslateEnabled,
     ],
@@ -1684,8 +1697,8 @@ const LyricsPanel = () => {
     const nextExtraData = {
       romanizedLyrics: alignedRomanizedLyrics,
       translatedLyrics: alignedTranslatedLyrics,
-      isRomanizationEnabled,
-      isTranslateEnabled,
+      isRomanizationEnabled: canShowRomanizedLyrics,
+      isTranslateEnabled: canShowTranslatedLyrics,
     };
     const rafId = requestAnimationFrame(() => {
       strategy.updateSecondaryLyrics(nextExtraData);
@@ -1700,6 +1713,8 @@ const LyricsPanel = () => {
     lyricsAnimationStyle,
     alignedRomanizedLyrics,
     alignedTranslatedLyrics,
+    showRomanizedLyrics,
+    showTranslatedLyrics,
     isRomanizationEnabled,
     isTranslateEnabled,
   ]);
@@ -1981,8 +1996,8 @@ const LyricsPanel = () => {
   // Use global availability (hasRomanized/hasTranslated) to size the panel,
   // not current line content. This prevents height jumps on instrumental ↔ lyric transitions.
   const collapsedSecondaryCount =
-    (hasRomanized && isRomanizationEnabled ? 1 : 0) +
-    (hasTranslated && isTranslateEnabled ? 1 : 0);
+    (hasRomanized && canShowRomanizedLyrics ? 1 : 0) +
+    (hasTranslated && canShowTranslatedLyrics ? 1 : 0);
   const collapsedPanelHeight = hasCollapsedPreview ? "auto" : "64px";
   const collapsedPanelMinHeight = hasCollapsedPreview
     ? collapsedSecondaryCount > 1

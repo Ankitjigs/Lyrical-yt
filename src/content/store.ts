@@ -166,6 +166,8 @@ interface LyricalSettingsState {
   userOffset: number;
   isRomanizationEnabled: boolean;
   isTranslateEnabled: boolean;
+  showRomanizedLyrics: boolean;
+  showTranslatedLyrics: boolean;
   translationLanguage: string;
   romanizationExclusions: string[];
   translationExclusions: string[];
@@ -315,6 +317,8 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   userOffset: 0,
   isRomanizationEnabled: false,
   isTranslateEnabled: false,
+  showRomanizedLyrics: false,
+  showTranslatedLyrics: false,
   translationLanguage: "en",
   romanizationExclusions: [],
   translationExclusions: [],

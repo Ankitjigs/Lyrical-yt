@@ -74,6 +74,8 @@ export default function KaraokeOverlay() {
     isLoading,
     isRomanizationEnabled,
     isTranslateEnabled,
+    showRomanizedLyrics,
+    showTranslatedLyrics,
     karaokeCustomPosition,
     karaokeFontSize,
     karaokePosition,
@@ -94,6 +96,8 @@ export default function KaraokeOverlay() {
       isLoading: state.isLoading,
       isRomanizationEnabled: state.isRomanizationEnabled,
       isTranslateEnabled: state.isTranslateEnabled,
+      showRomanizedLyrics: state.showRomanizedLyrics,
+      showTranslatedLyrics: state.showTranslatedLyrics,
       karaokeCustomPosition: state.karaokeCustomPosition,
       karaokeFontSize: state.karaokeFontSize,
       karaokePosition: state.karaokePosition,
@@ -169,8 +173,8 @@ export default function KaraokeOverlay() {
           lyrics={lyrics}
           romanizedLyrics={romanizedLyrics}
           translatedLyrics={translatedLyrics}
-          isRomanizationEnabled={isRomanizationEnabled}
-          isTranslateEnabled={isTranslateEnabled}
+          isRomanizationEnabled={isRomanizationEnabled && showRomanizedLyrics}
+          isTranslateEnabled={isTranslateEnabled && showTranslatedLyrics}
           offset={offset}
           reduceAnimations={reduceAnimations}
           songInfo={songInfo}

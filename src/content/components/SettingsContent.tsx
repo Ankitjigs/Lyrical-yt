@@ -295,6 +295,8 @@ const SettingsContent = () => {
         useAppStore.setState({
           isRomanizationEnabled: items.isRomanizationEnabled,
           isTranslateEnabled: items.isTranslateEnabled,
+          showRomanizedLyrics: items.isRomanizationEnabled,
+          showTranslatedLyrics: items.isTranslateEnabled,
           translationLanguage: items.translationLanguage,
           compactMode: items.compactMode,
           lyricsSizePreset: items.lyricsSizePreset || "standard",
@@ -532,9 +534,15 @@ const SettingsContent = () => {
     if (key === "floatingCustomPosition")
       useAppStore.setState({ floatingCustomPosition: value });
     if (key === "romanization")
-      useAppStore.setState({ isRomanizationEnabled: value });
+      useAppStore.setState({
+        isRomanizationEnabled: value,
+        showRomanizedLyrics: value,
+      });
     if (key === "autoTranslate")
-      useAppStore.setState({ isTranslateEnabled: value });
+      useAppStore.setState({
+        isTranslateEnabled: value,
+        showTranslatedLyrics: value,
+      });
     if (key === "translationLang")
       useAppStore.setState({ translationLanguage: value });
     if (key === "themeId") {

@@ -133,6 +133,8 @@ export default function LyricsDock({
     setLineOffsetTrim,
     isTranslateEnabled,
     isRomanizationEnabled,
+    showTranslatedLyrics,
+    showRomanizedLyrics,
     isLoading,
     isAdPlaying,
     reduceAnimations,
@@ -150,6 +152,8 @@ export default function LyricsDock({
       setLineOffsetTrim: state.setLineOffsetTrim,
       isTranslateEnabled: state.isTranslateEnabled,
       isRomanizationEnabled: state.isRomanizationEnabled,
+      showTranslatedLyrics: state.showTranslatedLyrics,
+      showRomanizedLyrics: state.showRomanizedLyrics,
       isLoading: state.isLoading,
       isAdPlaying: state.isAdPlaying,
       reduceAnimations: state.reduceAnimations,
@@ -362,21 +366,15 @@ export default function LyricsDock({
 
   const nudgeOffset = (delta: number) => updateOffset(userOffset + delta);
 
-  const toggleSetting = (
-    key: "isTranslateEnabled" | "isRomanizationEnabled",
+  const toggleLyricsVisibility = (
+    key: "showTranslatedLyrics" | "showRomanizedLyrics",
   ) => {
-    const current =
-      key === "isTranslateEnabled" ? isTranslateEnabled : isRomanizationEnabled;
-    const next = !current;
-    useAppStore.setState({ [key]: next });
-    if (typeof chrome !== "undefined" && chrome?.storage?.sync) {
-      chrome.storage.sync.set({ [key]: next }, () => {
-        if (chrome.runtime?.lastError) {
-          console.warn("Storage sync error:", chrome.runtime.lastError.message);
-        }
-      });
-    }
+    const current = useAppStore.getState()[key];
+    useAppStore.setState({ [key]: !current });
   };
+
+  const isTranslationVisible = isTranslateEnabled && showTranslatedLyrics;
+  const isRomanizationVisible = isRomanizationEnabled && showRomanizedLyrics;
 
   const sourceTag = activeOption?.tags?.[0] || "LINE";
 
@@ -578,11 +576,13 @@ export default function LyricsDock({
 
         <Tooltip
           content={
-            hasTranslated
-              ? isTranslateEnabled
-                ? "Hide translated lyrics"
-                : "Show translated lyrics"
-              : "No translated lyrics loaded"
+            !hasTranslated
+              ? "No translated lyrics loaded"
+              : !isTranslateEnabled
+                ? "Enable auto-translate in Settings"
+                : isTranslationVisible
+                  ? "Hide translated lyrics"
+                  : "Show translated lyrics"
           }
           align="center"
         >
@@ -590,11 +590,13 @@ export default function LyricsDock({
             className="lyrical-dock-icon"
             type="button"
             data-toggle="translate"
-            data-active={isTranslateEnabled && hasTranslated ? "true" : "false"}
-            disabled={!hasTranslated}
-            onClick={() => toggleSetting("isTranslateEnabled")}
+            data-active={
+              isTranslationVisible && hasTranslated ? "true" : "false"
+            }
+            disabled={!hasTranslated || !isTranslateEnabled}
+            onClick={() => toggleLyricsVisibility("showTranslatedLyrics")}
             aria-label="Toggle translated lyrics"
-            aria-pressed={isTranslateEnabled}
+            aria-pressed={isTranslationVisible}
           >
             <Languages size={16} />
           </button>
@@ -602,11 +604,13 @@ export default function LyricsDock({
 
         <Tooltip
           content={
-            hasRomanized
-              ? isRomanizationEnabled
-                ? "Hide romanized lyrics"
-                : "Show romanized lyrics"
-              : "No romanized lyrics loaded"
+            !hasRomanized
+              ? "No romanized lyrics loaded"
+              : !isRomanizationEnabled
+                ? "Enable romanization in Settings"
+                : isRomanizationVisible
+                  ? "Hide romanized lyrics"
+                  : "Show romanized lyrics"
           }
           align="center"
         >
@@ -615,12 +619,12 @@ export default function LyricsDock({
             type="button"
             data-toggle="romanize"
             data-active={
-              isRomanizationEnabled && hasRomanized ? "true" : "false"
+              isRomanizationVisible && hasRomanized ? "true" : "false"
             }
-            disabled={!hasRomanized}
-            onClick={() => toggleSetting("isRomanizationEnabled")}
+            disabled={!hasRomanized || !isRomanizationEnabled}
+            onClick={() => toggleLyricsVisibility("showRomanizedLyrics")}
             aria-label="Toggle romanized lyrics"
-            aria-pressed={isRomanizationEnabled}
+            aria-pressed={isRomanizationVisible}
           >
             <Type size={16} />
           </button>
