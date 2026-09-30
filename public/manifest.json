@@ -68,9 +68,7 @@
                 "icon16.png",
                 "icon32.png",
                 "icon48.png",
-                "icon128.png",
-                "assets/fonts/NotoSansDevanagari-Variable.ttf",
-                "assets/fonts/NotoSansJP-Variable.ttf"
+                "icon128.png"
             ],
             "matches": [
                 "<all_urls>"

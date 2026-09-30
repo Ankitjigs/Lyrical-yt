@@ -663,63 +663,61 @@ function detectLyricsLanguage(lyrics, languageCode = null) {
   return languageCode || null;
 }
 
-/**
- * Language → Font configuration map.
- * Add an entry here to support a new language-specific font.
- * The font file must exist in public/assets/fonts/ and be listed in manifest.json web_accessible_resources.
- */
-const LANGUAGE_FONTS = {
-  hi: {
-    family: "Noto Sans Devanagari",
-    file: "assets/fonts/NotoSansDevanagari-Variable.ttf",
-    weight: "100 900",
-    stretch: "62.5% 100%",
-    unicodeRange: "U+0900-097F, U+A8E0-A8FF",
-  },
-  ja: {
-    family: "Noto Sans JP",
-    file: "assets/fonts/NotoSansJP-Variable.ttf",
-    weight: "100 900",
-    stretch: "62.5% 100%",
-    unicodeRange:
-      "U+3000-303F, U+3040-30FF, U+31F0-31FF, U+4E00-9FFF, U+FF66-FF9F",
-  },
-};
+const NOTO_SANS_FAMILIES = [
+  "Noto Sans Arabic:wght@100..900",
+  "Noto Sans Armenian:wght@100..900",
+  "Noto Sans Bengali:wght@100..900",
+  "Noto Sans Devanagari:wght@100..900",
+  "Noto Sans Georgian:wght@100..900",
+  "Noto Sans Gujarati:wght@100..900",
+  "Noto Sans HK:wght@100..900",
+  "Noto Sans Hebrew:wght@100..900",
+  "Noto Sans JP:wght@100..900",
+  "Noto Sans KR:wght@100..900",
+  "Noto Sans Kannada:wght@100..900",
+  "Noto Sans Khmer:wght@100..900",
+  "Noto Sans Lao Looped:wght@100..900",
+  "Noto Sans Lao:wght@100..900",
+  "Noto Sans Malayalam:wght@100..900",
+  "Noto Sans Marchen",
+  "Noto Sans Meetei Mayek:wght@100..900",
+  "Noto Sans Multani",
+  "Noto Sans NKo",
+  "Noto Sans Old Permic",
+  "Noto Sans SC:wght@100..900",
+  "Noto Sans Shavian",
+  "Noto Sans Sinhala:wght@100..900",
+  "Noto Sans Sunuwar",
+  "Noto Sans TC:wght@100..900",
+  "Noto Sans Takri",
+  "Noto Sans Tamil:wght@100..900",
+  "Noto Sans Telugu:wght@100..900",
+  "Noto Sans Thai Looped:wght@100..900",
+  "Noto Sans Thai:wght@100..900",
+  "Noto Sans Vithkuqi:wght@400..700",
+  "Noto Sans Warang Citi",
+];
 
-const _injectedFonts = new Set();
+const NOTO_SANS_UNIVERSAL_LINK = `https://fonts.googleapis.com/css2?${NOTO_SANS_FAMILIES.map(
+  (family) => `family=${encodeURIComponent(family)}`,
+).join("&")}&display=swap`;
 
-/**
- * Inject @font-face for a given language (if configured in LANGUAGE_FONTS).
- * Uses chrome.runtime.getURL() for correct extension URL resolution.
- * Each language font is injected only once.
- */
-function injectFontForLanguage(lang) {
-  if (!lang || _injectedFonts.has(lang)) return;
-  const config = LANGUAGE_FONTS[lang];
-  if (!config) return;
-  _injectedFonts.add(lang);
+function injectFontStylesheet(id: string, href: string) {
+  if (document.getElementById(id)) return;
 
-  const fontUrl = chrome.runtime.getURL(config.file);
-  const style = document.createElement("style");
-  style.id = `lyrical-font-${lang}`;
-  style.textContent = `
-    @font-face {
-      font-family: "${config.family}";
-      src: url("${fontUrl}") format("truetype");
-      font-weight: ${config.weight || "400"};
-      ${config.stretch ? `font-stretch: ${config.stretch};` : ""}
-      ${config.unicodeRange ? `unicode-range: ${config.unicodeRange};` : ""}
-      font-display: swap;
-    }
-  `;
-  (document.head || document.documentElement).appendChild(style);
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = href;
+  (document.head || document.documentElement).appendChild(link);
 }
 
-function injectAllLyricFonts() {
-  Object.keys(LANGUAGE_FONTS).forEach(injectFontForLanguage);
-}
-
-injectAllLyricFonts();
+// Early font injection on script load so fonts are ready before components mount
+injectFontStylesheet(
+  "lyrical-font-inter",
+  "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+);
+injectFontStylesheet("lyrical-font-noto-universal", NOTO_SANS_UNIVERSAL_LINK);
 
 const GLOBAL_PROPERTIES = `
 @property --lyric-transition-amount-start {
@@ -2575,15 +2573,11 @@ log("waitForStableVideo helper registered");
 
 // Create the lyrics panel HTML
 function createLyricsPanel() {
-  // Inject Inter font from Google Fonts CDN (lightweight, ~100KB Latin)
-  if (!document.getElementById("lyrical-font-inter")) {
-    const link = document.createElement("link");
-    link.id = "lyrical-font-inter";
-    link.rel = "stylesheet";
-    link.href =
-      "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap";
-    (document.head || document.documentElement).appendChild(link);
-  }
+  injectFontStylesheet(
+    "lyrical-font-inter",
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+  );
+  injectFontStylesheet("lyrical-font-noto-universal", NOTO_SANS_UNIVERSAL_LINK);
 
   const wrapper = document.createElement("div");
   wrapper.id = "lyrical-panel-wrapper";
@@ -3145,24 +3139,23 @@ function findVisibleSecondaryColumn() {
   });
 
   return (
-    candidates
-      .sort((a, b) => {
-        const aActive = a.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
-        const bActive = b.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
-        if (aActive !== bActive) return bActive - aActive;
+    candidates.sort((a, b) => {
+      const aActive = a.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
+      const bActive = b.closest("ytd-watch-flexy[is-watch-page]") ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
 
-        const aRect = a.getBoundingClientRect();
-        const bRect = b.getBoundingClientRect();
-        return bRect.width * bRect.height - aRect.width * aRect.height;
-      })[0] || null
+      const aRect = a.getBoundingClientRect();
+      const bRect = b.getBoundingClientRect();
+      return bRect.width * bRect.height - aRect.width * aRect.height;
+    })[0] || null
   );
 }
 
 function hasLivePanelRoot(wrapper: HTMLElement | null): boolean {
   return Boolean(
     wrapper &&
-      (wrapper as any)._reactRoot &&
-      wrapper.shadowRoot?.getElementById("lyrical-panel-root"),
+    (wrapper as any)._reactRoot &&
+    wrapper.shadowRoot?.getElementById("lyrical-panel-root"),
   );
 }
 
@@ -3270,9 +3263,8 @@ function cleanupWatchPanelOnLeave() {
   activeWaitForVideoSession++;
   waitForVideoInProgress = false;
 
-  const existingPanel =
-    (document.getElementById("lyrical-panel-wrapper") ||
-      lyricsPanel) as HTMLElement | null;
+  const existingPanel = (document.getElementById("lyrical-panel-wrapper") ||
+    lyricsPanel) as HTMLElement | null;
   if (existingPanel) {
     try {
       (existingPanel as any)._reactRoot?.unmount();
@@ -3349,9 +3341,8 @@ function ensureWatchPanelMounted() {
   const secondary = findVisibleSecondaryColumn();
   if (!secondary) return;
 
-  const existing =
-    (document.getElementById("lyrical-panel-wrapper") ||
-      lyricsPanel) as HTMLElement | null;
+  const existing = (document.getElementById("lyrical-panel-wrapper") ||
+    lyricsPanel) as HTMLElement | null;
 
   if (hasLivePanelRoot(existing)) {
     lyricsPanel = existing;
@@ -3359,7 +3350,9 @@ function ensureWatchPanelMounted() {
     return;
   }
 
-  log("[Lyrical Panel] No reusable panel root; mounting in the active secondary...");
+  log(
+    "[Lyrical Panel] No reusable panel root; mounting in the active secondary...",
+  );
   injectIntoYouTube();
 }
 
