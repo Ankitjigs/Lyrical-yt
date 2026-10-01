@@ -53,6 +53,46 @@
   transform: scale(1.02);
 }
 
+:host .lyrical-collapsed-preview .at-lyrics--line {
+  justify-content: flex-start !important;
+  text-align: left !important;
+  transform: none !important;
+  transform-origin: left center !important;
+  padding-left: 2px !important;
+  padding-right: 0 !important;
+  width: 100% !important;
+  overflow: visible !important;
+}
+
+:host .lyrical-collapsed-preview .at-lyrics--line.at-lyrics--animating,
+:host .lyrical-collapsed-preview .at-lyrics--line.at-lyrics--active {
+  transform: none !important;
+}
+
+:host .lyrical-collapsed-preview .at-lyrics--word {
+  transform-origin: left center;
+}
+
+:host .lyrical-collapsed-preview .at-lyrics--word-rom {
+  display: inline-block;
+  vertical-align: baseline;
+  transform: translateY(0px) scale(1);
+  position: relative;
+  color: color-mix(in srgb, var(--lyrical-romanized, #86efac) 60%, transparent);
+  transition: transform 350ms cubic-bezier(0.175, 0.885, 0.32, 1.275), color 0.2s ease;
+}
+
+:host .lyrical-collapsed-preview .at-lyrics--word-rom.at-lyrics--animating {
+  animation: at-sine-float var(--at-duration, 0.3s) ease forwards;
+  will-change: transform;
+  color: var(--lyrical-text-primary, #ffffff);
+}
+
+:host .lyrical-collapsed-preview .at-lyrics--word-rom.is-past {
+  color: var(--lyrical-text-primary, #ffffff) !important;
+  transform: translateY(0px) scale(1);
+}
+
 :host .at-lyrics--line > span {
   display: inline-block;
   white-space: pre-wrap;

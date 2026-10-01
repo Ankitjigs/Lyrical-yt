@@ -356,14 +356,22 @@ interface MiniCompanionProps {
   onDismiss?: () => void;
 }
 
+function isMiniplayerActive(): boolean {
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return false;
+  return mini.hasAttribute("active") || (mini as HTMLElement).offsetWidth > 0;
+}
+
 function getActiveMediaVideoElement(): HTMLVideoElement | null {
-  const miniVideo = document.querySelector<HTMLVideoElement>("ytd-miniplayer video");
-  if (miniVideo) return miniVideo;
+  if (isMiniplayerActive()) {
+    const miniVideo = document.querySelector<HTMLVideoElement>("ytd-miniplayer video");
+    if (miniVideo && miniVideo.isConnected) return miniVideo;
+  }
 
   const player = document.getElementById("movie_player");
   if (player && !player.closest("ytd-inline-preview-player, #inline-preview-player")) {
     const v = player.querySelector<HTMLVideoElement>("video");
-    if (v) return v;
+    if (v && v.isConnected) return v;
   }
 
   const allVideos = Array.from(document.querySelectorAll<HTMLVideoElement>("video"));
@@ -400,6 +408,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     showRomanizedLyrics,
     showTranslatedLyrics,
     storeActiveIndex,
+    userOffset,
+    isOffsetResolved,
+    lyricsSource,
   } = useAppStore(
     useShallow((state) => ({
       songInfo: state.songInfo,
@@ -424,6 +435,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       showRomanizedLyrics: state.showRomanizedLyrics,
       showTranslatedLyrics: state.showTranslatedLyrics,
       storeActiveIndex: state.activeIndex,
+      userOffset: state.userOffset,
+      isOffsetResolved: state.isOffsetResolved,
+      lyricsSource: state.lyricsSource,
     })),
   );
 
@@ -433,6 +447,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   const hasDraggedRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [rawVideoTime, setRawVideoTime] = useState(0);
   const [bottomOffset, setBottomOffset] = useState(236);
   const [rightOffset, setRightOffset] = useState(16);
   const [miniWidth, setMiniWidth] = useState(340);
@@ -470,28 +485,38 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     let lastTime = -1;
     let cachedVideo: HTMLVideoElement | null = null;
 
-    const getVideo = () => {
-      if (!cachedVideo || !cachedVideo.isConnected) {
-        cachedVideo = getActiveMediaVideoElement();
-      }
-      return cachedVideo;
-    };
+    let currentVideo: HTMLVideoElement | null = getActiveMediaVideoElement();
 
     const isPlaying = (video: HTMLVideoElement | null) => {
-      return Boolean(video && !video.paused && !video.ended && video.readyState > 2);
+      return Boolean(video && !video.paused && !video.ended && video.readyState >= 2);
+    };
+
+    const updateActiveVideo = () => {
+      const live = getActiveMediaVideoElement();
+      if (live && live !== currentVideo) {
+        detachListeners(currentVideo);
+        currentVideo = live;
+        attachListeners(currentVideo);
+      }
+      return currentVideo;
     };
 
     const tick = () => {
-      const video = getVideo();
-      if (video) {
-        // Correctly apply offset: video.currentTime - offset (matching main panel)
-        const t = Math.max(0, video.currentTime - offset);
+      // Auto-rebind if current video became disconnected, paused, or replaced in player swap
+      if (!currentVideo || !currentVideo.isConnected || currentVideo.paused) {
+        updateActiveVideo();
+      }
+
+      if (currentVideo && currentVideo.isConnected) {
+        const vTime = currentVideo.currentTime;
+        const t = vTime - offset;
         if (Math.abs(t - lastTime) > 0.016) {
           lastTime = t;
           setCurrentTime(t);
+          setRawVideoTime(vTime);
         }
       }
-      if (isPlaying(video)) {
+      if (isPlaying(currentVideo)) {
         rafId = requestAnimationFrame(tick);
       } else {
         rafId = null;
@@ -504,7 +529,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     };
 
-    const onPlay = () => startTick();
+    const onPlay = () => {
+      updateActiveVideo();
+      startTick();
+    };
     const onPauseOrEnded = () => {
       if (rafId) {
         cancelAnimationFrame(rafId);
@@ -513,61 +541,86 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       tick();
     };
     const onSeekOrTimeUpdate = () => {
-      tick();
-      const video = getVideo();
-      if (isPlaying(video) && !rafId) {
+      // If video is paused, update time immediately for scrubbing previews.
+      // If video is actively playing, RAF is already ticking at 60 FPS; do not duplicate RAF callbacks.
+      if (!isPlaying(currentVideo)) {
+        tick();
+      } else if (!rafId) {
         startTick();
       }
     };
 
-    const video = getVideo();
+    const attachListeners = (v: HTMLVideoElement | null) => {
+      if (!v) return;
+      v.addEventListener("play", onPlay);
+      v.addEventListener("playing", onPlay);
+      v.addEventListener("pause", onPauseOrEnded);
+      v.addEventListener("ended", onPauseOrEnded);
+      v.addEventListener("seeked", onSeekOrTimeUpdate);
+      v.addEventListener("timeupdate", onSeekOrTimeUpdate);
+    };
+
+    const detachListeners = (v: HTMLVideoElement | null) => {
+      if (!v) return;
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("playing", onPlay);
+      v.removeEventListener("pause", onPauseOrEnded);
+      v.removeEventListener("ended", onPauseOrEnded);
+      v.removeEventListener("seeked", onSeekOrTimeUpdate);
+      v.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+    };
+
+    currentVideo = updateActiveVideo();
+    attachListeners(currentVideo);
     tick();
-    if (isPlaying(video)) {
+    if (isPlaying(currentVideo)) {
       startTick();
     }
 
-    video?.addEventListener("play", onPlay);
-    video?.addEventListener("playing", onPlay);
-    video?.addEventListener("pause", onPauseOrEnded);
-    video?.addEventListener("ended", onPauseOrEnded);
-    video?.addEventListener("seeked", onSeekOrTimeUpdate);
-    video?.addEventListener("timeupdate", onSeekOrTimeUpdate);
+    const onPlayerSwap = () => {
+      updateActiveVideo();
+      tick();
+      if (isPlaying(currentVideo) && !rafId) {
+        startTick();
+      }
+    };
+
+    window.addEventListener("yt-navigate-finish", onPlayerSwap);
+    document.addEventListener("visibilitychange", onPlayerSwap);
+    window.addEventListener("focus", onPlayerSwap);
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
-      const v = getVideo();
-      v?.removeEventListener("play", onPlay);
-      v?.removeEventListener("playing", onPlay);
-      v?.removeEventListener("pause", onPauseOrEnded);
-      v?.removeEventListener("ended", onPauseOrEnded);
-      v?.removeEventListener("seeked", onSeekOrTimeUpdate);
-      v?.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+      detachListeners(currentVideo);
+      window.removeEventListener("yt-navigate-finish", onPlayerSwap);
+      document.removeEventListener("visibilitychange", onPlayerSwap);
+      window.removeEventListener("focus", onPlayerSwap);
     };
-  }, [offset]);
+  }, [lyrics, offset]);
 
-  // Determine active lyric line index using binary search matching main panel findLyricIndex
+  // Active line calculation matching collapsedPreview and karaokeDisplay early transition (0.35s early)
   const activeLineIndex = useMemo(() => {
     if (!lyrics || lyrics.length === 0) return -1;
-    const t = currentTime > 0 ? currentTime : 0;
-    let low = 0,
-      high = lyrics.length - 1;
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      if (lyrics[mid].time <= t) {
-        low = mid + 1;
-      } else {
-        high = mid - 1;
+
+    const EARLY_PREPARE_S = 0.35;
+    const time = currentTime > 0 ? currentTime : 0;
+
+    for (let i = 0; i < lyrics.length; i++) {
+      const line = lyrics[i];
+      const nextLine = lyrics[i + 1];
+      const lineStart = Number(line.time ?? 0);
+      const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
+
+      const effectiveStart = i === 0 ? 0 : lineStart - EARLY_PREPARE_S;
+      const effectiveEnd = nextStart - EARLY_PREPARE_S;
+
+      if (time >= effectiveStart && time < effectiveEnd) {
+        return i;
       }
     }
-    return high >= 0 ? high : 0;
-  }, [lyrics, currentTime]);
 
-  // Keep store activeIndex in sync while in miniplayer
-  useEffect(() => {
-    if (activeLineIndex >= 0 && activeLineIndex !== storeActiveIndex) {
-      useAppStore.getState().setActiveIndex(activeLineIndex);
-    }
-  }, [activeLineIndex, storeActiveIndex]);
+    return Math.max(0, lyrics.length - 1);
+  }, [lyrics, currentTime]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
   const isInstrumental = isInstrumentalLine(activeLine);
@@ -891,7 +944,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     });
   };
 
-  // Instrumental animation (liquid wave fill with white, matching karaoke, NO text)
+  // Instrumental animation (liquid wave fill with white, matching KaraokeLyricDisplay / CollapsedLyricsPreview)
   const renderInstrumental = () => {
     const lineStart = Number(activeLine?.time ?? 0);
     const nextLine = lyrics?.[activeLineIndex + 1];
@@ -910,6 +963,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         1,
         Math.max(0, (currentTime - lineStart) / lineDuration),
       );
+    } else {
+      progress = 0;
     }
 
     // Liquid level: at progress 0, Y = 22.5; at progress 1, Y = 2.0 (matching karaoke)
@@ -940,12 +995,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       >
         <svg
           style={{
-            width: "26px",
-            height: "26px",
-            filter:
-              progress > 0 && progress < 1
-                ? "drop-shadow(0 0 8px rgba(255, 255, 255, 0.45))"
-                : "none",
+            width: "24px",
+            height: "24px",
           }}
           viewBox="0 0 24 24"
         >
@@ -969,17 +1020,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
   // Single lyrics line with swipe (better-lyrics) or archivetune animation
   const renderSingleLineLyrics = () => {
-    if (!activeLine) {
-      return (
-        <span
-          style={{
-            color: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.45))",
-            fontStyle: "italic",
-          }}
-        >
-          ♫
-        </span>
-      );
+    if (!activeLine || activeLineIndex < 0) {
+      return null;
     }
 
     if (isInstrumental) {
@@ -1028,7 +1070,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             const start = Number(p.time ?? lineStart);
             const isLastPart = i === rawParts.length - 1;
             const rawDuration = isLastPart
-              ? rawInterval
+              ? nextLine
+                ? Math.min(Math.max(nextLine.time - start, 0.4), 1.2)
+                : 1.2
               : Number(rawParts[i + 1].time ?? start) - start;
             return {
               text: p.text,
@@ -1070,6 +1114,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
     return (
       <div
+        key={`mini-line-${activeLineIndex}`}
         className={
           lyricsAnimationStyle === "archivetune"
             ? "at-lyrics--line at-lyrics--active"
@@ -1083,11 +1128,14 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           textAlign: "left",
           gap: "0px",
           width: "100%",
+          fontSize: "14px",
+          fontWeight: "650",
+          lineHeight: "1.4",
         }}
       >
         {wordObjects.map((wordObj, index) => {
           const start = wordObj.time;
-          const duration = wordObj.duration;
+          const duration = Math.max(wordObj.duration, 0.08);
           const wordCurrentTime = currentTime + duration * 0.1;
           const calcEnd = start + duration;
           const wordEnd = Math.min(calcEnd, unmountDeadline);
@@ -1229,7 +1277,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
     return wordObjects.map((wordObj, index) => {
       const start = wordObj.time;
-      const duration = wordObj.duration;
+      const duration = Math.max(wordObj.duration, 0.08);
       const wordCurrentTime = currentTime + duration * 0.1;
       const calcEnd = start + duration;
       const wordEnd = Math.min(calcEnd, unmountDeadline);
@@ -1413,6 +1461,31 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         >
         {/* Scoped CSS for swipe and archivetune animations in Mini Companion */}
         <style>{`
+          .lyrical-collapsed-original {
+            font-size: 14px !important;
+            font-weight: 650 !important;
+            line-height: 1.4 !important;
+            text-align: left !important;
+            justify-content: flex-start !important;
+            transform: none !important;
+          }
+          .at-lyrics--line {
+            font-size: 14px !important;
+            font-weight: 650 !important;
+            line-height: 1.4 !important;
+            text-align: left !important;
+            justify-content: flex-start !important;
+            transform: none !important;
+          }
+          .at-lyrics--line.at-lyrics--active,
+          .at-lyrics--line.at-lyrics--animating {
+            transform: none !important;
+          }
+          .at-lyrics--line .at-lyrics--word {
+            font-size: 14px !important;
+            font-weight: 650 !important;
+          }
+
           .lyrical-collapsed-word {
             position: relative;
             display: inline-block;
@@ -1452,7 +1525,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             display: inline-block;
             vertical-align: baseline;
             color: color-mix(in srgb, var(--lyrical-romanized, #86efac) 60%, transparent);
-            transition: text-shadow 0.2s ease, color 0.15s ease;
+            transition: text-shadow 0.2s ease;
           }
           .lyrical-mini-rom-word::after {
             content: attr(data-content);
@@ -1472,12 +1545,13 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           }
           .lyrical-mini-rom-word.is-past {
             color: var(--lyrical-text-primary, #ffffff);
+            transition: none;
           }
           .lyrical-mini-rom-word.is-past::after {
             content: none;
           }
           .lyrical-mini-rom-word.is-active {
-            text-shadow: 0 0 10px color-mix(in srgb, var(--lyrical-romanized, #86efac) 70%, transparent);
+            /* Clean gradient fill without harsh glow halo */
           }
 
           .at-lyrics--word {
@@ -1507,12 +1581,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             animation: at-sine-float var(--at-duration, 0.3s) ease forwards;
             will-change: transform;
             color: var(--lyrical-text-primary, #ffffff);
-            text-shadow: 0 0 8px color-mix(in srgb, var(--lyrical-romanized, #86efac) 70%, transparent);
           }
           .at-lyrics--word-rom.is-past {
             color: var(--lyrical-text-primary, #ffffff) !important;
             transform: translateY(0px) scale(1);
-            text-shadow: none;
           }
 
           /* Reduced animations support */
@@ -1599,7 +1671,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
             ) : artwork ? (
               <AnimatePresence mode="wait" initial={false}>
                 <motion.img
-                  key={artwork}
+                  key={songInfo?.videoId || songInfo?.title || "mini-artwork"}
                   src={artwork}
                   alt=""
                   {...getAlbumArtMotion(albumArtTransition, reduceAnimations)}
@@ -1877,9 +1949,12 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                 {/* Original lyrics line */}
                 <div
                   style={{
-                    fontSize: "13.5px",
-                    fontWeight: "600",
+                    fontSize: "14px",
+                    fontWeight: "650",
                     lineHeight: "1.4",
+                    minHeight: "28px",
+                    display: "flex",
+                    alignItems: "center",
                   }}
                 >
                   {renderSingleLineLyrics()}

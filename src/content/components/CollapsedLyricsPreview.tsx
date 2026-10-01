@@ -6,6 +6,7 @@ import {
   isInstrumentalLine,
   INSTRUMENTAL_NOTE_PATH,
 } from "../../modules/lyrics/lyricsNormalizer";
+import { useAppStore } from "../store";
 
 interface CollapsedLyricsPreviewProps {
   lyrics: LyricalLyricLine[];
@@ -26,6 +27,7 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
   romanizedLyrics,
   translatedLyrics,
 }) => {
+  const lyricsAnimationStyle = useAppStore((state) => state.lyricsAnimationStyle);
   const [collapsedPreviewTime, setCollapsedPreviewTime] = useState(0);
 
   useEffect(() => {
@@ -308,6 +310,47 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
         );
       }
 
+      if (lyricsAnimationStyle === "archivetune") {
+        return (
+          <React.Fragment key={`${index}-${start}-${wordObj.text}`}>
+            <span
+              className={[
+                "at-lyrics--word",
+                isActive ? "at-lyrics--animating" : "",
+                isPast ? "is-past" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-content={wordObj.text}
+              style={
+                {
+                  "--at-duration": `${effectiveDuration}s`,
+                  "--at-anim-delay": "0s",
+                  "--at-transition-amount-start": isPast
+                    ? 1.3
+                    : isActive
+                      ? -0.25 + progress * 1.55
+                      : -0.25,
+                  "--at-transition-amount-end": isPast
+                    ? 1.4
+                    : isActive
+                      ? -0.15 + progress * 1.55
+                      : -0.15,
+                  display: "inline-block",
+                  position: "relative",
+                  color: isPast
+                    ? "var(--lyrical-text-primary, #ffffff)"
+                    : "var(--at-lyric-inactive-color, rgba(255, 255, 255, 0.35))",
+                } as React.CSSProperties
+              }
+            >
+              {wordObj.text}
+            </span>
+            {shouldInsertSpaces && index < wordObjects.length - 1 ? "\u00A0" : null}
+          </React.Fragment>
+        );
+      }
+
       return (
         <React.Fragment key={`${index}-${start}-${wordObj.text}`}>
           <span
@@ -366,13 +409,19 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     const romData = romanizedLyrics?.[collapsedLineIndex];
     const timedRom = romData?.timedRomanization;
 
-    let wordObjects: Array<{ text: string; time: number; duration: number }>;
+    let wordObjects: Array<{
+      text: string;
+      time: number;
+      duration: number;
+      trailingSpace?: boolean;
+    }>;
 
     if (timedRom && timedRom.length > 0) {
       wordObjects = timedRom.map((p: any) => ({
         text: p.text,
         time: Number(p.time ?? effectiveStart),
         duration: Math.max(Number(p.duration ?? 0), 0.12),
+        trailingSpace: p.trailingSpace,
       }));
     } else {
       const rawWords = collapsedRomanized
@@ -425,6 +474,50 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
         );
       }
 
+      if (lyricsAnimationStyle === "archivetune") {
+        return (
+          <React.Fragment key={`rom-${index}-${start}-${wordObj.text}`}>
+            <span
+              className={[
+                "at-lyrics--word-rom",
+                isActive ? "at-lyrics--animating" : "",
+                isPast ? "is-past" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              data-content={wordObj.text}
+              style={
+                {
+                  "--at-duration": `${effectiveDuration}s`,
+                  "--at-anim-delay": "0s",
+                  "--at-transition-amount-start": isPast
+                    ? 1.3
+                    : isActive
+                      ? -0.25 + progress * 1.55
+                      : -0.25,
+                  "--at-transition-amount-end": isPast
+                    ? 1.4
+                    : isActive
+                      ? -0.15 + progress * 1.55
+                      : -0.15,
+                  display: "inline-block",
+                  position: "relative",
+                } as React.CSSProperties
+              }
+            >
+              {wordObj.text}
+            </span>
+            {wordObj.trailingSpace !== undefined
+              ? wordObj.trailingSpace
+                ? "\u00A0"
+                : null
+              : index < wordObjects.length - 1
+                ? "\u00A0"
+                : null}
+          </React.Fragment>
+        );
+      }
+
       return (
         <React.Fragment key={`rom-${index}-${start}-${wordObj.text}`}>
           <span
@@ -444,7 +537,13 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
           >
             {wordObj.text}
           </span>
-          {index < wordObjects.length - 1 ? " " : null}
+          {wordObj.trailingSpace !== undefined
+            ? wordObj.trailingSpace
+              ? "\u00A0"
+              : null
+            : index < wordObjects.length - 1
+              ? " "
+              : null}
         </React.Fragment>
       );
     });
@@ -488,7 +587,20 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
           transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
           <div
-            className="lyrical-collapsed-original"
+            className={
+              lyricsAnimationStyle === "archivetune"
+                ? "at-lyrics--line at-lyrics--active lyrical-collapsed-archivetune"
+                : "lyrical-collapsed-original"
+            }
+            style={{
+              justifyContent: "flex-start",
+              textAlign: "left",
+              paddingLeft: lyricsAnimationStyle === "archivetune" ? "2px" : "0px",
+              paddingRight: 0,
+              width: "100%",
+              transform: "none",
+              overflow: lyricsAnimationStyle === "archivetune" ? "visible" : "hidden",
+            }}
             data-timed={
               collapsedLine?.parts && collapsedLine.parts.length > 0
                 ? "true"
@@ -503,6 +615,11 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
               initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.18, delay: 0.04 }}
+              style={
+                lyricsAnimationStyle === "archivetune"
+                  ? { paddingLeft: "2px", overflow: "visible" }
+                  : undefined
+              }
             >
               {renderCollapsedRomanized()}
             </motion.div>

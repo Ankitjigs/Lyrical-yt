@@ -1654,11 +1654,13 @@ const LyricsPanel = () => {
       "";
     const title = songInfo?.title || "";
     const artist = songInfo?.artist || "";
-    return `${videoId}|${title}|${artist}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
+    return `${videoId}|${title}|${artist}|${lyricsSource || ""}|${strategyName}|${videoSessionKey}|${reduceAnimations ? "reduced" : "full"}|${lyricsAnimationStyle || "better-lyrics"}`;
   }, [
     songInfo?.artist,
     songInfo?.title,
     (songInfo as any)?.videoId,
+    lyricsSource,
+    strategyName,
     reduceAnimations,
     videoSessionKey,
     lyricsAnimationStyle,
@@ -1893,6 +1895,7 @@ const LyricsPanel = () => {
 
   // Auto-scroll effect (Legacy / Line Mode) — respects user-scroll pause
   useEffect(() => {
+    if (!isExpanded) return;
     if (
       !shouldUseAnimationEngine &&
       activeIndex >= 0 &&
@@ -1944,7 +1947,7 @@ const LyricsPanel = () => {
         }, 1000);
       }
     }
-  }, [activeIndex, shouldUseAnimationEngine, legacyScrollPaused]);
+  }, [activeIndex, isExpanded, shouldUseAnimationEngine, legacyScrollPaused]);
 
   if (!isExpanded) {
     // Collapsed view logic here if needed
@@ -2035,7 +2038,7 @@ const LyricsPanel = () => {
         flexDirection: "column",
         minHeight: isExpanded ? "auto" : collapsedPanelMinHeight,
         height: isExpanded ? "auto" : collapsedPanelHeight,
-        overflow: "hidden",
+        overflow: isExpanded ? "visible" : "hidden",
         position: "relative",
         transition: "min-height 0.25s ease, height 0.25s ease, background 0.75s ease-in-out",
       }}
@@ -2244,7 +2247,11 @@ const LyricsPanel = () => {
       </div>
 
       {/* Body */}
-      {isExpanded && (
+      <div
+        style={{
+          display: isExpanded ? "block" : "none",
+        }}
+      >
         <motion.div
           style={{
             padding: compactMode ? "16px 20px" : "20px",
@@ -2901,7 +2908,7 @@ const LyricsPanel = () => {
             </div>
           </div>
         </motion.div>
-      )}
+      </div>
     </div>
   );
 };

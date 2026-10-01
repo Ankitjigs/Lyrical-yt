@@ -2,8 +2,6 @@
 
 // Expose a global function that content-panel can call directly
 window.getSongInfoFromPage = function () {
-    console.log('[Content] getSongInfoFromPage called');
-
     let videoId = null;
     const isYouTube = window.location.hostname.includes('youtube.com');
     const isWatchUrl = isYouTube && window.location.pathname.includes('/watch');
@@ -34,18 +32,60 @@ window.getSongInfoFromPage = function () {
                 return null;
             }
 
-            // 1. The playing video title link inside the miniplayer player chrome (.ytp-title-link always has the playing video)
+            // Extract the displayed title inside the miniplayer DOM
+            const miniTitleEl = mini.querySelector(
+                ".ytp-title-link, #video-title, .info-bar [class*='title'], .info-bar"
+            );
+            const miniTitle = miniTitleEl?.innerText?.trim() || "";
+
+            // Check MediaSession first: If MediaSession title matches miniplayer title,
+            // it is 100% verified to belong to the miniplayer!
+            const msInfo = getMediaSessionMetadata();
+            let isMediaSessionForMini = false;
+
+            if (msInfo && msInfo.title && miniTitle) {
+                const normMini = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const normMedia = msInfo.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+                if (
+                    normMini.length > 0 &&
+                    normMedia.length > 0 &&
+                    (normMini.includes(normMedia.slice(0, 6)) || normMedia.includes(normMini.slice(0, 6)))
+                ) {
+                    isMediaSessionForMini = true;
+                }
+            }
+
+            if (isMediaSessionForMini && msInfo) {
+                // Legitimate miniplayer track confirmed! Extract real videoId from MediaSession artwork
+                if (msInfo.artwork) {
+                    const m = msInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+                    if (m && m[1]) videoId = m[1];
+                }
+                if (!videoId) {
+                    try {
+                        const player = mini.querySelector('#movie_player') || document.getElementById('movie_player');
+                        const pvid = player?.getVideoData?.()?.video_id;
+                        if (pvid && pvid.length === 11) videoId = pvid;
+                    } catch {}
+                }
+                msInfo.videoId = videoId || null;
+                if (!msInfo.artwork && videoId) {
+                    msInfo.artwork = getYouTubeArtworkFromPage(videoId);
+                }
+                console.log('[Content] Verified MediaSession for miniplayer:', msInfo);
+                return msInfo;
+            }
+
+            // If MediaSession does NOT match miniplayer title, MediaSession is a hover preview hijack on the feed!
+            // Fall back to extracting videoId directly from miniplayer DOM:
             try {
-                const titleLink = mini.querySelector(
-                    ".ytp-title-link[href*='watch?v='], a.ytp-title-link"
-                );
-                if (titleLink && titleLink.href) {
-                    const match = titleLink.href.match(/[?&]v=([^&]+)/);
-                    if (match && match[1]) videoId = match[1];
+                const player = mini.querySelector('#movie_player') || document.getElementById('movie_player');
+                if (player && !player.closest?.('ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview')) {
+                    const pvid = player?.getVideoData?.()?.video_id;
+                    if (pvid && pvid.length === 11) videoId = pvid;
                 }
             } catch {}
 
-            // 2. Selected playlist queue item inside miniplayer
             if (!videoId) {
                 try {
                     const selItem = mini.querySelector(
@@ -58,12 +98,23 @@ window.getSongInfoFromPage = function () {
                 } catch {}
             }
 
-            // 3. MediaSession artwork videoId (only the playing video controls MediaSession)
-            if (!videoId && "mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+            if (!videoId) {
                 try {
-                    const arts = navigator.mediaSession.metadata.artwork;
-                    for (let i = arts.length - 1; i >= 0; i--) {
-                        const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+                    const titleLink = mini.querySelector(
+                        ".ytp-title-link[href*='watch?v='], a.ytp-title-link"
+                    );
+                    if (titleLink && titleLink.href) {
+                        const match = titleLink.href.match(/[?&]v=([^&]+)/);
+                        if (match && match[1]) videoId = match[1];
+                    }
+                } catch {}
+            }
+
+            if (!videoId) {
+                try {
+                    const imgs = mini.querySelectorAll("img[src*='/vi/']");
+                    for (const img of Array.from(imgs)) {
+                        const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
                         if (m && m[1]) {
                             videoId = m[1];
                             break;
@@ -72,20 +123,6 @@ window.getSongInfoFromPage = function () {
                 } catch {}
             }
 
-            // 4. Fallback: miniplayer info-bar or any link
-            if (!videoId) {
-                try {
-                    const miniLink = mini.querySelector(
-                        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']"
-                    );
-                    if (miniLink && miniLink.href) {
-                        const match = miniLink.href.match(/[?&]v=([^&]+)/);
-                        if (match && match[1]) videoId = match[1];
-                    }
-                } catch {}
-            }
-
-            // If there's no miniplayer video, there is NO song on this page - ignore hover previews
             if (!videoId) {
                 console.log('[Content] Active miniplayer without identifiable videoId - skipping');
                 return null;
@@ -114,7 +151,7 @@ window.getSongInfoFromPage = function () {
         }
     }
 
-    // Try MediaSession first ONLY IF it is not an ad
+    // Try MediaSession for watch page
     const mediaSessionInfo = getMediaSessionMetadata();
     const isAdMediaSession =
         isAd ||
@@ -132,37 +169,13 @@ window.getSongInfoFromPage = function () {
         };
     }
 
-    // Guard MediaSession against thumbnail hover-previews:
-    // If MediaSession artwork has a video ID that doesn't match our valid videoId,
-    // or if on non-watch page and MediaSession title doesn't match miniplayer text,
-    // MediaSession has been hijacked by a hover preview!
     let isMediaSessionValid = false;
     if (mediaSessionInfo && mediaSessionInfo.title) {
         isMediaSessionValid = true;
         if (videoId && mediaSessionInfo.artwork) {
             const artMatch = mediaSessionInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
             if (artMatch && artMatch[1] && artMatch[1] !== videoId) {
-                if (!isWatchUrl) {
-                    // In miniplayer, MediaSession artwork is frequently the most up-to-date indicator of the new track
-                    console.debug('[Content] Updating miniplayer videoId from MediaSession artwork:', artMatch[1]);
-                    videoId = artMatch[1];
-                } else {
-                    console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
-                    isMediaSessionValid = false;
-                }
-            }
-        }
-        if (!isWatchUrl && isMediaSessionValid) {
-            const miniTitleEl = document.querySelector(
-                "ytd-miniplayer .ytp-title-link, ytd-miniplayer #video-title, ytd-miniplayer .info-bar"
-            );
-            const miniTitle = miniTitleEl?.innerText?.trim();
-            if (
-                miniTitle &&
-                !miniTitle.toLowerCase().includes(mediaSessionInfo.title.toLowerCase().slice(0, 8)) &&
-                !mediaSessionInfo.title.toLowerCase().includes(miniTitle.toLowerCase().slice(0, 8))
-            ) {
-                console.debug('[Content] MediaSession title does not match miniplayer title - rejecting hover preview session');
+                console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
                 isMediaSessionValid = false;
             }
         }
@@ -175,7 +188,6 @@ window.getSongInfoFromPage = function () {
         if (videoId && !mediaSessionInfo.videoId) {
             mediaSessionInfo.videoId = videoId;
         }
-        console.log('[Content] Using MediaSession:', mediaSessionInfo);
         return mediaSessionInfo;
     }
 
@@ -300,7 +312,10 @@ function scrapePageInfo(videoId) {
             : [
                 'ytd-miniplayer .ytp-title-link',
                 'ytd-miniplayer #video-title',
+                'ytd-miniplayer .info-bar .title',
+                'ytd-miniplayer .info-bar [class*="title"]',
                 'ytd-miniplayer .info-bar',
+                'ytd-miniplayer [class*="title"]',
               ];
 
         let videoTitle = null;
@@ -320,8 +335,14 @@ function scrapePageInfo(videoId) {
                 'ytd-video-owner-renderer a',
               ]
             : [
+                'ytd-miniplayer #channel-name a',
                 'ytd-miniplayer #channel-name',
                 'ytd-miniplayer #owner-name',
+                'ytd-miniplayer .byline a',
+                'ytd-miniplayer .byline',
+                'ytd-miniplayer [class*="byline"]',
+                'ytd-miniplayer ytd-channel-name',
+                'ytd-miniplayer [class*="owner"]',
               ];
 
         let channelName = null;

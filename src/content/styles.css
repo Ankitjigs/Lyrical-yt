@@ -458,7 +458,16 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding-right: 8px;
+  padding: 3px 8px 3px 2px;
+}
+
+.lyrical-collapsed-archivetune {
+  font-family: var(--lyrical-lyrics-font-stack);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.32;
+  letter-spacing: 0;
+  overflow: visible !important;
 }
 
 .lyrical-collapsed-original,
@@ -617,7 +626,7 @@
 }
 
 .lyrical-collapsed-romanized .lyrical-collapsed-word {
-  color: color-mix(in srgb, var(--lyrical-romanized) 70%, transparent);
+  color: color-mix(in srgb, var(--lyrical-romanized) 60%, transparent);
 }
 
 .lyrical-collapsed-romanized .lyrical-collapsed-word::after {
@@ -650,7 +659,7 @@
   align-items: center;
   min-height: 40px;
   margin: 0 0 12px;
-  z-index: 3;
+  z-index: 50;
   width: 100%;
 }
 

@@ -2446,15 +2446,36 @@ function hasLocalStorageApi() {
 // Inject lyric styles once (deferred for document_start compatibility)
 // function injectStyles() removed - unused in React version
 
+function isMiniplayerActive(): boolean {
+  const isWatchUrl =
+    window.location.href.includes("/watch") &&
+    window.location.href.includes("v=");
+  if (isWatchUrl) return false;
+
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return false;
+
+  const hasActive = mini.hasAttribute("active");
+  const isVisible =
+    (mini as HTMLElement).offsetParent !== null ||
+    window.getComputedStyle(mini).display !== "none";
+  const hasVideo =
+    !!mini.querySelector("video") || !!document.querySelector("video");
+
+  return (hasActive || isVisible) && hasVideo;
+}
+
 // VIDEO-DRIVEN INJECTION - The only stable signal on YouTube first load
 // YouTube's DOM is unstable on first load. The <video> element with readyState >= 2
 // is the only reliable indicator that the watch layout is finalized.
 export function getActiveMediaVideoElement(): HTMLVideoElement | null {
-  // 1. If in miniplayer, prefer the miniplayer's video
-  const miniVideo = document.querySelector<HTMLVideoElement>(
-    "ytd-miniplayer video",
-  );
-  if (miniVideo) return miniVideo;
+  // 1. If in miniplayer, prefer the miniplayer's video ONLY when actively playing in miniplayer mode
+  if (isMiniplayerActive()) {
+    const miniVideo = document.querySelector<HTMLVideoElement>(
+      "ytd-miniplayer video",
+    );
+    if (miniVideo && miniVideo.isConnected) return miniVideo;
+  }
 
   // 2. Main YouTube watch video (exclude inline hover preview players)
   const player = document.getElementById("movie_player");
@@ -2463,13 +2484,13 @@ export function getActiveMediaVideoElement(): HTMLVideoElement | null {
     !player.closest("ytd-inline-preview-player, #inline-preview-player")
   ) {
     const v = player.querySelector<HTMLVideoElement>("video");
-    if (v) return v;
+    if (v && v.isConnected) return v;
   }
 
   const watchFlexyVideo = document.querySelector<HTMLVideoElement>(
     "ytd-watch-flexy video",
   );
-  if (watchFlexyVideo) return watchFlexyVideo;
+  if (watchFlexyVideo && watchFlexyVideo.isConnected) return watchFlexyVideo;
 
   // 3. Fallback: filter out any video elements belonging to inline previews or thumbnail hover cards
   const allVideos = Array.from(
@@ -2724,49 +2745,78 @@ function getCurrentVideoId(songInfo?: any): string | null {
     // On non-watch page (home feed, etc.), check miniplayer!
     const mini = document.querySelector("ytd-miniplayer");
     if (mini) {
-      // 1. The playing video title link inside the HTML5 video player chrome
-      const titleLink = mini.querySelector<HTMLAnchorElement>(
-        ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
+      // 0. If MediaSession matches miniplayer title, its artwork videoId is 100% genuine!
+      const miniTitleEl = mini.querySelector<HTMLElement>(
+        ".ytp-title-link, #video-title, .info-bar [class*='title'], .info-bar"
       );
-      if (titleLink?.href) {
-        try {
-          const v = new URL(titleLink.href).searchParams.get("v");
-          if (v) return v;
-        } catch {}
+      const miniTitle = miniTitleEl?.innerText?.trim();
+      if (
+        miniTitle &&
+        "mediaSession" in navigator &&
+        navigator.mediaSession.metadata?.title &&
+        navigator.mediaSession.metadata?.artwork
+      ) {
+        const msTitle = navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+        const mTitle = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
+        if (msTitle.length > 0 && mTitle.length > 0 && (msTitle.includes(mTitle.slice(0, 6)) || mTitle.includes(msTitle.slice(0, 6)))) {
+          const arts = navigator.mediaSession.metadata.artwork;
+          for (let i = arts.length - 1; i >= 0; i--) {
+            const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+            if (m && m[1]) return m[1];
+          }
+        }
       }
 
-      // 2. Selected playlist queue item inside miniplayer
+      // 1. Check movie_player internal video_id
+      try {
+        const player = (mini.querySelector("#movie_player") || document.getElementById("movie_player")) as any;
+        if (
+          player &&
+          !player.closest?.("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")
+        ) {
+          const playerV = player?.getVideoData?.()?.video_id;
+          if (playerV && playerV.length === 11) return playerV;
+        }
+      } catch {}
+
+      // 1. Selected playlist queue item inside miniplayer
       const selItem = mini.querySelector<HTMLAnchorElement>(
         "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']",
       );
       if (selItem?.href) {
         try {
-          const v = new URL(selItem.href).searchParams.get("v");
-          if (v) return v;
+          const v = new URL(selItem.href, window.location.origin).searchParams.get("v");
+          if (v && v.length === 11) return v;
         } catch {}
       }
 
-      // 3. MediaSession artwork
-      if (
-        "mediaSession" in navigator &&
-        navigator.mediaSession.metadata?.artwork
-      ) {
-        const arts = navigator.mediaSession.metadata.artwork;
-        for (let i = arts.length - 1; i >= 0; i--) {
-          const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-          if (m && m[1]) return m[1];
-        }
+      // 2. The playing video title link inside the HTML5 video player chrome
+      const titleLink = mini.querySelector<HTMLAnchorElement>(
+        ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
+      );
+      if (titleLink?.href) {
+        try {
+          const v = new URL(titleLink.href, window.location.origin).searchParams.get("v");
+          if (v && v.length === 11) return v;
+        } catch {}
       }
 
-      // 4. Fallback: info-bar or any watch link in miniplayer
+      // 3. Fallback: info-bar or any watch link in miniplayer
       const fallbackLink = mini.querySelector<HTMLAnchorElement>(
         ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']",
       );
       if (fallbackLink?.href) {
         try {
-          const v = new URL(fallbackLink.href).searchParams.get("v");
-          if (v) return v;
+          const v = new URL(fallbackLink.href, window.location.origin).searchParams.get("v");
+          if (v && v.length === 11) return v;
         } catch {}
+      }
+
+      // 4. Miniplayer thumbnail image URL
+      const imgs = mini.querySelectorAll<HTMLImageElement>("img[src*='/vi/']");
+      for (const img of Array.from(imgs)) {
+        const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+        if (m && m[1]) return m[1];
       }
     }
   }
@@ -2906,25 +2956,6 @@ function extractFastSongInfo(videoId: string | null): any {
   };
 }
 
-function isMiniplayerActive(): boolean {
-  const isWatchUrl =
-    window.location.href.includes("/watch") &&
-    window.location.href.includes("v=");
-  if (isWatchUrl) return false;
-
-  const mini = document.querySelector("ytd-miniplayer");
-  if (!mini) return false;
-
-  const hasActive = mini.hasAttribute("active");
-  const isVisible =
-    (mini as HTMLElement).offsetParent !== null ||
-    window.getComputedStyle(mini).display !== "none";
-  const hasVideo =
-    !!mini.querySelector("video") || !!document.querySelector("video");
-
-  return (hasActive || isVisible) && hasVideo;
-}
-
 function ensureMiniCompanion() {
   const showMiniCompanion = useAppStore.getState().showMiniCompanion ?? true;
   if (!showMiniCompanion) {
@@ -3035,10 +3066,89 @@ function checkAndManageMiniCompanion() {
   }
 }
 
+function getMiniplayerDOMVideoId(): string | null {
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return null;
+
+  // 0. If MediaSession matches miniplayer title, its artwork videoId is 100% genuine!
+  const miniTitleEl = mini.querySelector<HTMLElement>(
+    ".ytp-title-link, #video-title, .info-bar [class*='title'], .info-bar"
+  );
+  const miniTitle = miniTitleEl?.innerText?.trim();
+  if (
+    miniTitle &&
+    "mediaSession" in navigator &&
+    navigator.mediaSession.metadata?.title &&
+    navigator.mediaSession.metadata?.artwork
+  ) {
+    const msTitle = navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const mTitle = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (msTitle.length > 0 && mTitle.length > 0 && (msTitle.includes(mTitle.slice(0, 6)) || mTitle.includes(msTitle.slice(0, 6)))) {
+      const arts = navigator.mediaSession.metadata.artwork;
+      for (let i = arts.length - 1; i >= 0; i--) {
+        const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+        if (m && m[1]) return m[1];
+      }
+    }
+  }
+
+  // 1. Check movie_player internal video_id first (instant engine state)
+  try {
+    const player = (mini.querySelector("#movie_player") || document.getElementById("movie_player")) as any;
+    if (
+      player &&
+      !player.closest?.("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")
+    ) {
+      const playerV = player?.getVideoData?.()?.video_id;
+      if (playerV && playerV.length === 11) return playerV;
+    }
+  } catch {}
+
+  // 2. Selected playlist queue item in miniplayer
+  const selItem = mini.querySelector<HTMLAnchorElement>(
+    "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']",
+  );
+  if (selItem?.href) {
+    try {
+      const v = new URL(selItem.href, window.location.origin).searchParams.get("v");
+      if (v && v.length === 11) return v;
+    } catch {}
+  }
+
+  // 3. YouTube HTML5 player title link (specifically inside player chrome)
+  const titleLink = mini.querySelector<HTMLAnchorElement>(
+    ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
+  );
+  if (titleLink?.href) {
+    try {
+      const v = new URL(titleLink.href, window.location.origin).searchParams.get("v");
+      if (v && v.length === 11) return v;
+    } catch {}
+  }
+
+  // 4. Any watch link inside the miniplayer (card title, expand button, etc.)
+  const watchLinks = mini.querySelectorAll<HTMLAnchorElement>("a[href*='watch?v=']");
+  for (const link of Array.from(watchLinks)) {
+    try {
+      const v = new URL(link.href, window.location.origin).searchParams.get("v");
+      if (v && v.length === 11) return v;
+    } catch {}
+  }
+
+  // 5. Miniplayer thumbnail image URL
+  const imgs = mini.querySelectorAll<HTMLImageElement>("img[src*='/vi/']");
+  for (const img of Array.from(imgs)) {
+    const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+    if (m && m[1]) return m[1];
+  }
+
+  return null;
+}
+
 function checkMiniplayerSongChange() {
   if (!isMiniplayerActive()) return;
 
-  // Check Ad state in miniplayer
+  // 1. Ad check first!
   const isAd = isYouTubeAdPlaying();
   if (isAd !== lastMiniplayerAdState) {
     lastMiniplayerAdState = isAd;
@@ -3048,6 +3158,7 @@ function checkMiniplayerSongChange() {
         isLoading: true,
         headerText: "Ad in progress...",
       });
+      return;
     } else {
       // Ad finished, fetch real track
       setTimeout(() => {
@@ -3061,11 +3172,43 @@ function checkMiniplayerSongChange() {
 
   if (isAd) return;
 
-  const info = window.getSongInfoFromPage?.();
-  if (!info || !info.title) return;
+  // 2. Strong Dual-Ownership Guard: If the active video in miniplayer DOM matches the store's songInfo,
+  // do NOT re-scrape while idle or paused on the same video (unless artist was unknown and needs resolution)!
+  const domVideoId = getMiniplayerDOMVideoId();
+  const currentStore = useAppStore.getState();
+  if (
+    domVideoId &&
+    domVideoId === currentStore.songInfo?.videoId &&
+    currentStore.songInfo?.artist &&
+    currentStore.songInfo.artist !== "Unknown Artist"
+  ) {
+    if (videoEventListeners) {
+      const live = getActiveMediaVideoElement();
+      if (live && live !== currentTimerVideoElement) {
+        videoEventListeners.rebindVideo(live);
+      }
+    }
+    return; // ⛔ STOP: Verified matching track. Zero redundant scraping while paused/idle!
+  }
 
-  // Guard: Validate against the actual miniplayer video to prevent hover-preview
-  // thumbnails from changing the lyrics.
+  // Avoid redundant scraping if we are already actively loading lyrics for this video
+  if (
+    domVideoId &&
+    domVideoId === currentStore.songInfo?.videoId &&
+    currentStore.isLoading
+  ) {
+    return;
+  }
+
+  const info = window.getSongInfoFromPage?.();
+  if (!info || !info.title || info.isAd) return;
+
+  // Guard: If info videoId differs from the actual miniplayer DOM videoId, reject hover-preview video!
+  if (domVideoId && info.videoId && domVideoId !== info.videoId) {
+    log("[Lyrical Miniplayer] 🛡️ Ignored hover preview video:", info.videoId, "Active miniplayer DOM:", domVideoId);
+    return;
+  }
+
   try {
     const activeMiniVid = getCurrentVideoId(info);
     if (activeMiniVid && info.videoId && activeMiniVid !== info.videoId) {
@@ -3090,22 +3233,65 @@ function checkMiniplayerSongChange() {
   }
 }
 
-function setupMiniplayerObserver() {
-  if (miniplayerObserver) return;
-  const target =
-    document.querySelector("ytd-miniplayer") ||
-    document.querySelector("ytd-app") ||
-    document.body;
+let currentObservedMiniplayer: HTMLElement | null = null;
+let ytdAppLifecycleObserver: MutationObserver | null = null;
 
-  if (target) {
-    miniplayerObserver = new MutationObserver(() => {
-      checkAndManageMiniCompanion();
-      checkMiniplayerSongChange();
+function bindMiniplayerObserver(mini: HTMLElement) {
+  if (currentObservedMiniplayer === mini && miniplayerObserver) return;
+  if (miniplayerObserver) {
+    miniplayerObserver.disconnect();
+    miniplayerObserver = null;
+  }
+  currentObservedMiniplayer = mini;
+  miniplayerObserver = new MutationObserver(() => {
+    checkAndManageMiniCompanion();
+    checkMiniplayerSongChange();
+  });
+  miniplayerObserver.observe(mini, {
+    attributes: true,
+    attributeFilter: ["active", "hidden", "class", "style"],
+  });
+}
+
+function setupMiniplayerObserver() {
+  const mini = document.querySelector<HTMLElement>("ytd-miniplayer");
+  if (mini) {
+    bindMiniplayerObserver(mini);
+  }
+
+  // Hook directly into the miniplayer video element events for instant song transitions
+  const attachVideoHooks = () => {
+    const video =
+      document.querySelector<HTMLVideoElement>("ytd-miniplayer video") ||
+      document.querySelector<HTMLVideoElement>("#movie_player video");
+    if (video && !(video as any)._hasLyricalMiniHooks) {
+      (video as any)._hasLyricalMiniHooks = true;
+      const onFastSongTransition = () => {
+        checkAndManageMiniCompanion();
+        checkMiniplayerSongChange();
+      };
+      video.addEventListener("loadstart", onFastSongTransition);
+      video.addEventListener("loadedmetadata", onFastSongTransition);
+      video.addEventListener("playing", onFastSongTransition);
+      video.addEventListener("emptied", onFastSongTransition);
+    }
+  };
+
+  attachVideoHooks();
+
+  if (!ytdAppLifecycleObserver) {
+    const appTarget = document.querySelector("ytd-app") || document.body;
+    ytdAppLifecycleObserver = new MutationObserver(() => {
+      const currentMini = document.querySelector<HTMLElement>("ytd-miniplayer");
+      if (currentMini && currentMini !== currentObservedMiniplayer) {
+        bindMiniplayerObserver(currentMini);
+        attachVideoHooks();
+        checkAndManageMiniCompanion();
+        checkMiniplayerSongChange();
+      }
     });
 
-    miniplayerObserver.observe(target, {
-      attributes: true,
-      attributeFilter: ["active", "hidden", "style", "class"],
+    ytdAppLifecycleObserver.observe(appTarget, {
       childList: true,
       subtree: true,
     });
@@ -3113,10 +3299,15 @@ function setupMiniplayerObserver() {
 
   if (!miniplayerPollInterval) {
     miniplayerPollInterval = setInterval(() => {
+      attachVideoHooks();
       checkAndManageMiniCompanion();
       checkMiniplayerSongChange();
     }, 800);
   }
+
+  // Immediate check on setup instead of waiting for timer
+  checkAndManageMiniCompanion();
+  checkMiniplayerSongChange();
 }
 
 function findVisibleSecondaryColumn() {
@@ -3469,7 +3660,7 @@ function injectIntoYouTube() {
       const info = window.getSongInfoFromPage?.();
       if (info?.title) {
         log("[Lyrical Panel] Song detected after injection:", info.title);
-        autoFetchLyrics(info);
+        autoFetchLyrics(info, { force: true });
       } else {
         // First-load metadata on YouTube can be late; hydrate panel info lazily.
         hydrateSongInfoWithRetry(8, 350).catch(() => {});
@@ -4677,7 +4868,7 @@ function resetLyricsState(reason = "", options: any = {}) {
   suppressNextOffsetPersistence = true;
   userSongOffset = 0;
   currentSyncOffset = PLATFORM_OFFSET;
-  useAppStore.getState().setOffset(PLATFORM_OFFSET, 0);
+  useAppStore.getState().setOffset(PLATFORM_OFFSET, 0, false);
   suppressNextOffsetPersistence = false;
 
   // UI Reset via Store
@@ -6048,8 +6239,14 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   }
 
   // Same video → check if store needs restoring (e.g. navigation from miniplayer to watch page)
+  const appState = useAppStore.getState();
+  const currentStoreVideoId = appState.lyricsVideoId || appState.songInfo?.videoId;
+  const isStoreForCurrentVideo =
+    !currentStoreVideoId || currentStoreVideoId === videoId;
+
   if (
     videoId === lastFetchedVideoId &&
+    isStoreForCurrentVideo &&
     !options.force &&
     options.reason !== "source changed" &&
     options.reason !== "ad finished"
@@ -6145,6 +6342,31 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   }
 
   updateSongInfo(songInfo);
+
+  // Early offset lookup: pre-load any saved offset for this video/source so MiniCompanion
+  // has the verified offset before lyrics arrive
+  const earlySource = useAppStore.getState().lyricsSource;
+  const earlySongKey = getSongOffsetKey(videoId, earlySource);
+  const earlyLegacyKey = getLegacySongOffsetKey(videoId);
+  getStoredSongOffset(earlySongKey, earlyLegacyKey)
+    .then((earlyOffset) => {
+      if (isStaleFetch()) return;
+      if (earlyOffset !== null && Math.abs(earlyOffset) > 0.05) {
+        const isRich = isRichsyncSourceId(earlySource, useAppStore.getState().lyrics);
+        const appState = useAppStore.getState();
+        const trim = isRich
+          ? appState.richsyncOffsetTrim || 0
+          : appState.lineOffsetTrim || 0;
+        const syncOffset = PLATFORM_OFFSET + earlyOffset + trim;
+        userSongOffset = earlyOffset;
+        currentSyncOffset = syncOffset;
+        useAppStore.getState().setOffset(syncOffset, earlyOffset, true);
+        log("[Lyrical] ⚡ Early stored offset applied:", earlyOffset);
+      } else if (earlySource === "captions") {
+        useAppStore.getState().setOffset(0, 0, true);
+      }
+    })
+    .catch(() => {});
 
   if (useAppStore.getState().isAdPlaying || isYouTubeAdPlaying()) {
     log(
@@ -6749,6 +6971,7 @@ async function autoProcessLyrics() {
   }
 
   const processSessionId = ++activeProcessSessionId;
+  const initialSourceId = storeState.lyricsSource;
   const targetVideoId =
     getCurrentVideoId(currentSongInfo) ||
     (storeState.songInfo as any)?.videoId ||
@@ -6942,24 +7165,32 @@ async function autoProcessLyrics() {
     romanizedData = resolvedRomanized;
     translatedData = resolvedTranslated;
 
-    log("Updating store with processed lyrics");
-    updateSecondaryLyricsState({
-      romanizedLyrics: romanizedData || [],
-      translatedLyrics: translatedData || [],
-      isProcessingLyrics: false,
-    });
+    const liveSourceId = useAppStore.getState().lyricsSource;
+    if (liveSourceId === initialSourceId) {
+      log("Updating store with processed lyrics");
+      updateSecondaryLyricsState({
+        romanizedLyrics: romanizedData || [],
+        translatedLyrics: translatedData || [],
+        isProcessingLyrics: false,
+      });
+    } else {
+      log(
+        `[Lyrical Panel] Source switched from ${initialSourceId} to ${liveSourceId} during processing; skipping live store overwrite`,
+      );
+    }
 
-    // Persist processed translations and romanizations into persistent cache
-    const currentSourceId = useAppStore.getState().lyricsSource;
-    if (currentSongInfo && currentSourceId && lyricsToProcess?.length) {
-      persistLyricsCache(currentSongInfo, currentSourceId, lyricsToProcess, {
+    // Persist processed translations and romanizations into persistent cache for the source it was processed for
+    if (currentSongInfo && initialSourceId && lyricsToProcess?.length) {
+      persistLyricsCache(currentSongInfo, initialSourceId, lyricsToProcess, {
         romanizedLyrics: romanizedData || [],
         translatedLyrics: translatedData || [],
       });
     }
   } catch (err) {
     if (isStaleProcess()) return;
-    useAppStore.getState().setIsProcessingLyrics(false);
+    if (useAppStore.getState().lyricsSource === initialSourceId) {
+      useAppStore.getState().setIsProcessingLyrics(false);
+    }
     if (err.message?.includes("Extension context invalidated")) return;
     console.error("[Lyrical Panel] Auto-process error:", err);
   }
@@ -6968,20 +7199,33 @@ async function autoProcessLyrics() {
 /**
  * Stop the lyrics sync timer
  */
+let currentTimerVideoElement: HTMLVideoElement | null = null;
+let videoEventListeners: {
+  onTimeUpdate: (e?: Event) => void;
+  onPause: () => void;
+  onPlay: () => void;
+  rebindVideo: (newVideo: HTMLVideoElement) => void;
+} | null = null;
+let activeTimerSessionId = 0;
+
+/**
+ * Stop the lyrics sync timer
+ */
 function stopLyricsTimer() {
   activeTimerSessionId++;
   if (videoEventListeners) {
-    const video = getActiveMediaVideoElement();
-    if (video && videoEventListeners.onTimeUpdate) {
-      video.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
+    const v = currentTimerVideoElement || getActiveMediaVideoElement();
+    if (v && videoEventListeners.onTimeUpdate) {
+      v.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
       if (videoEventListeners.onPause) {
-        video.removeEventListener("pause", videoEventListeners.onPause);
+        v.removeEventListener("pause", videoEventListeners.onPause);
       }
       if (videoEventListeners.onPlay) {
-        video.removeEventListener("play", videoEventListeners.onPlay);
+        v.removeEventListener("play", videoEventListeners.onPlay);
       }
     }
     videoEventListeners = null;
+    currentTimerVideoElement = null;
   }
 }
 
@@ -7000,10 +7244,6 @@ function findLyricIndex(lyrics, time) {
   return high;
 }
 
-// Start lyrics sync with video timeupdate event (industry-standard)
-let videoEventListeners = null;
-let activeTimerSessionId = 0;
-
 async function startLyricsTimer(lyrics) {
   const timerSessionId = ++activeTimerSessionId;
   if (!Array.isArray(lyrics) || lyrics.length === 0) {
@@ -7018,9 +7258,14 @@ async function startLyricsTimer(lyrics) {
 
   // Clean up old listeners
   if (videoEventListeners) {
-    video.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
-    video.removeEventListener("pause", videoEventListeners.onPause);
-    video.removeEventListener("play", videoEventListeners.onPlay);
+    const oldV = currentTimerVideoElement || video;
+    if (oldV) {
+      oldV.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
+      oldV.removeEventListener("pause", videoEventListeners.onPause);
+      oldV.removeEventListener("play", videoEventListeners.onPlay);
+    }
+    videoEventListeners = null;
+    currentTimerVideoElement = null;
   }
 
   let currentIndex = -1;
@@ -7037,7 +7282,7 @@ async function startLyricsTimer(lyrics) {
     // YouTube Captions are already natively timed to the video!
     userSongOffset = 0;
     currentSyncOffset = 0;
-    useAppStore.getState().setOffset(0, 0);
+    useAppStore.getState().setOffset(0, 0, true);
     log(
       "[Lyrical Panel] 📝 YouTube Captions active: offset locked to 0.0s (native video sync)",
     );
@@ -7159,7 +7404,7 @@ async function startLyricsTimer(lyrics) {
     currentSyncOffset = PLATFORM_OFFSET + userSongOffset + trim;
 
     // 🔥 SYNC REACT STORE WITH STORED OFFSET (This updates the slider UI)
-    useAppStore.getState().setOffset(currentSyncOffset, userSongOffset);
+    useAppStore.getState().setOffset(currentSyncOffset, userSongOffset, true);
 
     log(
       "[Lyrical Panel] 📝 Loaded saved offset for song/source:",
@@ -7189,59 +7434,79 @@ async function startLyricsTimer(lyrics) {
     })),
   );
 
-  const onTimeUpdate = () => {
+  let activeTimerVideo: HTMLVideoElement | null = video;
+  currentTimerVideoElement = video;
+
+  const onTimeUpdate = (e?: Event) => {
     // 🔒 SYNC ENGINE: Unified subtractive timing (video.currentTime - currentSyncOffset)
     // matching ArchiveTuneStrategy (Musixmatch-richsync), ImperativeBetterStrategy (Portato), and KaraokeOverlay
+    let v = (e?.currentTarget as HTMLVideoElement) || activeTimerVideo;
+    if (!v || !v.isConnected || (v.paused && isMiniplayerActive())) {
+      const live = getActiveMediaVideoElement();
+      if (live && live !== v) {
+        v = live;
+        if (videoEventListeners) {
+          videoEventListeners.rebindVideo(live);
+        }
+      }
+    }
+    if (!v) return;
+
     const adjustedTime = isCaptions
-      ? video.currentTime -
+      ? v.currentTime -
         userSongOffset -
         (useAppStore.getState().lineOffsetTrim || 0)
-      : video.currentTime - currentSyncOffset;
+      : v.currentTime - currentSyncOffset;
     const newIndex = findLyricIndex(lyrics, adjustedTime);
 
-    if (newIndex !== currentIndex && newIndex >= 0) {
+    if (newIndex !== currentIndex) {
       currentIndex = newIndex;
-      log(
-        "[Lyrical Panel] Line",
-        currentIndex,
-        "at",
-        adjustedTime.toFixed(1),
-        "s:",
-        lyrics[currentIndex].text,
-      );
+      if (newIndex >= 0) {
+        log(
+          "[Lyrical Panel] Line",
+          currentIndex,
+          "at",
+          adjustedTime.toFixed(1),
+          "s:",
+          lyrics[currentIndex].text,
+        );
 
-      const {
-        romanizedLyrics = [],
-        translatedLyrics = [],
-        isRomanizationEnabled: romanizationEnabled,
-        isTranslateEnabled: translationEnabled,
-      } = useAppStore.getState();
-      const romanizedEntry: any = romanizedLyrics?.[currentIndex] || {};
-      const translatedEntry: any = translatedLyrics?.[currentIndex] || {};
-      const romanizedLine =
-        romanizedEntry.romanized || romanizedEntry.romanization || "";
-      const translatedLine =
-        translatedEntry.translated || translatedEntry.translation || "";
+        const {
+          romanizedLyrics = [],
+          translatedLyrics = [],
+          isRomanizationEnabled: romanizationEnabled,
+          isTranslateEnabled: translationEnabled,
+        } = useAppStore.getState();
+        const romanizedEntry: any = romanizedLyrics?.[currentIndex] || {};
+        const translatedEntry: any = translatedLyrics?.[currentIndex] || {};
+        const romanizedLine =
+          romanizedEntry.romanized || romanizedEntry.romanization || "";
+        const translatedLine =
+          translatedEntry.translated || translatedEntry.translation || "";
 
-      log(
-        "[Lyrical Panel] Line",
-        currentIndex,
-        "romanized:",
-        romanizedLine || "(empty)",
-        "| enabled:",
-        Boolean(romanizationEnabled),
-      );
-      log(
-        "[Lyrical Panel] Line",
-        currentIndex,
-        "translated:",
-        translatedLine || "(empty)",
-        "| enabled:",
-        Boolean(translationEnabled),
-      );
+        log(
+          "[Lyrical Panel] Line",
+          currentIndex,
+          "romanized:",
+          romanizedLine || "(empty)",
+          "| enabled:",
+          Boolean(romanizationEnabled),
+        );
+        log(
+          "[Lyrical Panel] Line",
+          currentIndex,
+          "translated:",
+          translatedLine || "(empty)",
+          "| enabled:",
+          Boolean(translationEnabled),
+        );
 
-      // Update store directly
-      useAppStore.getState().setActiveIndex(currentIndex);
+        // Update store directly
+        useAppStore.getState().setActiveIndex(currentIndex);
+      } else {
+        // Intro / pre-roll before first lyric line
+        useAppStore.getState().setActiveIndex(-1);
+      }
     }
   };
 
@@ -7253,8 +7518,25 @@ async function startLyricsTimer(lyrics) {
     log("Video playing - sync active");
   };
 
-  // Store listeners for cleanup
-  videoEventListeners = { onTimeUpdate, onPause, onPlay };
+  // Store listeners for cleanup and background player rebinding
+  videoEventListeners = {
+    onTimeUpdate,
+    onPause,
+    onPlay,
+    rebindVideo: (newVideo: HTMLVideoElement) => {
+      if (currentTimerVideoElement && currentTimerVideoElement !== newVideo) {
+        currentTimerVideoElement.removeEventListener("timeupdate", onTimeUpdate);
+        currentTimerVideoElement.removeEventListener("pause", onPause);
+        currentTimerVideoElement.removeEventListener("play", onPlay);
+      }
+      activeTimerVideo = newVideo;
+      currentTimerVideoElement = newVideo;
+      newVideo.addEventListener("timeupdate", onTimeUpdate);
+      newVideo.addEventListener("pause", onPause);
+      newVideo.addEventListener("play", onPlay);
+      onTimeUpdate();
+    },
+  };
 
   // Attach event listeners (no more setInterval!)
   video.addEventListener("timeupdate", onTimeUpdate);
@@ -7361,6 +7643,15 @@ async function initialize() {
         setupMiniplayerObserver();
         return;
       } else {
+        if (miniplayerPollInterval) {
+          clearInterval(miniplayerPollInterval);
+          miniplayerPollInterval = null;
+        }
+        if (miniplayerObserver) {
+          miniplayerObserver.disconnect();
+          miniplayerObserver = null;
+          currentObservedMiniplayer = null;
+        }
         removeMiniCompanion();
       }
 
@@ -7368,10 +7659,13 @@ async function initialize() {
       const currentUrlVideoId = new URLSearchParams(window.location.search).get(
         "v",
       );
+      const navState = useAppStore.getState();
+      const currentStoreVideoId = navState.lyricsVideoId || navState.songInfo?.videoId;
       const isSameVideo = Boolean(
         currentUrlVideoId &&
         lastFetchedVideoId &&
-        currentUrlVideoId === lastFetchedVideoId,
+        currentUrlVideoId === lastFetchedVideoId &&
+        (!currentStoreVideoId || currentStoreVideoId === currentUrlVideoId),
       );
 
       if (isSameVideo) {
@@ -7661,16 +7955,19 @@ if (document.readyState === "loading") {
   initialize();
 }
 
-// Pause sync when tab is hidden (save CPU)
-document.addEventListener("visibilitychange", () => {
-  const video = document.querySelector("video");
-  if (document.hidden && videoEventListeners && video) {
-    log("Tab hidden - removing event listeners");
-    video.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
-    video.removeEventListener("pause", videoEventListeners.onPause);
-    video.removeEventListener("play", videoEventListeners.onPlay);
-  } else if (!document.hidden && fetchedLyrics && video) {
-    log("Tab visible - resuming sync");
-    startLyricsTimer(fetchedLyrics);
+// Ensure sync stays active in background, and rebind/resync when tab or window regains focus or visibility
+function handleVisibilityOrFocusReturn() {
+  if (document.hidden) return;
+  const activeVideo = getActiveMediaVideoElement();
+  if (!activeVideo || !videoEventListeners) return;
+
+  if (currentTimerVideoElement && currentTimerVideoElement !== activeVideo) {
+    log("[Lyrical Sync] Active video player swapped in background, rebinding...");
+    videoEventListeners.rebindVideo(activeVideo);
+  } else {
+    videoEventListeners.onTimeUpdate();
   }
-});
+}
+
+document.addEventListener("visibilitychange", handleVisibilityOrFocusReturn);
+window.addEventListener("focus", handleVisibilityOrFocusReturn);

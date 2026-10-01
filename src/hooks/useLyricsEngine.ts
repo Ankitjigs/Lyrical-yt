@@ -117,8 +117,17 @@ export function useLyricsEngine(
 
   // Reset strategy when lyrics ACTUALLY change (not just re-references with same data)
   useEffect(() => {
-    const strategyChanged = prevStrategyRef.current !== strategy;
+    const oldStrategy = prevStrategyRef.current;
+    const strategyChanged = oldStrategy !== strategy;
     prevStrategyRef.current = strategy;
+
+    if (strategyChanged && oldStrategy && typeof oldStrategy.reset === "function") {
+      try {
+        oldStrategy.reset();
+      } catch (e) {
+        // ignore cleanup error
+      }
+    }
 
     // Build a fingerprint from lyrics content to detect real changes
     const fingerprint = buildLyricsFingerprint(
@@ -171,7 +180,14 @@ export function useLyricsEngine(
       setCurrentLineIndex(-1);
       setIsUserScrolled(false);
     }
-  }, [extraData, rawLyrics, strategy]);
+  }, [
+    extraData,
+    rawLyrics,
+    strategy,
+    strategyName,
+    resetKey,
+    lyricsAnimationStyle,
+  ]);
 
   // Refs for strategies to access
   const refs = useRef<any>({ containerRef });
@@ -179,14 +195,25 @@ export function useLyricsEngine(
     refs.current.containerRef = containerRef;
 
     // Imperative Mount Lifecycle: ensure container is mounted whenever DOM or lyrics are ready
-    if (strategy && strategy.mount && containerRef.current && syncedLyrics && syncedLyrics.length > 0) {
+    if (
+      strategy &&
+      strategy.mount &&
+      containerRef.current &&
+      syncedLyrics &&
+      syncedLyrics.length > 0
+    ) {
       const rootId = strategy.rootId || "blyrics-root";
       const root = containerRef.current.querySelector(`#${rootId}`);
-      const isAlreadyMounted =
-        root &&
-        ((strategy.container && root.contains(strategy.container)) ||
-          root.firstElementChild !== null);
+      const isAlreadyMounted = Boolean(
+        root && strategy.container && root.contains(strategy.container),
+      );
       if (root && !isAlreadyMounted) {
+        if (
+          root.firstElementChild &&
+          (!strategy.container || !root.contains(strategy.container))
+        ) {
+          root.innerHTML = "";
+        }
         strategy.mount(containerRef.current, syncedLyrics, extraData);
       }
     }

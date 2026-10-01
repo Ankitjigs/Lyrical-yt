@@ -208,6 +208,7 @@ interface LyricalSettingsState {
 interface LyricalAppState extends LyricalSettingsState {
   songInfo: SongInfo | null;
   lyrics: LyricalLyricLine[];
+  lyricsVideoId: string | null;
   lyricsSource: LyricsSourceId | null;
   availableLyricsSources: LyricsSourceId[];
   lyricsLanguage: string | null;
@@ -227,6 +228,7 @@ interface LyricalAppState extends LyricalSettingsState {
     lyrics: LyricalLyricLine[],
     source?: LyricsSourceId | null,
     language?: string | null,
+    videoId?: string | null,
   ) => void;
   setAvailableLyricsSources: (sources: LyricsSourceId[]) => void;
   addAvailableLyricsSource: (source: LyricsSourceId | null | undefined) => void;
@@ -242,7 +244,9 @@ interface LyricalAppState extends LyricalSettingsState {
   setIsProcessingLyrics: (processing: boolean) => void;
   setHeaderText: (text: string) => void;
   setIsAdPlaying: (isAd: boolean) => void;
-  setOffset: (offset: number, userOffset: number) => void;
+  isOffsetResolved: boolean;
+  setIsOffsetResolved: (resolved: boolean) => void;
+  setOffset: (offset: number, userOffset: number, isResolved?: boolean) => void;
   setRichsyncOffsetTrim: (val: number) => void;
   setLineOffsetTrim: (val: number) => void;
   setSettings: (settings: Partial<LyricalSettingsState>) => void;
@@ -294,6 +298,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   // Content Data
   songInfo: null, // { title, artist, artwork }
   lyrics: [], // Array of { time, text }
+  lyricsVideoId: null,
   lyricsSource: null, // 'better_lyrics', 'musixmatch', 'musixmatch-richsync', 'lyrical', 'captions', 'lrclib'
   availableLyricsSources: [],
   availableCaptionTracks: [],
@@ -315,6 +320,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
   // Settings (synced from storage/events)
   offset: -0.45, // Platform constant + user offset
   userOffset: 0,
+  isOffsetResolved: false,
   isRomanizationEnabled: false,
   isTranslateEnabled: false,
   showRomanizedLyrics: false,
@@ -363,17 +369,22 @@ export const useAppStore = create<LyricalAppState>((set) => ({
 
   // Actions
   setSongInfo: (info) => set({ songInfo: info }),
-  setLyrics: (lyrics, source, language) => {
+  setLyrics: (lyrics, source, language, videoId) => {
     const isCaptions = source === "captions";
     const songInfo = useAppStore.getState().songInfo;
     const songDuration = Number(songInfo?.duration || 0);
     const cleanLyrics = isCaptions ? lyrics : normalizeLyricsPipeline(lyrics, songDuration, songInfo);
+    const effectiveVideoId =
+      videoId ||
+      songInfo?.videoId ||
+      null;
 
     set((state) => {
       const nextSource = source || null;
       const isDifferentSource = nextSource !== state.lyricsSource;
       return {
         lyrics: cleanLyrics,
+        lyricsVideoId: effectiveVideoId,
         lyricsSource: nextSource,
         lyricsLanguage: language || null,
         isLoading: false,
@@ -426,7 +437,9 @@ export const useAppStore = create<LyricalAppState>((set) => ({
     set({ isProcessingLyrics: processing }),
   setHeaderText: (text) => set({ headerText: text }),
   setIsAdPlaying: (isAd) => set({ isAdPlaying: isAd }),
-  setOffset: (offset, userOffset) => set({ offset, userOffset }),
+  setOffset: (offset, userOffset, isResolved = true) =>
+    set({ offset, userOffset, isOffsetResolved: isResolved }),
+  setIsOffsetResolved: (resolved) => set({ isOffsetResolved: resolved }),
   setRichsyncOffsetTrim: (val) => {
     const trimmed = Math.round(val * 10) / 10;
     set((state) => {
@@ -692,6 +705,7 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       isVocalMuted: false,
       songInfo: null,
       lyrics: [],
+      lyricsVideoId: null,
       lyricsSource: null,
       availableLyricsSources: [],
       availableCaptionTracks: [],
@@ -707,12 +721,14 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       lyricsLanguage: null,
       offset: -0.45,
       userOffset: 0,
+      isOffsetResolved: false,
     });
   },
 
   resetLyricsOnly: () =>
     set({
       lyrics: [],
+      lyricsVideoId: null,
       lyricsSource: null,
       availableLyricsSources: [],
       availableCaptionTracks: [],
@@ -727,11 +743,13 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       lyricsLanguage: null,
       offset: -0.45,
       userOffset: 0,
+      isOffsetResolved: false,
     }),
 
   clearLyricsForNewTrack: () =>
     set({
       lyrics: [],
+      lyricsVideoId: null,
       lyricsSource: null,
       availableLyricsSources: [],
       availableCaptionTracks: [],
@@ -746,5 +764,6 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       lyricsLanguage: null,
       offset: -0.45,
       userOffset: 0,
+      isOffsetResolved: false,
     }),
 }));
