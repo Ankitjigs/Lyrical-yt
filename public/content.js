@@ -21,14 +21,13 @@ window.getSongInfoFromPage = function () {
             // NOT on watch page (e.g. youtube.com home feed, search, subscriptions)
             // The ONLY legitimate music source is the active YouTube miniplayer!
             const mini = document.querySelector('ytd-miniplayer');
+            const hasMiniVideo = Boolean(mini?.querySelector('video'));
             const isMiniActive = mini && (
                 mini.hasAttribute('active') ||
-                mini.offsetParent !== null ||
-                window.getComputedStyle(mini).display !== 'none'
+                (hasMiniVideo && (mini.offsetParent !== null || window.getComputedStyle(mini).display !== 'none'))
             );
 
             if (!isMiniActive) {
-                console.log('[Content] Non-watch page without active miniplayer song - ignoring hover previews');
                 return null;
             }
 
@@ -128,7 +127,6 @@ window.getSongInfoFromPage = function () {
             }
 
             if (!videoId) {
-                console.log('[Content] Active miniplayer without identifiable videoId - skipping');
                 return null;
             }
         }
@@ -282,7 +280,6 @@ function getMediaSessionMetadata() {
             };
         }
 
-        console.log("MediaSession detected:", { title, artist, album, artworkUrl });
 
         return {
             title: title || "",

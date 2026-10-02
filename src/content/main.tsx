@@ -2486,17 +2486,14 @@ function isMiniplayerActive(): boolean {
     window.location.href.includes("v=");
   if (isWatchUrl) return false;
 
-  const mini = document.querySelector("ytd-miniplayer");
+  const mini = document.querySelector<HTMLElement>("ytd-miniplayer");
   if (!mini) return false;
 
   const hasActive = mini.hasAttribute("active");
-  const isVisible =
-    (mini as HTMLElement).offsetParent !== null ||
-    window.getComputedStyle(mini).display !== "none";
-  const hasVideo =
-    !!mini.querySelector("video") || !!document.querySelector("video");
+  const hasMiniVideo = Boolean(mini.querySelector("video"));
+  const isHidden = mini.hasAttribute("hidden") || mini.style.display === "none";
 
-  return (hasActive || isVisible) && hasVideo;
+  return (hasActive || hasMiniVideo) && !isHidden;
 }
 
 // VIDEO-DRIVEN INJECTION - The only stable signal on YouTube first load
@@ -3239,6 +3236,23 @@ function checkMiniplayerSongChange() {
 let currentObservedMiniplayer: HTMLElement | null = null;
 let ytdAppLifecycleObserver: MutationObserver | null = null;
 
+function teardownMiniplayerTimersAndObservers() {
+  if (miniplayerPollInterval) {
+    clearInterval(miniplayerPollInterval);
+    miniplayerPollInterval = null;
+  }
+  if (miniplayerObserver) {
+    miniplayerObserver.disconnect();
+    miniplayerObserver = null;
+    currentObservedMiniplayer = null;
+  }
+  if (ytdAppLifecycleObserver) {
+    ytdAppLifecycleObserver.disconnect();
+    ytdAppLifecycleObserver = null;
+  }
+  removeMiniCompanion();
+}
+
 function bindMiniplayerObserver(mini: HTMLElement) {
   if (currentObservedMiniplayer === mini && miniplayerObserver) return;
   if (miniplayerObserver) {
@@ -3257,6 +3271,14 @@ function bindMiniplayerObserver(mini: HTMLElement) {
 }
 
 function setupMiniplayerObserver() {
+  const isWatch =
+    window.location.href.includes("/watch") &&
+    window.location.href.includes("v=");
+  if (isWatch) {
+    teardownMiniplayerTimersAndObservers();
+    return;
+  }
+
   const mini = document.querySelector<HTMLElement>("ytd-miniplayer");
   if (mini) {
     bindMiniplayerObserver(mini);
@@ -7677,6 +7699,7 @@ async function initialize() {
           log(
             "[Lyrical Panel] First navigation IS a watch page - treating as first-load",
           );
+          teardownMiniplayerTimersAndObservers();
           waitForStableVideo(() => {
             injectIntoYouTube();
             const info = window.getSongInfoFromPage?.();
@@ -7704,16 +7727,7 @@ async function initialize() {
         setupMiniplayerObserver();
         return;
       } else {
-        if (miniplayerPollInterval) {
-          clearInterval(miniplayerPollInterval);
-          miniplayerPollInterval = null;
-        }
-        if (miniplayerObserver) {
-          miniplayerObserver.disconnect();
-          miniplayerObserver = null;
-          currentObservedMiniplayer = null;
-        }
-        removeMiniCompanion();
+        teardownMiniplayerTimersAndObservers();
       }
 
       // ✅ On watch page → check if same video
@@ -7897,6 +7911,7 @@ async function initialize() {
       window.location.href.includes("v=");
     log("isWatchUrl:", isWatchUrl);
     if (isWatchUrl) {
+      teardownMiniplayerTimersAndObservers();
       log(
         "[Lyrical Panel] First-load watch URL detected, waiting for stable video...",
       );
