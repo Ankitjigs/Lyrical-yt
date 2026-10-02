@@ -72,7 +72,11 @@ window.getSongInfoFromPage = function () {
                 if (!msInfo.artwork && videoId) {
                     msInfo.artwork = getYouTubeArtworkFromPage(videoId);
                 }
-                console.log('[Content] Verified MediaSession for miniplayer:', msInfo);
+                const trackKey = (videoId || '') + '_' + (msInfo.title || '') + '_' + (msInfo.artist || '');
+                if (window._lyricalLastVerifiedMiniTrack !== trackKey) {
+                    window._lyricalLastVerifiedMiniTrack = trackKey;
+                    console.log('[Content] Verified MediaSession for miniplayer:', msInfo);
+                }
                 return msInfo;
             }
 

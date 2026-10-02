@@ -411,7 +411,15 @@ export default function LyricsDock({
               onClick={(e) => {
                 e.stopPropagation();
                 if (!canOpenMenu) return;
-                setIsSourceMenuOpen((prev) => !prev);
+                setIsSourceMenuOpen((prev) => {
+                  const next = !prev;
+                  if (next) {
+                    window.dispatchEvent(
+                      new CustomEvent("lyrical-ensure-caption-tracks"),
+                    );
+                  }
+                  return next;
+                });
               }}
               aria-label="Current lyrics source picker"
               aria-expanded={isSourceMenuOpen}

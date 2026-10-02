@@ -364,6 +364,7 @@ function isMiniplayerActive(): boolean {
   return mini.hasAttribute("active") || (mini as HTMLElement).offsetWidth > 0;
 }
 
+
 function getActiveMediaVideoElement(): HTMLVideoElement | null {
   if (isMiniplayerActive()) {
     const miniVideo = document.querySelector<HTMLVideoElement>("ytd-miniplayer video");
@@ -542,10 +543,21 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
       tick();
     };
-    const onSeekOrTimeUpdate = () => {
+    const onSeek = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       tick();
-      if (isPlaying(currentVideo) && !rafId) {
+      if (isPlaying(currentVideo)) {
         startTick();
+      }
+    };
+
+    const onTimeUpdate = () => {
+      // Fallback: while playing, RAF is already ticking at 60 FPS; do not duplicate RAF callbacks.
+      if (!isPlaying(currentVideo) || !rafId) {
+        tick();
       }
     };
 
@@ -555,9 +567,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       v.addEventListener("playing", onPlay);
       v.addEventListener("pause", onPauseOrEnded);
       v.addEventListener("ended", onPauseOrEnded);
-      v.addEventListener("seeked", onSeekOrTimeUpdate);
-      v.addEventListener("seeking", onSeekOrTimeUpdate);
-      v.addEventListener("timeupdate", onSeekOrTimeUpdate);
+      v.addEventListener("seeked", onSeek);
+      v.addEventListener("seeking", onSeek);
+      v.addEventListener("timeupdate", onTimeUpdate);
     };
 
     const detachListeners = (v: HTMLVideoElement | null) => {
@@ -566,9 +578,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       v.removeEventListener("playing", onPlay);
       v.removeEventListener("pause", onPauseOrEnded);
       v.removeEventListener("ended", onPauseOrEnded);
-      v.removeEventListener("seeked", onSeekOrTimeUpdate);
-      v.removeEventListener("seeking", onSeekOrTimeUpdate);
-      v.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+      v.removeEventListener("seeked", onSeek);
+      v.removeEventListener("seeking", onSeek);
+      v.removeEventListener("timeupdate", onTimeUpdate);
     };
 
     currentVideo = updateActiveVideo();
@@ -579,9 +591,13 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     }
 
     const onPlayerSwap = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       updateActiveVideo();
       tick();
-      if (isPlaying(currentVideo) && !rafId) {
+      if (isPlaying(currentVideo)) {
         startTick();
       }
     };
@@ -606,7 +622,18 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     const EARLY_PREPARE_S = 0.35;
     const time = Math.max(0, currentTime);
 
-    const firstLineTime = Number(lyrics[0]?.time ?? 0);
+    const firstLine = lyrics[0];
+    const firstLineTime = Number(firstLine?.time ?? 0);
+    // If lyrics haven't been normalized with an intro instrumental break yet,
+    // and the first vocal line starts > 4.5s into the track, do NOT activate line 0 yet!
+    if (
+      firstLineTime >= 4.5 &&
+      !isInstrumentalLine(firstLine) &&
+      time < firstLineTime - EARLY_PREPARE_S
+    ) {
+      return -1;
+    }
+
     if (time < firstLineTime - EARLY_PREPARE_S) {
       return 0;
     }
@@ -951,18 +978,24 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   };
 
   // Instrumental animation (liquid wave fill with white, matching KaraokeLyricDisplay / CollapsedLyricsPreview)
-  const renderInstrumental = () => {
-    const lineStart = Number(activeLine?.time ?? 0);
+  const renderInstrumental = (fallbackStart?: number, fallbackDuration?: number) => {
+    const lineStart =
+      fallbackStart !== undefined ? fallbackStart : Number(activeLine?.time ?? 0);
     const nextLine = lyrics?.[activeLineIndex + 1];
     const lineDuration = Math.max(
-      Number(
-        activeLine?.duration ?? (nextLine ? nextLine.time - lineStart : 3),
-      ),
+      fallbackDuration !== undefined
+        ? fallbackDuration
+        : Number(
+            activeLine?.duration ?? (nextLine ? nextLine.time - lineStart : 3),
+          ),
       0.5,
     );
     const lineEnd = lineStart + lineDuration;
     let progress = 0;
-    if (currentTime >= lineEnd) {
+    // Readiness gate: while offset is not resolved, hold liquid at 0%
+    if (!isOffsetResolved) {
+      progress = 0;
+    } else if (currentTime >= lineEnd) {
       progress = 1;
     } else if (currentTime >= lineStart) {
       progress = Math.min(
@@ -987,7 +1020,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
         : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
 
-    const clipId = `mini-inst-clip-${activeLineIndex}`;
+    const clipId = `mini-inst-clip-${activeLineIndex < 0 ? "intro" : activeLineIndex}`;
 
     return (
       <div
@@ -1027,6 +1060,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   // Single lyrics line with swipe (better-lyrics) or archivetune animation
   const renderSingleLineLyrics = () => {
     if (!activeLine || activeLineIndex < 0) {
+      if (lyrics && lyrics.length > 0) {
+        const firstVocalTime = Number(lyrics[0]?.time ?? 0);
+        return renderInstrumental(0, Math.max(firstVocalTime, 3));
+      }
       return null;
     }
 

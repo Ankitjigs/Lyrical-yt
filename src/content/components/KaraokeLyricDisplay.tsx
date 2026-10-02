@@ -5,6 +5,7 @@ import {
   isInstrumentalLine,
   INSTRUMENTAL_NOTE_PATH,
 } from "../../modules/lyrics/lyricsNormalizer";
+import { useAppStore } from "../store";
 
 interface KaraokeLyricDisplayProps {
   lyrics: LyricalLyricLine[];
@@ -195,6 +196,7 @@ export default function KaraokeLyricDisplay({
   fontSize = "medium",
   containerStyle,
 }: KaraokeLyricDisplayProps) {
+  const isOffsetResolved = useAppStore((state) => state.isOffsetResolved);
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(true);
 
@@ -320,13 +322,17 @@ export default function KaraokeLyricDisplay({
       );
       const lineEnd = lineStart + lineDuration;
       let progress = 0;
-      if (currentTime >= lineEnd) {
+      if (!isOffsetResolved) {
+        progress = 0;
+      } else if (currentTime >= lineEnd) {
         progress = 1;
       } else if (currentTime >= lineStart) {
         progress = Math.min(
           1,
           Math.max(0, (currentTime - lineStart) / lineDuration),
         );
+      } else {
+        progress = 0;
       }
 
       // Liquid level: at progress 0, Y = 22.5 (below note bottom at 21)

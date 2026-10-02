@@ -2743,82 +2743,8 @@ function getCurrentVideoId(songInfo?: any): string | null {
     } catch {}
   } else {
     // On non-watch page (home feed, etc.), check miniplayer!
-    const mini = document.querySelector("ytd-miniplayer");
-    if (mini) {
-      // 0. If MediaSession matches miniplayer title, its artwork videoId is 100% genuine!
-      const miniTitleEl = mini.querySelector<HTMLElement>(
-        ".ytp-title-link, #video-title, .info-bar [class*='title'], .info-bar"
-      );
-      const miniTitle = miniTitleEl?.innerText?.trim();
-      if (
-        miniTitle &&
-        "mediaSession" in navigator &&
-        navigator.mediaSession.metadata?.title &&
-        navigator.mediaSession.metadata?.artwork
-      ) {
-        const msTitle = navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "");
-        const mTitle = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (msTitle.length > 0 && mTitle.length > 0 && (msTitle.includes(mTitle.slice(0, 6)) || mTitle.includes(msTitle.slice(0, 6)))) {
-          const arts = navigator.mediaSession.metadata.artwork;
-          for (let i = arts.length - 1; i >= 0; i--) {
-            const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-            if (m && m[1]) return m[1];
-          }
-        }
-      }
-
-      // 1. Check movie_player internal video_id
-      try {
-        const player = (mini.querySelector("#movie_player") || document.getElementById("movie_player")) as any;
-        if (
-          player &&
-          !player.closest?.("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")
-        ) {
-          const playerV = player?.getVideoData?.()?.video_id;
-          if (playerV && playerV.length === 11) return playerV;
-        }
-      } catch {}
-
-      // 1. Selected playlist queue item inside miniplayer
-      const selItem = mini.querySelector<HTMLAnchorElement>(
-        "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']",
-      );
-      if (selItem?.href) {
-        try {
-          const v = new URL(selItem.href, window.location.origin).searchParams.get("v");
-          if (v && v.length === 11) return v;
-        } catch {}
-      }
-
-      // 2. The playing video title link inside the HTML5 video player chrome
-      const titleLink = mini.querySelector<HTMLAnchorElement>(
-        ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
-      );
-      if (titleLink?.href) {
-        try {
-          const v = new URL(titleLink.href, window.location.origin).searchParams.get("v");
-          if (v && v.length === 11) return v;
-        } catch {}
-      }
-
-      // 3. Fallback: info-bar or any watch link in miniplayer
-      const fallbackLink = mini.querySelector<HTMLAnchorElement>(
-        ".info-bar a[href*='watch?v='], .metadata a[href*='watch?v='], a[href*='watch?v=']",
-      );
-      if (fallbackLink?.href) {
-        try {
-          const v = new URL(fallbackLink.href, window.location.origin).searchParams.get("v");
-          if (v && v.length === 11) return v;
-        } catch {}
-      }
-
-      // 4. Miniplayer thumbnail image URL
-      const imgs = mini.querySelectorAll<HTMLImageElement>("img[src*='/vi/']");
-      for (const img of Array.from(imgs)) {
-        const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-        if (m && m[1]) return m[1];
-      }
-    }
+    const miniVid = getMiniplayerDOMVideoId();
+    if (miniVid) return miniVid;
   }
 
   if (songInfo?.videoId) return songInfo.videoId;
@@ -3067,57 +2993,50 @@ function checkAndManageMiniCompanion() {
 }
 
 function getMiniplayerDOMVideoId(): string | null {
-  const mini = document.querySelector("ytd-miniplayer");
+  const mini = document.querySelector<HTMLElement>("ytd-miniplayer");
   if (!mini) return null;
 
-  // 0. If MediaSession matches miniplayer title, its artwork videoId is 100% genuine!
-  const miniTitleEl = mini.querySelector<HTMLElement>(
-    ".ytp-title-link, #video-title, .info-bar [class*='title'], .info-bar"
-  );
-  const miniTitle = miniTitleEl?.innerText?.trim();
-  if (
-    miniTitle &&
-    "mediaSession" in navigator &&
-    navigator.mediaSession.metadata?.title &&
-    navigator.mediaSession.metadata?.artwork
-  ) {
-    const msTitle = navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const mTitle = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
-    if (msTitle.length > 0 && mTitle.length > 0 && (msTitle.includes(mTitle.slice(0, 6)) || mTitle.includes(msTitle.slice(0, 6)))) {
-      const arts = navigator.mediaSession.metadata.artwork;
-      for (let i = arts.length - 1; i >= 0; i--) {
-        const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-        if (m && m[1]) return m[1];
+  // 0. High-accuracy MediaSession check:
+  // If MediaSession artwork video ID exists in the miniplayer (playlist link, thumbnail, etc.),
+  // it is 100% verified to be the active miniplayer track!
+  if ("mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+    const arts = navigator.mediaSession.metadata.artwork;
+    for (let i = arts.length - 1; i >= 0; i--) {
+      const m = arts[i]?.src?.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+      if (m && m[1]) {
+        const msVid = m[1];
+        // Confirm this videoId actually belongs to the miniplayer (and is not an external preview)
+        if (
+          mini.querySelector(`a[href*='${msVid}'], img[src*='${msVid}']`) ||
+          (navigator.mediaSession.metadata.title &&
+            mini.innerText.toLowerCase().replace(/[^a-z0-9]/g, "").includes(
+              navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6)
+            ))
+        ) {
+          return msVid;
+        }
       }
     }
   }
 
-  // 1. Check movie_player internal video_id first (instant engine state)
-  try {
-    const player = (mini.querySelector("#movie_player") || document.getElementById("movie_player")) as any;
-    if (
-      player &&
-      !player.closest?.("ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview")
-    ) {
-      const playerV = player?.getVideoData?.()?.video_id;
-      if (playerV && playerV.length === 11) return playerV;
-    }
-  } catch {}
-
-  // 2. Selected playlist queue item in miniplayer
-  const selItem = mini.querySelector<HTMLAnchorElement>(
-    "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], [aria-selected='true'] a[href*='watch?v='], .selected a[href*='watch?v=']",
+  // 1. Check for now-playing / selected playlist item in miniplayer queue
+  const activeQueueItem = mini.querySelector<HTMLAnchorElement>(
+    "ytd-playlist-panel-video-renderer[selected] a[href*='watch?v='], " +
+    "ytd-playlist-panel-video-renderer[aria-selected='true'] a[href*='watch?v='], " +
+    "ytd-playlist-panel-video-renderer.selected a[href*='watch?v='], " +
+    "ytd-playlist-panel-video-renderer:has(ytd-thumbnail-overlay-now-playing-renderer) a[href*='watch?v='], " +
+    "ytd-playlist-panel-video-renderer:has([aria-label*='Playing']) a[href*='watch?v=']"
   );
-  if (selItem?.href) {
+  if (activeQueueItem?.href) {
     try {
-      const v = new URL(selItem.href, window.location.origin).searchParams.get("v");
+      const v = new URL(activeQueueItem.href, window.location.origin).searchParams.get("v");
       if (v && v.length === 11) return v;
     } catch {}
   }
 
-  // 3. YouTube HTML5 player title link (specifically inside player chrome)
+  // 2. YouTube HTML5 player title link (specifically inside player chrome)
   const titleLink = mini.querySelector<HTMLAnchorElement>(
-    ".ytp-title-link[href*='watch?v='], a.ytp-title-link",
+    ".ytp-title-link[href*='watch?v=']"
   );
   if (titleLink?.href) {
     try {
@@ -3126,20 +3045,25 @@ function getMiniplayerDOMVideoId(): string | null {
     } catch {}
   }
 
-  // 4. Any watch link inside the miniplayer (card title, expand button, etc.)
-  const watchLinks = mini.querySelectorAll<HTMLAnchorElement>("a[href*='watch?v=']");
-  for (const link of Array.from(watchLinks)) {
-    try {
-      const v = new URL(link.href, window.location.origin).searchParams.get("v");
-      if (v && v.length === 11) return v;
-    } catch {}
+  // 3. Fallback: If only 1 watch link exists or if single-video miniplayer (not playlist queue)
+  const isPlaylist = Boolean(mini.querySelector("ytd-playlist-panel-renderer, #playlist-action-menu"));
+  if (!isPlaylist) {
+    const watchLink = mini.querySelector<HTMLAnchorElement>("a[href*='watch?v=']");
+    if (watchLink?.href) {
+      try {
+        const v = new URL(watchLink.href, window.location.origin).searchParams.get("v");
+        if (v && v.length === 11) return v;
+      } catch {}
+    }
   }
 
-  // 5. Miniplayer thumbnail image URL
-  const imgs = mini.querySelectorAll<HTMLImageElement>("img[src*='/vi/']");
-  for (const img of Array.from(imgs)) {
-    const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-    if (m && m[1]) return m[1];
+  // 4. Miniplayer thumbnail image URL (only if not a playlist queue or only 1 thumbnail)
+  if (!isPlaylist) {
+    const imgs = mini.querySelectorAll<HTMLImageElement>("img[src*='/vi/']");
+    for (const img of Array.from(imgs)) {
+      const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+      if (m && m[1]) return m[1];
+    }
   }
 
   return null;
@@ -3198,6 +3122,32 @@ function checkMiniplayerSongChange() {
     currentStore.isLoading
   ) {
     return;
+  }
+
+  // 3. Fast MediaSession Match Guard:
+  // If MediaSession title matches current store song and lyrics are already loaded / loading,
+  // do NOT re-scrape the page every tick.
+  const msTitle = "mediaSession" in navigator ? navigator.mediaSession.metadata?.title : null;
+  if (
+    msTitle &&
+    currentStore.songInfo?.title &&
+    (currentStore.lyrics?.length > 0 || currentStore.isLoading)
+  ) {
+    const normMs = msTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normStore = currentStore.songInfo.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (
+      normMs.length > 0 &&
+      normStore.length > 0 &&
+      (normMs.includes(normStore.slice(0, 6)) || normStore.includes(normMs.slice(0, 6)))
+    ) {
+      if (videoEventListeners) {
+        const live = getActiveMediaVideoElement();
+        if (live && live !== currentTimerVideoElement) {
+          videoEventListeners.rebindVideo(live);
+        }
+      }
+      return; // ⛔ STOP: Same song still playing in MediaSession.
+    }
   }
 
   const info = window.getSongInfoFromPage?.();
@@ -4897,6 +4847,10 @@ function resetLyricsState(reason = "", options: any = {}) {
     if (s.lyrics?.length > 0 || s.activeIndex !== -1 || !s.isLoading) {
       s.clearLyricsForNewTrack();
     }
+    // If caption tracks are already in memory for this video, immediately re-sync them into the store!
+    if (availableCaptions && availableCaptions.length > 0) {
+      void syncAvailableCaptionTracks(availableCaptions);
+    }
   }
 }
 
@@ -5314,6 +5268,53 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
     });
   });
 
+  const commitTracksToStore = () => {
+    const finalTracks = Array.from(trackDedupMap.values());
+    const nameCounts = new Map<string, number>();
+    finalTracks.forEach((t) => {
+      nameCounts.set(t.name, (nameCounts.get(t.name) || 0) + 1);
+    });
+    finalTracks.forEach((t) => {
+      if ((nameCounts.get(t.name) || 0) > 1) {
+        const isUs =
+          t.vssId.toLowerCase().includes("us") ||
+          t.languageCode.toLowerCase().includes("us");
+        if (isUs && t.name.toLowerCase().startsWith("english")) {
+          t.name = t.isAsr ? "English-US (auto)" : "English-US";
+        } else if (t.languageCode && t.languageCode.includes("-")) {
+          const reg = t.languageCode.split("-")[1].toUpperCase();
+          t.name = `${t.name}-${reg}`;
+        }
+      }
+    });
+    if (finalTracks.length > 0) {
+      const currentSelected = useAppStore.getState().selectedCaptionTrackId;
+      const currentLabel = (
+        useAppStore.getState().captionLanguageLabel || ""
+      ).toLowerCase();
+      let activeId = currentSelected;
+      if (!activeId || !finalTracks.some((t) => t.vssId === activeId)) {
+        const match =
+          finalTracks.find(
+            (t) =>
+              currentLabel.includes(t.languageCode.toLowerCase()) && !t.isAsr,
+          ) ||
+          finalTracks.find((t) =>
+            currentLabel.includes(t.languageCode.toLowerCase()),
+          ) ||
+          finalTracks[0];
+        activeId = match?.vssId || null;
+      }
+      useAppStore.setState({
+        availableCaptionTracks: finalTracks,
+        ...(activeId ? { selectedCaptionTrackId: activeId } : {}),
+      });
+    }
+  };
+
+  // ⚡ Phase 1: Immediately commit live tracks to the Zustand store synchronously!
+  commitTracksToStore();
+
   if (currentSongInfo && hasLocalStorageApi() && chrome?.storage?.local?.get) {
     try {
       const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
@@ -5321,6 +5322,7 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
         const stored: any = await chrome.storage.local.get([sourceKey]);
         const cachedTracks = stored?.[sourceKey]?.tracks;
         if (cachedTracks && typeof cachedTracks === "object") {
+          let hasNewCacheTracks = false;
           Object.values(cachedTracks).forEach((ct: any, idx: number) => {
             const rawLang = ct.language || "auto";
             const isAsr =
@@ -5367,54 +5369,16 @@ async function syncAvailableCaptionTracks(tracks: any[]) {
                   url: ct.url || "",
                   isAsr,
                 });
+                hasNewCacheTracks = true;
               }
             }
           });
+          if (hasNewCacheTracks) {
+            commitTracksToStore();
+          }
         }
       }
     } catch {}
-  }
-
-  const finalTracks = Array.from(trackDedupMap.values());
-  const nameCounts = new Map<string, number>();
-  finalTracks.forEach((t) => {
-    nameCounts.set(t.name, (nameCounts.get(t.name) || 0) + 1);
-  });
-  finalTracks.forEach((t) => {
-    if ((nameCounts.get(t.name) || 0) > 1) {
-      const isUs =
-        t.vssId.toLowerCase().includes("us") ||
-        t.languageCode.toLowerCase().includes("us");
-      if (isUs && t.name.toLowerCase().startsWith("english")) {
-        t.name = t.isAsr ? "English-US (auto)" : "English-US";
-      } else if (t.languageCode && t.languageCode.includes("-")) {
-        const reg = t.languageCode.split("-")[1].toUpperCase();
-        t.name = `${t.name}-${reg}`;
-      }
-    }
-  });
-  if (finalTracks.length > 0) {
-    const currentSelected = useAppStore.getState().selectedCaptionTrackId;
-    const currentLabel = (
-      useAppStore.getState().captionLanguageLabel || ""
-    ).toLowerCase();
-    let activeId = currentSelected;
-    if (!activeId || !finalTracks.some((t) => t.vssId === activeId)) {
-      const match =
-        finalTracks.find(
-          (t) =>
-            currentLabel.includes(t.languageCode.toLowerCase()) && !t.isAsr,
-        ) ||
-        finalTracks.find((t) =>
-          currentLabel.includes(t.languageCode.toLowerCase()),
-        ) ||
-        finalTracks[0];
-      activeId = match?.vssId || null;
-    }
-    useAppStore.setState({
-      availableCaptionTracks: finalTracks,
-      ...(activeId ? { selectedCaptionTrackId: activeId } : {}),
-    });
   }
 }
 
@@ -6351,7 +6315,7 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
   getStoredSongOffset(earlySongKey, earlyLegacyKey)
     .then((earlyOffset) => {
       if (isStaleFetch()) return;
-      if (earlyOffset !== null && Math.abs(earlyOffset) > 0.05) {
+      if (earlyOffset !== null) {
         const isRich = isRichsyncSourceId(earlySource, useAppStore.getState().lyrics);
         const appState = useAppStore.getState();
         const trim = isRich
@@ -6669,6 +6633,12 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       break;
   }
   useAppStore.setState({ isLoading: false });
+});
+
+window.addEventListener("lyrical-ensure-caption-tracks", () => {
+  if (availableCaptions && availableCaptions.length > 0) {
+    void syncAvailableCaptionTracks(availableCaptions);
+  }
 });
 
 window.addEventListener("lyrical-select-caption-track", async (event: any) => {

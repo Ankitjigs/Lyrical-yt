@@ -72,6 +72,7 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
   translatedLyrics,
 }) => {
   const lyricsAnimationStyle = useAppStore((state) => state.lyricsAnimationStyle);
+  const isOffsetResolved = useAppStore((state) => state.isOffsetResolved);
   const [collapsedPreviewTime, setCollapsedPreviewTime] = useState(0);
 
   useEffect(() => {
@@ -122,11 +123,22 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       }
       tick();
     };
-    const onSeekOrTimeUpdate = () => {
+    const onSeek = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       tick();
       const video = getVideo();
-      if (isPlaying(video) && !rafId) {
+      if (isPlaying(video)) {
         startTick();
+      }
+    };
+
+    const onTimeUpdate = () => {
+      const video = getVideo();
+      if (!isPlaying(video) || !rafId) {
+        tick();
       }
     };
 
@@ -140,9 +152,9 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     video?.addEventListener("playing", onPlay);
     video?.addEventListener("pause", onPauseOrEnded);
     video?.addEventListener("ended", onPauseOrEnded);
-    video?.addEventListener("seeked", onSeekOrTimeUpdate);
-    video?.addEventListener("seeking", onSeekOrTimeUpdate);
-    video?.addEventListener("timeupdate", onSeekOrTimeUpdate);
+    video?.addEventListener("seeked", onSeek);
+    video?.addEventListener("seeking", onSeek);
+    video?.addEventListener("timeupdate", onTimeUpdate);
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
@@ -151,9 +163,9 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       v?.removeEventListener("playing", onPlay);
       v?.removeEventListener("pause", onPauseOrEnded);
       v?.removeEventListener("ended", onPauseOrEnded);
-      v?.removeEventListener("seeked", onSeekOrTimeUpdate);
-      v?.removeEventListener("seeking", onSeekOrTimeUpdate);
-      v?.removeEventListener("timeupdate", onSeekOrTimeUpdate);
+      v?.removeEventListener("seeked", onSeek);
+      v?.removeEventListener("seeking", onSeek);
+      v?.removeEventListener("timeupdate", onTimeUpdate);
     };
   }, [lyrics, offset]);
 
@@ -165,7 +177,18 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     const EARLY_PREPARE_S = 0.35;
     const time = Math.max(0, collapsedPreviewTime);
 
-    const firstLineTime = Number(lyrics[0]?.time ?? 0);
+    const firstLine = lyrics[0];
+    const firstLineTime = Number(firstLine?.time ?? 0);
+    // If lyrics haven't been normalized with an intro instrumental break yet,
+    // and the first vocal line starts > 4.5s into the track, do NOT activate line 0 yet!
+    if (
+      firstLineTime >= 4.5 &&
+      !isInstrumentalLine(firstLine) &&
+      time < firstLineTime - EARLY_PREPARE_S
+    ) {
+      return -1;
+    }
+
     if (time < firstLineTime - EARLY_PREPARE_S) {
       return 0;
     }
@@ -205,10 +228,10 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       : "";
 
   const renderCollapsedOriginal = () => {
-    // Instrumental: show a single music note with rising liquid wave fill
-    if (isInstrumental) {
-      const lineStart = Number(collapsedLine?.time ?? 0);
-      const nextLine = lyrics?.[collapsedLineIndex + 1];
+    // Instrumental or pre-roll intro: show a single music note with rising liquid wave fill
+    if (isInstrumental || collapsedLineIndex < 0 || !collapsedLine) {
+      const lineStart = collapsedLineIndex < 0 ? 0 : Number(collapsedLine?.time ?? 0);
+      const nextLine = lyrics?.[collapsedLineIndex + 1] ?? lyrics?.[0];
       const lineDuration = Math.max(
         Number(
           collapsedLine?.duration ?? (nextLine ? nextLine.time - lineStart : 3),
@@ -217,13 +240,17 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       );
       const lineEnd = lineStart + lineDuration;
       let progress = 0;
-      if (collapsedPreviewTime >= lineEnd) {
+      if (!isOffsetResolved) {
+        progress = 0;
+      } else if (collapsedPreviewTime >= lineEnd) {
         progress = 1;
       } else if (collapsedPreviewTime >= lineStart) {
         progress = Math.min(
           1,
           Math.max(0, (collapsedPreviewTime - lineStart) / lineDuration),
         );
+      } else {
+        progress = 0;
       }
 
       const liquidY = 22.5 - progress * 20.5;
@@ -239,8 +266,8 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
           ? "M -2 25 L 26 25 L 26 26 L -2 26 Z"
           : `M -2 ${liquidY.toFixed(2)} Q 5 ${y1.toFixed(2)} 12 ${liquidY.toFixed(2)} Q 19 ${y2.toFixed(2)} 26 ${liquidY.toFixed(2)} L 26 26 L -2 26 Z`;
 
-      const clipId = `collapsed-inst-clip-${collapsedLineIndex}`;
-      const filterId = `collapsed-inst-glow-${collapsedLineIndex}`;
+      const clipId = `collapsed-inst-clip-${collapsedLineIndex < 0 ? "intro" : collapsedLineIndex}`;
+      const filterId = `collapsed-inst-glow-${collapsedLineIndex < 0 ? "intro" : collapsedLineIndex}`;
 
       return (
         <svg
