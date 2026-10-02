@@ -35,11 +35,27 @@ function removeCaptionHiderStyle() {
 function disableNativeCaptions() {
   try {
     const player = document.getElementById("movie_player");
-    if (!player) return;
-    // Turn off active caption track display without unloading the module
-    if (typeof player.setOption === "function") {
+    if (player && typeof player.setOption === "function") {
       player.setOption("captions", "track", {});
     }
+    const ccBtn = document.querySelector(".ytp-subtitles-button");
+    if (
+      ccBtn &&
+      (ccBtn.getAttribute("aria-pressed") === "true" ||
+        ccBtn.classList.contains("ytp-button-active"))
+    ) {
+      ccBtn.click();
+    }
+    setTimeout(() => {
+      const btn = document.querySelector(".ytp-subtitles-button");
+      if (
+        btn &&
+        (btn.getAttribute("aria-pressed") === "true" ||
+          btn.classList.contains("ytp-button-active"))
+      ) {
+        btn.click();
+      }
+    }, 120);
   } catch (err) {
     console.debug("[Lyrical Extractor] Could not disable native captions:", err);
   }
@@ -589,15 +605,9 @@ async function requestPlayerCaptionTrack(track) {
       ccBtn?.getAttribute("aria-pressed") === "true" ||
       ccBtn?.classList?.contains("ytp-button-active");
     userInitialTrack = player.getOption?.("captions", "track");
-    const hasValidTrack = Boolean(
-      userInitialTrack &&
-        ((userInitialTrack.languageCode && userInitialTrack.languageCode !== "") ||
-          (userInitialTrack.vss_id && userInitialTrack.vss_id !== "") ||
-          (typeof userInitialTrack === "object" &&
-            Object.keys(userInitialTrack).length > 0 &&
-            userInitialTrack.languageCode !== ""))
-    );
-    userHadCaptionsActive = isCcButtonActive || hasValidTrack;
+    // CRITICAL: Only consider native captions active if the user explicitly has the CC button active!
+    // player.getOption("captions", "track") always returns an internal default track even when CC is completely OFF!
+    userHadCaptionsActive = Boolean(isCcButtonActive);
   } catch {}
 
   try {
@@ -1434,10 +1444,12 @@ if (getVideoId()) {
 }
 
 window.addEventListener("message", async (event) => {
-  if (
-    event.source !== window ||
-    event.data?.type !== "LYRICAL_FETCH_TRACK_REQUEST"
-  )
+  if (event.source !== window) return;
+  if (event.data?.type === "LYRICAL_DISABLE_NATIVE_CAPTIONS") {
+    disableNativeCaptions();
+    return;
+  }
+  if (event.data?.type !== "LYRICAL_FETCH_TRACK_REQUEST")
     return;
   const { trackId, languageCode, isAsr, requestId } = event.data;
   try {

@@ -288,7 +288,7 @@ interface LyricalAppState extends LyricalSettingsState {
   ) => void;
   reset: () => void;
   resetLyricsOnly: () => void;
-  clearLyricsForNewTrack: () => void;
+  clearLyricsForNewTrack: (newSongInfo?: SongInfo | null) => void;
 }
 
 let karaokeCustomPosTimer: ReturnType<typeof setTimeout> | null = null;
@@ -746,8 +746,9 @@ export const useAppStore = create<LyricalAppState>((set) => ({
       isOffsetResolved: false,
     }),
 
-  clearLyricsForNewTrack: () =>
+  clearLyricsForNewTrack: (newSongInfo = null) =>
     set({
+      songInfo: newSongInfo,
       lyrics: [],
       lyricsVideoId: null,
       lyricsSource: null,
