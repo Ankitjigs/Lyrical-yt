@@ -457,6 +457,7 @@
   gap: 3.5px;
   min-width: 0;
   min-height: 0;
+  width: 100%;
   overflow: hidden;
   padding: 3px 8px 3px 2px;
 }

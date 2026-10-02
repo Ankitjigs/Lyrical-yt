@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { motion } from "motion/react";
 import type { LyricalLyricLine, SongInfo } from "../../types/lyrics";
 import {
   isInstrumentalLine,
@@ -19,11 +19,48 @@ interface KaraokeLyricDisplayProps {
   containerStyle?: React.CSSProperties;
 }
 
+function isMiniplayerActive(): boolean {
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return false;
+  return mini.hasAttribute("active") || (mini as HTMLElement).offsetWidth > 0;
+}
+
 function getActiveVideo(): HTMLVideoElement | null {
-  return (
-    document.querySelector<HTMLVideoElement>("#movie_player video") ||
-    document.querySelector<HTMLVideoElement>("video")
+  if (isMiniplayerActive()) {
+    const miniVideo = document.querySelector<HTMLVideoElement>(
+      "ytd-miniplayer video",
+    );
+    if (miniVideo && miniVideo.isConnected) return miniVideo;
+  }
+
+  const player = document.getElementById("movie_player");
+  if (
+    player &&
+    !player.closest("ytd-inline-preview-player, #inline-preview-player")
+  ) {
+    const v = player.querySelector<HTMLVideoElement>("video");
+    if (v && v.isConnected) return v;
+  }
+
+  const watchFlexyVideo = document.querySelector<HTMLVideoElement>(
+    "ytd-watch-flexy video",
   );
+  if (watchFlexyVideo && watchFlexyVideo.isConnected) return watchFlexyVideo;
+
+  const allVideos = Array.from(
+    document.querySelectorAll<HTMLVideoElement>("video"),
+  );
+  for (const v of allVideos) {
+    if (
+      !v.closest(
+        "ytd-inline-preview-player, #inline-preview-player, ytd-thumbnail, ytd-rich-grid-media, ytd-video-preview",
+      )
+    ) {
+      return v;
+    }
+  }
+
+  return document.querySelector("video");
 }
 
 export interface TimedKaraokeWord {
@@ -203,6 +240,7 @@ export default function KaraokeLyricDisplay({
       updatePlayState();
       video.addEventListener("timeupdate", onSync);
       video.addEventListener("seeked", onSync);
+      video.addEventListener("seeking", onSync);
       video.addEventListener("play", updatePlayState);
       video.addEventListener("pause", updatePlayState);
     }
@@ -212,6 +250,7 @@ export default function KaraokeLyricDisplay({
       if (video) {
         video.removeEventListener("timeupdate", onSync);
         video.removeEventListener("seeked", onSync);
+        video.removeEventListener("seeking", onSync);
         video.removeEventListener("play", updatePlayState);
         video.removeEventListener("pause", updatePlayState);
       }
@@ -223,7 +262,12 @@ export default function KaraokeLyricDisplay({
     if (!lyrics || lyrics.length === 0) return -1;
 
     const EARLY_PREPARE_S = 0.35;
-    const time = currentTime > 0 ? currentTime : 0;
+    const time = Math.max(0, currentTime);
+
+    const firstLineTime = Number(lyrics[0]?.time ?? 0);
+    if (time < firstLineTime - EARLY_PREPARE_S) {
+      return 0;
+    }
 
     for (let i = 0; i < lyrics.length; i++) {
       const line = lyrics[i];
@@ -231,7 +275,7 @@ export default function KaraokeLyricDisplay({
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
 
-      const effectiveStart = i === 0 ? 0 : lineStart - EARLY_PREPARE_S;
+      const effectiveStart = lineStart - EARLY_PREPARE_S;
       const effectiveEnd = nextStart - EARLY_PREPARE_S;
 
       if (time >= effectiveStart && time < effectiveEnd) {
@@ -239,7 +283,7 @@ export default function KaraokeLyricDisplay({
       }
     }
 
-    return Math.max(0, lyrics.length - 1);
+    return lyrics.length - 1;
   }, [lyrics, currentTime]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
@@ -375,7 +419,10 @@ export default function KaraokeLyricDisplay({
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
-    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+    const unmountDeadline = Math.max(
+      lineStart + 0.1,
+      nextLineTime - EARLY_PREPARE_S - 0.05,
+    );
 
     return wordObjects.map((wordObj, index) => {
       const start = wordObj.time;
@@ -383,8 +430,8 @@ export default function KaraokeLyricDisplay({
       const wordCurrentTime = currentTime + duration * 0.1;
 
       const calcEnd = start + duration;
-      const wordEnd = Math.min(calcEnd, unmountDeadline);
-      const effectiveDuration = Math.max(wordEnd - start, 0.1);
+      const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
+      const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
       const isPast = currentTime >= wordEnd || wordCurrentTime >= wordEnd;
       const isActive = wordCurrentTime >= start && !isPast;
@@ -462,7 +509,10 @@ export default function KaraokeLyricDisplay({
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
-    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+    const unmountDeadline = Math.max(
+      lineStart + 0.1,
+      nextLineTime - EARLY_PREPARE_S - 0.05,
+    );
 
     return wordObjects.map((wordObj, index) => {
       const start = wordObj.time;
@@ -470,8 +520,8 @@ export default function KaraokeLyricDisplay({
       const wordCurrentTime = currentTime + duration * 0.1;
 
       const calcEnd = start + duration;
-      const wordEnd = Math.min(calcEnd, unmountDeadline);
-      const effectiveDuration = Math.max(wordEnd - start, 0.1);
+      const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
+      const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
       const isPast = currentTime >= wordEnd || wordCurrentTime >= wordEnd;
       const isActive = wordCurrentTime >= start && !isPast;
@@ -516,56 +566,51 @@ export default function KaraokeLyricDisplay({
 
   return (
     <div className="lyrical-karaoke-container" style={containerStyle}>
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={`${activeLineIndex}-${activeLine?.time ?? 0}`}
-          className="lyrical-karaoke-line-wrapper"
-          data-paused={!isPlaying ? "true" : undefined}
-          initial={
-            reduceAnimations ? false : { opacity: 0, y: 18, scale: 0.96 }
-          }
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={
-            reduceAnimations
-              ? { opacity: 0 }
-              : { opacity: 0, y: -12, scale: 0.98 }
-          }
-          transition={
-            reduceAnimations
-              ? { duration: 0.15 }
-              : {
-                  type: "spring",
-                  stiffness: 340,
-                  damping: 24,
-                  mass: 0.75,
-                }
-          }
-        >
-          <div className="lyrical-karaoke-original">{renderOriginal()}</div>
+      <motion.div
+        key={`${activeLineIndex}-${activeLine?.time ?? 0}`}
+        className="lyrical-karaoke-line-wrapper"
+        data-paused={!isPlaying ? "true" : undefined}
+        initial={
+          reduceAnimations ? false : { opacity: 0, y: 16, scale: 0.98 }
+        }
+        animate={{
+          opacity: 1,
+          y: 0,
+          scale: 1,
+          transition: reduceAnimations
+            ? { duration: 0.15 }
+            : {
+                type: "spring",
+                stiffness: 340,
+                damping: 24,
+                mass: 0.75,
+              },
+        }}
+      >
+        <div className="lyrical-karaoke-original">{renderOriginal()}</div>
 
-          {!isInstrumental && activeRomanized && isRomanizationEnabled && (
-            <motion.div
-              className="lyrical-karaoke-romanized"
-              initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.18, delay: 0.04 }}
-            >
-              {renderRomanized()}
-            </motion.div>
-          )}
+        {!isInstrumental && activeRomanized && isRomanizationEnabled && (
+          <motion.div
+            className="lyrical-karaoke-romanized"
+            initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, delay: 0.04 }}
+          >
+            {renderRomanized()}
+          </motion.div>
+        )}
 
-          {!isInstrumental && activeTranslated && isTranslateEnabled && (
-            <motion.div
-              className="lyrical-karaoke-translated"
-              initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.18, delay: 0.07 }}
-            >
-              {activeTranslated}
-            </motion.div>
-          )}
-        </motion.div>
-      </AnimatePresence>
+        {!isInstrumental && activeTranslated && isTranslateEnabled && (
+          <motion.div
+            className="lyrical-karaoke-translated"
+            initial={reduceAnimations ? false : { opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.18, delay: 0.07 }}
+          >
+            {activeTranslated}
+          </motion.div>
+        )}
+      </motion.div>
     </div>
   );
 }

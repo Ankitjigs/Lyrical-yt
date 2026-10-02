@@ -129,7 +129,7 @@ const MiniProgressBar: React.FC = () => {
     };
 
     const isPlaying = (video: HTMLVideoElement | null) => {
-      return Boolean(video && !video.paused && !video.ended && video.readyState > 2);
+      return Boolean(video && !video.paused && !video.ended);
     };
 
     const loop = () => {
@@ -175,6 +175,7 @@ const MiniProgressBar: React.FC = () => {
     video?.addEventListener("pause", onPauseOrEnded);
     video?.addEventListener("ended", onPauseOrEnded);
     video?.addEventListener("seeked", onSeekOrTimeUpdate);
+    video?.addEventListener("seeking", onSeekOrTimeUpdate);
     video?.addEventListener("timeupdate", onSeekOrTimeUpdate);
 
     return () => {
@@ -185,6 +186,7 @@ const MiniProgressBar: React.FC = () => {
       v?.removeEventListener("pause", onPauseOrEnded);
       v?.removeEventListener("ended", onPauseOrEnded);
       v?.removeEventListener("seeked", onSeekOrTimeUpdate);
+      v?.removeEventListener("seeking", onSeekOrTimeUpdate);
       v?.removeEventListener("timeupdate", onSeekOrTimeUpdate);
     };
   }, []);
@@ -488,7 +490,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     let currentVideo: HTMLVideoElement | null = getActiveMediaVideoElement();
 
     const isPlaying = (video: HTMLVideoElement | null) => {
-      return Boolean(video && !video.paused && !video.ended && video.readyState >= 2);
+      return Boolean(video && !video.paused && !video.ended);
     };
 
     const updateActiveVideo = () => {
@@ -541,11 +543,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       tick();
     };
     const onSeekOrTimeUpdate = () => {
-      // If video is paused, update time immediately for scrubbing previews.
-      // If video is actively playing, RAF is already ticking at 60 FPS; do not duplicate RAF callbacks.
-      if (!isPlaying(currentVideo)) {
-        tick();
-      } else if (!rafId) {
+      tick();
+      if (isPlaying(currentVideo) && !rafId) {
         startTick();
       }
     };
@@ -557,6 +556,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       v.addEventListener("pause", onPauseOrEnded);
       v.addEventListener("ended", onPauseOrEnded);
       v.addEventListener("seeked", onSeekOrTimeUpdate);
+      v.addEventListener("seeking", onSeekOrTimeUpdate);
       v.addEventListener("timeupdate", onSeekOrTimeUpdate);
     };
 
@@ -567,6 +567,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       v.removeEventListener("pause", onPauseOrEnded);
       v.removeEventListener("ended", onPauseOrEnded);
       v.removeEventListener("seeked", onSeekOrTimeUpdate);
+      v.removeEventListener("seeking", onSeekOrTimeUpdate);
       v.removeEventListener("timeupdate", onSeekOrTimeUpdate);
     };
 
@@ -603,7 +604,12 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     if (!lyrics || lyrics.length === 0) return -1;
 
     const EARLY_PREPARE_S = 0.35;
-    const time = currentTime > 0 ? currentTime : 0;
+    const time = Math.max(0, currentTime);
+
+    const firstLineTime = Number(lyrics[0]?.time ?? 0);
+    if (time < firstLineTime - EARLY_PREPARE_S) {
+      return 0;
+    }
 
     for (let i = 0; i < lyrics.length; i++) {
       const line = lyrics[i];
@@ -611,7 +617,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
 
-      const effectiveStart = i === 0 ? 0 : lineStart - EARLY_PREPARE_S;
+      const effectiveStart = lineStart - EARLY_PREPARE_S;
       const effectiveEnd = nextStart - EARLY_PREPARE_S;
 
       if (time >= effectiveStart && time < effectiveEnd) {
@@ -619,7 +625,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       }
     }
 
-    return Math.max(0, lyrics.length - 1);
+    return lyrics.length - 1;
   }, [lyrics, currentTime]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
@@ -1110,7 +1116,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
-    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+    const unmountDeadline = Math.max(
+      lineStart + 0.1,
+      nextLineTime - EARLY_PREPARE_S - 0.05,
+    );
 
     return (
       <div
@@ -1138,8 +1147,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           const duration = Math.max(wordObj.duration, 0.08);
           const wordCurrentTime = currentTime + duration * 0.1;
           const calcEnd = start + duration;
-          const wordEnd = Math.min(calcEnd, unmountDeadline);
-          const effectiveDuration = Math.max(wordEnd - start, 0.1);
+          const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
+          const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
           const isPast =
             currentTime >= wordEnd || wordCurrentTime >= wordEnd;
@@ -1273,15 +1282,18 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
-    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+    const unmountDeadline = Math.max(
+      lineStart + 0.1,
+      nextLineTime - EARLY_PREPARE_S - 0.05,
+    );
 
     return wordObjects.map((wordObj, index) => {
       const start = wordObj.time;
       const duration = Math.max(wordObj.duration, 0.08);
       const wordCurrentTime = currentTime + duration * 0.1;
       const calcEnd = start + duration;
-      const wordEnd = Math.min(calcEnd, unmountDeadline);
-      const effectiveDuration = Math.max(wordEnd - start, 0.1);
+      const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
+      const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
       const isPast =
         currentTime >= wordEnd || wordCurrentTime >= wordEnd;
@@ -1925,27 +1937,25 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
               gap: "0px",
             }}
           >
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={`line-${activeLineIndex}`}
-                initial={
-                  reduceAnimations ? false : { opacity: 0, y: 8, scale: 0.98 }
-                }
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={
-                  reduceAnimations
-                    ? { opacity: 0 }
-                    : { opacity: 0, y: -8, scale: 0.98 }
-                }
-                transition={{
-                  duration: reduceAnimations ? 0 : 0.22,
+            <motion.div
+              key={`line-${activeLineIndex}`}
+              initial={
+                reduceAnimations ? false : { opacity: 0, y: 8, scale: 0.98 }
+              }
+              animate={{
+                opacity: 1,
+                y: 0,
+                scale: 1,
+                transition: {
+                  duration: reduceAnimations ? 0 : 0.20,
                   ease: [0.22, 1, 0.36, 1],
-                }}
-                style={{
-                  width: "100%",
-                  textAlign: "left",
-                }}
-              >
+                },
+              }}
+              style={{
+                width: "100%",
+                textAlign: "left",
+              }}
+            >
                 {/* Original lyrics line */}
                 <div
                   style={{
@@ -2005,7 +2015,6 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                   </div>
                 )}
               </motion.div>
-            </AnimatePresence>
           </div>
         ) : null}
         </motion.div>

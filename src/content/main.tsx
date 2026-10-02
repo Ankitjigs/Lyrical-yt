@@ -7217,6 +7217,8 @@ function stopLyricsTimer() {
     const v = currentTimerVideoElement || getActiveMediaVideoElement();
     if (v && videoEventListeners.onTimeUpdate) {
       v.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
+      v.removeEventListener("seeked", videoEventListeners.onTimeUpdate);
+      v.removeEventListener("seeking", videoEventListeners.onTimeUpdate);
       if (videoEventListeners.onPause) {
         v.removeEventListener("pause", videoEventListeners.onPause);
       }
@@ -7261,6 +7263,8 @@ async function startLyricsTimer(lyrics) {
     const oldV = currentTimerVideoElement || video;
     if (oldV) {
       oldV.removeEventListener("timeupdate", videoEventListeners.onTimeUpdate);
+      oldV.removeEventListener("seeked", videoEventListeners.onTimeUpdate);
+      oldV.removeEventListener("seeking", videoEventListeners.onTimeUpdate);
       oldV.removeEventListener("pause", videoEventListeners.onPause);
       oldV.removeEventListener("play", videoEventListeners.onPlay);
     }
@@ -7526,12 +7530,16 @@ async function startLyricsTimer(lyrics) {
     rebindVideo: (newVideo: HTMLVideoElement) => {
       if (currentTimerVideoElement && currentTimerVideoElement !== newVideo) {
         currentTimerVideoElement.removeEventListener("timeupdate", onTimeUpdate);
+        currentTimerVideoElement.removeEventListener("seeked", onTimeUpdate);
+        currentTimerVideoElement.removeEventListener("seeking", onTimeUpdate);
         currentTimerVideoElement.removeEventListener("pause", onPause);
         currentTimerVideoElement.removeEventListener("play", onPlay);
       }
       activeTimerVideo = newVideo;
       currentTimerVideoElement = newVideo;
       newVideo.addEventListener("timeupdate", onTimeUpdate);
+      newVideo.addEventListener("seeked", onTimeUpdate);
+      newVideo.addEventListener("seeking", onTimeUpdate);
       newVideo.addEventListener("pause", onPause);
       newVideo.addEventListener("play", onPlay);
       onTimeUpdate();
@@ -7540,6 +7548,8 @@ async function startLyricsTimer(lyrics) {
 
   // Attach event listeners (no more setInterval!)
   video.addEventListener("timeupdate", onTimeUpdate);
+  video.addEventListener("seeked", onTimeUpdate);
+  video.addEventListener("seeking", onTimeUpdate);
   video.addEventListener("pause", onPause);
   video.addEventListener("play", onPlay);
 
