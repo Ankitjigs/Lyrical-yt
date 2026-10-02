@@ -6,8 +6,12 @@ import { useShallow } from "zustand/react/shallow";
 import { getThemeCssVariables } from "../../themes";
 import {
   generateLineSyncedWords,
+  getLineTransitionLead,
   TimedKaraokeWord,
 } from "./KaraokeLyricDisplay";
+import SearchingVibeIcon from "./SearchingVibeIcons";
+import ShinyText from "./ShinyText";
+import { t } from "../../i18n";
 import {
   isInstrumentalLine,
   INSTRUMENTAL_NOTE_PATH,
@@ -414,6 +418,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     userOffset,
     isOffsetResolved,
     lyricsSource,
+    searchingIndicatorStyle,
   } = useAppStore(
     useShallow((state) => ({
       songInfo: state.songInfo,
@@ -441,6 +446,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       userOffset: state.userOffset,
       isOffsetResolved: state.isOffsetResolved,
       lyricsSource: state.lyricsSource,
+      searchingIndicatorStyle: state.searchingIndicatorStyle || "lofi",
     })),
   );
 
@@ -615,26 +621,24 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     };
   }, [lyrics, offset]);
 
-  // Active line calculation matching collapsedPreview and karaokeDisplay early transition (0.35s early)
+  // Active line calculation matching collapsedPreview and karaokeDisplay adaptive early transition
   const activeLineIndex = useMemo(() => {
     if (!lyrics || lyrics.length === 0) return -1;
 
-    const EARLY_PREPARE_S = 0.35;
     const time = Math.max(0, currentTime);
 
     const firstLine = lyrics[0];
     const firstLineTime = Number(firstLine?.time ?? 0);
-    // If lyrics haven't been normalized with an intro instrumental break yet,
-    // and the first vocal line starts > 4.5s into the track, do NOT activate line 0 yet!
+    const firstLead = getLineTransitionLead(0, firstLineTime);
     if (
       firstLineTime >= 4.5 &&
       !isInstrumentalLine(firstLine) &&
-      time < firstLineTime - EARLY_PREPARE_S
+      time < firstLineTime - firstLead
     ) {
       return -1;
     }
 
-    if (time < firstLineTime - EARLY_PREPARE_S) {
+    if (time < firstLineTime - firstLead) {
       return 0;
     }
 
@@ -644,8 +648,15 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
 
-      const effectiveStart = lineStart - EARLY_PREPARE_S;
-      const effectiveEnd = nextStart - EARLY_PREPARE_S;
+      const prevLine = lyrics[i - 1];
+      const prevStart = prevLine ? Number(prevLine.time ?? 0) : 0;
+      const startLead = getLineTransitionLead(prevStart, lineStart, prevLine?.parts);
+      const endLead = nextLine
+        ? getLineTransitionLead(lineStart, nextStart, line.parts)
+        : 0;
+
+      const effectiveStart = lineStart - startLead;
+      const effectiveEnd = nextStart - endLead;
 
       if (time >= effectiveStart && time < effectiveEnd) {
         return i;
@@ -1149,13 +1160,15 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     }
 
     const shouldInsertSpaces = /\s/.test(activeText);
-    const EARLY_PREPARE_S = 0.35;
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, activeLine?.parts)
+      : 0;
     const unmountDeadline = Math.max(
       lineStart + 0.1,
-      nextLineTime - EARLY_PREPARE_S - 0.05,
+      nextLineTime - endLead - 0.02,
     );
 
     return (
@@ -1187,12 +1200,13 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
           const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
+          const isLastWord = index === wordObjects.length - 1;
           const isPast =
             currentTime >= wordEnd || wordCurrentTime >= wordEnd;
           const isActive = wordCurrentTime >= start && !isPast;
 
           let progress = 0;
-          if (isPast) {
+          if (isPast || (isLastWord && nextLine && currentTime >= nextLineTime - endLead - 0.06)) {
             progress = 1;
           } else if (isActive) {
             progress = Math.min(
@@ -1319,9 +1333,12 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, activeLine?.parts)
+      : 0;
     const unmountDeadline = Math.max(
       lineStart + 0.1,
-      nextLineTime - EARLY_PREPARE_S - 0.05,
+      nextLineTime - endLead - 0.02,
     );
 
     return wordObjects.map((wordObj, index) => {
@@ -1332,12 +1349,13 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
       const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
+      const isLastWord = index === wordObjects.length - 1;
       const isPast =
         currentTime >= wordEnd || wordCurrentTime >= wordEnd;
       const isActive = wordCurrentTime >= start && !isPast;
 
       let progress = 0;
-      if (isPast) {
+      if (isPast || (isLastWord && nextLine && currentTime >= nextLineTime - endLead - 0.06)) {
         progress = 1;
       } else if (isActive) {
         progress = Math.min(
@@ -1974,86 +1992,152 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
               gap: "0px",
             }}
           >
-            <motion.div
-              key={`line-${activeLineIndex}`}
-              initial={
-                reduceAnimations ? false : { opacity: 0, y: 8, scale: 0.98 }
-              }
-              animate={{
-                opacity: 1,
-                y: 0,
-                scale: 1,
-                transition: {
-                  duration: reduceAnimations ? 0 : 0.20,
-                  ease: [0.22, 1, 0.36, 1],
-                },
-              }}
-              style={{
-                width: "100%",
-                textAlign: "left",
-              }}
-            >
-                {/* Original lyrics line */}
-                <div
+            {(() => {
+              const lineStart = Number(activeLine?.time ?? 0);
+              const nextLine = lyrics?.[activeLineIndex + 1];
+              const rawInterval = nextLine
+                ? Math.max(0.5, Number(nextLine.time) - lineStart)
+                : 3.5;
+              const isFastTempo = rawInterval < 1.2;
+
+              return (
+                <motion.div
+                  key={`line-${activeLineIndex}`}
+                  initial={
+                    reduceAnimations
+                      ? false
+                      : { opacity: 0, y: isFastTempo ? 4 : 8, scale: 0.98 }
+                  }
+                  animate={{
+                    opacity: 1,
+                    y: 0,
+                    scale: 1,
+                    transition: {
+                      duration: reduceAnimations
+                        ? 0
+                        : isFastTempo
+                        ? 0.12
+                        : 0.20,
+                      ease: [0.22, 1, 0.36, 1],
+                    },
+                  }}
                   style={{
-                    fontSize: "14px",
-                    fontWeight: "650",
-                    lineHeight: "1.4",
-                    minHeight: "28px",
-                    display: "flex",
-                    alignItems: "center",
+                    width: "100%",
+                    textAlign: "left",
                   }}
                 >
-                  {renderSingleLineLyrics()}
-                </div>
-
-                {/* Romanized sub-line */}
-                {activeRomanized && !isInstrumental && (
+                  {/* Original lyrics line */}
                   <div
                     style={{
-                      marginTop: "5px",
-                      fontSize: "11px",
-                      fontWeight: "550",
-                      lineHeight: "1.3",
-                      color: "var(--lyrical-romanized, #86efac)",
-                      width: "fit-content",
-                      maxWidth: "100%",
-                      padding: "1px 6px",
-                      border:
-                        "1px solid color-mix(in srgb, var(--lyrical-romanized, #86efac) 18%, transparent)",
-                      borderRadius: "5px",
-                      background:
-                        "color-mix(in srgb, var(--lyrical-romanized, #86efac) 10%, transparent)",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
+                      fontSize: "14px",
+                      fontWeight: "650",
+                      lineHeight: "1.4",
+                      minHeight: "28px",
+                      display: "flex",
+                      alignItems: "center",
                     }}
                   >
-                    {renderSingleLineRomanized()}
+                    {renderSingleLineLyrics()}
                   </div>
-                )}
 
-                {/* Translated sub-line */}
-                {activeTranslated && !isInstrumental && (
-                  <div
-                    style={{
-                      marginTop: "3px",
-                      fontSize: "11px",
-                      fontWeight: "500",
-                      lineHeight: "1.35",
-                      color:
-                        "var(--lyrical-translated, rgba(255, 255, 255, 0.65))",
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {activeTranslated}
-                  </div>
-                )}
-              </motion.div>
+                  {/* Romanized sub-line */}
+                  {activeRomanized && !isInstrumental && (
+                    <div
+                      style={{
+                        marginTop: "5px",
+                        fontSize: "11px",
+                        fontWeight: "550",
+                        lineHeight: "1.3",
+                        color: "var(--lyrical-romanized, #86efac)",
+                        width: "fit-content",
+                        maxWidth: "100%",
+                        padding: "1px 6px",
+                        border:
+                          "1px solid color-mix(in srgb, var(--lyrical-romanized, #86efac) 18%, transparent)",
+                        borderRadius: "5px",
+                        background:
+                          "color-mix(in srgb, var(--lyrical-romanized, #86efac) 10%, transparent)",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {renderSingleLineRomanized()}
+                    </div>
+                  )}
+
+                  {/* Translated sub-line */}
+                  {activeTranslated && !isInstrumental && (
+                    <div
+                      style={{
+                        marginTop: "3px",
+                        fontSize: "11px",
+                        fontWeight: "500",
+                        lineHeight: "1.35",
+                        color:
+                          "var(--lyrical-translated, rgba(255, 255, 255, 0.65))",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {activeTranslated}
+                    </div>
+                  )}
+                </motion.div>
+              );
+            })()}
           </div>
-        ) : null}
+        ) : isLoading || (headerText && headerText.toLowerCase().includes("search")) ? (
+          <div
+            style={{
+              padding: "10px 14px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              minHeight: "44px",
+              gap: searchingIndicatorStyle === "none" ? "0px" : "8px",
+              overflow: "hidden",
+              fontSize: "12px",
+              fontWeight: 550,
+            }}
+          >
+            {searchingIndicatorStyle !== "none" && (
+              <SearchingVibeIcon
+                vibe={searchingIndicatorStyle}
+                size={18}
+                reduceAnimations={reduceAnimations}
+              />
+            )}
+            <ShinyText
+              text={t("lyricsPanel_searching") || "Searching for lyrics..."}
+              disabled={reduceAnimations}
+              speed={2.4}
+              className="lyrical-searching-text"
+              color="var(--lyrical-text-secondary, rgba(255, 255, 255, 0.65))"
+              shineColor="var(--lyrical-text-primary, #ffffff)"
+              spread={115}
+            />
+          </div>
+        ) : (
+          <div
+            style={{
+              padding: "10px 14px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              minHeight: "44px",
+              overflow: "hidden",
+              fontSize: "12px",
+              color: "var(--lyrical-text-secondary, rgba(255, 255, 255, 0.65))",
+              fontWeight: 500,
+            }}
+          >
+            {headerText && !headerText.toLowerCase().includes("search")
+              ? headerText
+              : t("lyricsPanel_noLyrics") || "No lyrics found"}
+          </div>
+        )}
         </motion.div>
       </AnimatePresence>
     </div>

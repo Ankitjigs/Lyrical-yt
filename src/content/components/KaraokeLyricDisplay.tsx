@@ -72,6 +72,46 @@ export interface TimedKaraokeWord {
 }
 
 /**
+ * Calculates adaptive transition lead time before nextLine starts.
+ * - For rapid lines (interval < 1.2s), lead is minimal (40ms - 80ms) so short lines aren't cut short.
+ * - For medium intervals (1.2s - 2.5s), lead is 100ms - 200ms.
+ * - For long pauses (interval >= 2.5s), lead is up to 0.35s to prepare the user.
+ * - If line has word timestamps (parts), lead will never preempt the last word's end!
+ */
+export function getLineTransitionLead(
+  lineStart: number,
+  nextStart: number,
+  lineParts?: any[],
+): number {
+  const interval = nextStart - lineStart;
+  if (!Number.isFinite(interval) || interval <= 0) return 0;
+
+  let baseLead: number;
+  if (interval < 1.2) {
+    baseLead = Math.min(0.08, Math.max(0.04, interval * 0.06));
+  } else if (interval < 2.5) {
+    baseLead = Math.min(0.20, interval * 0.10);
+  } else {
+    baseLead = 0.35;
+  }
+
+  if (lineParts && lineParts.length > 0) {
+    const lastPart = lineParts[lineParts.length - 1];
+    const lastWordEnd =
+      Number(lastPart.time ?? lineStart) +
+      Math.max(Number(lastPart.duration ?? 0), 0.1);
+    const maxSafeHandover = Math.min(
+      nextStart - 0.04,
+      Math.max(lineStart + 0.1, lastWordEnd),
+    );
+    const wordConstrainedLead = Math.max(0, nextStart - maxSafeHandover);
+    return Math.min(baseLead, wordConstrainedLead);
+  }
+
+  return baseLead;
+}
+
+/**
  * Calculates optimal singing duration and allocates word-by-word timestamps
  * for line-synced lyrics without syllable timestamps.
  *
@@ -139,30 +179,27 @@ export function generateLineSyncedWords(
     ? Math.max(0.8, tokens.length * 0.22 + 0.25)
     : Math.max(0.8, tokens.length * 0.32 + 0.25);
 
-  const EARLY_PREPARE_S = 0.35;
-  // Maximum safe duration: line unmounts at rawInterval - EARLY_PREPARE_S.
-  // We reserve an additional 0.25s rest/breath buffer so the swipe completes to 100%
-  // and stays fully lit before transitioning to the next line.
-  const maxSafeDuration = Math.max(0.35, rawInterval - EARLY_PREPARE_S - 0.25);
+  // Adaptive end buffer: for rapid lines, minimal (0.04s - 0.08s) so words aren't squished;
+  // for long intervals, up to 0.20s natural pause
+  const endBuffer = Math.min(0.20, Math.max(0.04, rawInterval * 0.06));
+  const maxSafeDuration = Math.max(0.35, rawInterval - endBuffer);
 
   let effectiveDuration: number;
 
   if (hasExplicitDuration && explicitDuration && explicitDuration > 0) {
     effectiveDuration = Math.min(explicitDuration, maxSafeDuration);
   } else {
-    // Target ~76% of raw interval to leave a natural singing pause
-    let target = rawInterval * 0.76;
+    // Word density ratio: word-heavy sentences take 88-92% of the interval
+    const densityRatio = tokens.length > 6 ? 0.90 : 0.82;
+    let target = rawInterval * densityRatio;
 
     if (estDuration > target) {
-      // Word-heavy or fast-tempo line: give it as much safe time as possible
       target = Math.min(maxSafeDuration, estDuration);
     } else {
-      // Few words with long gap (e.g. 3 words in 7s gap): don't crawl slowly;
-      // bound duration to realistic singing speed
-      target = Math.max(Math.min(target, estDuration * 1.25), 1.2);
+      target = Math.max(Math.min(target, estDuration * 1.25), 1.0);
     }
 
-    effectiveDuration = Math.min(maxSafeDuration, Math.max(0.5, target));
+    effectiveDuration = Math.min(maxSafeDuration, Math.max(0.4, target));
   }
 
   // Weight distribution: word length + baseline weight to prevent short words from being instantaneous
@@ -259,15 +296,14 @@ export default function KaraokeLyricDisplay({
     };
   }, [lyrics, offset]);
 
-  // Active line calculation matching collapsedPreview early transition (0.35s early)
+  // Active line calculation matching adaptive early transition
   const activeLineIndex = useMemo(() => {
     if (!lyrics || lyrics.length === 0) return -1;
 
-    const EARLY_PREPARE_S = 0.35;
     const time = Math.max(0, currentTime);
-
     const firstLineTime = Number(lyrics[0]?.time ?? 0);
-    if (time < firstLineTime - EARLY_PREPARE_S) {
+    const firstLead = getLineTransitionLead(0, firstLineTime);
+    if (time < firstLineTime - firstLead) {
       return 0;
     }
 
@@ -277,8 +313,15 @@ export default function KaraokeLyricDisplay({
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
 
-      const effectiveStart = lineStart - EARLY_PREPARE_S;
-      const effectiveEnd = nextStart - EARLY_PREPARE_S;
+      const prevLine = lyrics[i - 1];
+      const prevStart = prevLine ? Number(prevLine.time ?? 0) : 0;
+      const startLead = getLineTransitionLead(prevStart, lineStart, prevLine?.parts);
+      const endLead = nextLine
+        ? getLineTransitionLead(lineStart, nextStart, line.parts)
+        : 0;
+
+      const effectiveStart = lineStart - startLead;
+      const effectiveEnd = nextStart - endLead;
 
       if (time >= effectiveStart && time < effectiveEnd) {
         return i;
@@ -421,13 +464,15 @@ export default function KaraokeLyricDisplay({
     }
 
     const shouldInsertSpaces = /\s/.test(activeOriginalText);
-    const EARLY_PREPARE_S = 0.35;
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, activeLine.parts)
+      : 0;
     const unmountDeadline = Math.max(
       lineStart + 0.1,
-      nextLineTime - EARLY_PREPARE_S - 0.05,
+      nextLineTime - endLead - 0.02,
     );
 
     return wordObjects.map((wordObj, index) => {
@@ -439,11 +484,12 @@ export default function KaraokeLyricDisplay({
       const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
       const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
+      const isLastWord = index === wordObjects.length - 1;
       const isPast = currentTime >= wordEnd || wordCurrentTime >= wordEnd;
       const isActive = wordCurrentTime >= start && !isPast;
 
       let progress = 0;
-      if (isPast) {
+      if (isPast || (isLastWord && nextLine && currentTime >= nextLineTime - endLead - 0.06)) {
         progress = 1;
       } else if (isActive) {
         progress = Math.min(
@@ -511,13 +557,15 @@ export default function KaraokeLyricDisplay({
       if (wordObjects.length === 0) return activeRomanized;
     }
 
-    const EARLY_PREPARE_S = 0.35;
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, activeLine.parts)
+      : 0;
     const unmountDeadline = Math.max(
       lineStart + 0.1,
-      nextLineTime - EARLY_PREPARE_S - 0.05,
+      nextLineTime - endLead - 0.02,
     );
 
     return wordObjects.map((wordObj, index) => {
@@ -529,11 +577,12 @@ export default function KaraokeLyricDisplay({
       const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
       const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
+      const isLastWord = index === wordObjects.length - 1;
       const isPast = currentTime >= wordEnd || wordCurrentTime >= wordEnd;
       const isActive = wordCurrentTime >= start && !isPast;
 
       let progress = 0;
-      if (isPast) {
+      if (isPast || (isLastWord && nextLine && currentTime >= nextLineTime - endLead - 0.06)) {
         progress = 1;
       } else if (isActive) {
         progress = Math.min(
@@ -570,6 +619,13 @@ export default function KaraokeLyricDisplay({
     });
   };
 
+  const lineStart = Number(activeLine?.time ?? 0);
+  const nextLine = lyrics?.[activeLineIndex + 1];
+  const rawInterval = nextLine
+    ? Math.max(0.5, Number(nextLine.time) - lineStart)
+    : Math.max(0.5, Number(activeLine?.duration) || 3.5);
+  const isFastTempo = rawInterval < 1.2;
+
   return (
     <div className="lyrical-karaoke-container" style={containerStyle}>
       <motion.div
@@ -577,14 +633,18 @@ export default function KaraokeLyricDisplay({
         className="lyrical-karaoke-line-wrapper"
         data-paused={!isPlaying ? "true" : undefined}
         initial={
-          reduceAnimations ? false : { opacity: 0, y: 16, scale: 0.98 }
+          reduceAnimations
+            ? false
+            : { opacity: 0, y: isFastTempo ? 6 : 14, scale: isFastTempo ? 0.99 : 0.98 }
         }
         animate={{
           opacity: 1,
           y: 0,
           scale: 1,
           transition: reduceAnimations
-            ? { duration: 0.15 }
+            ? { duration: 0.12 }
+            : isFastTempo
+            ? { duration: 0.14, ease: [0.22, 1, 0.36, 1] }
             : {
                 type: "spring",
                 stiffness: 340,

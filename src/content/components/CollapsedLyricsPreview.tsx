@@ -7,6 +7,7 @@ import {
   INSTRUMENTAL_NOTE_PATH,
 } from "../../modules/lyrics/lyricsNormalizer";
 import { useAppStore } from "../store";
+import { getLineTransitionLead } from "./KaraokeLyricDisplay";
 
 interface CollapsedLyricsPreviewProps {
   lyrics: LyricalLyricLine[];
@@ -181,15 +182,16 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     const firstLineTime = Number(firstLine?.time ?? 0);
     // If lyrics haven't been normalized with an intro instrumental break yet,
     // and the first vocal line starts > 4.5s into the track, do NOT activate line 0 yet!
+    const firstLead = getLineTransitionLead(0, firstLineTime);
     if (
       firstLineTime >= 4.5 &&
       !isInstrumentalLine(firstLine) &&
-      time < firstLineTime - EARLY_PREPARE_S
+      time < firstLineTime - firstLead
     ) {
       return -1;
     }
 
-    if (time < firstLineTime - EARLY_PREPARE_S) {
+    if (time < firstLineTime - firstLead) {
       return 0;
     }
 
@@ -199,8 +201,15 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
 
-      const effectiveStart = lineStart - EARLY_PREPARE_S;
-      const effectiveEnd = nextStart - EARLY_PREPARE_S;
+      const prevLine = lyrics[i - 1];
+      const prevStart = prevLine ? Number(prevLine.time ?? 0) : 0;
+      const startLead = getLineTransitionLead(prevStart, lineStart, prevLine?.parts);
+      const endLead = nextLine
+        ? getLineTransitionLead(lineStart, nextStart, line.parts)
+        : 0;
+
+      const effectiveStart = lineStart - startLead;
+      const effectiveEnd = nextStart - endLead;
 
       if (time >= effectiveStart && time < effectiveEnd) {
         return i;
@@ -361,13 +370,15 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
         });
 
     const shouldInsertSpaces = /\s/.test(collapsedOriginalText);
-    const EARLY_PREPARE_S = 0.35;
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, collapsedLine?.parts)
+      : 0;
     const unmountDeadline = Math.max(
       lineStart + 0.1,
-      nextLineTime - EARLY_PREPARE_S - 0.05,
+      nextLineTime - endLead - 0.02,
     );
 
     return wordObjects.map((wordObj, index) => {
@@ -378,11 +389,12 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       const wordEnd = Math.max(start + 0.05, Math.min(calcEnd, unmountDeadline));
       const effectiveDuration = Math.max(wordEnd - start, 0.05);
 
+      const isLastWord = index === wordObjects.length - 1;
       const isPast = collapsedPreviewTime >= wordEnd || currentTime >= wordEnd;
       const isActive = currentTime >= start && !isPast;
 
       let progress = 0;
-      if (isPast) {
+      if (isPast || (isLastWord && nextLine && collapsedPreviewTime >= nextLineTime - endLead - 0.06)) {
         progress = 1;
       } else if (isActive) {
         progress = Math.min(
@@ -527,11 +539,16 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       });
     }
 
-    const EARLY_PREPARE_S = 0.35;
     const nextLineTime = nextLine
       ? Number(nextLine.time ?? Infinity)
       : Infinity;
-    const unmountDeadline = nextLineTime - EARLY_PREPARE_S - 0.1;
+    const endLead = nextLine
+      ? getLineTransitionLead(lineStart, nextLineTime, collapsedLine?.parts)
+      : 0;
+    const unmountDeadline = Math.max(
+      lineStart + 0.1,
+      nextLineTime - endLead - 0.02,
+    );
 
     return wordObjects.map((wordObj, index) => {
       const start = wordObj.time;
@@ -542,11 +559,12 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       const wordEnd = Math.min(calcEnd, unmountDeadline);
       const effectiveDuration = Math.max(wordEnd - start, 0.1);
 
+      const isLastWord = index === wordObjects.length - 1;
       const isPast = collapsedPreviewTime >= wordEnd || currentTime >= wordEnd;
       const isActive = currentTime >= start && !isPast;
 
       let progress = 0;
-      if (isPast) {
+      if (isPast || (isLastWord && nextLine && collapsedPreviewTime >= nextLineTime - endLead - 0.06)) {
         progress = 1;
       } else if (isActive) {
         progress = Math.min(
@@ -630,6 +648,13 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     });
   };
 
+  const previewLineStart = Number(collapsedLine?.time ?? 0);
+  const previewNextLine = lyrics?.[collapsedLineIndex + 1];
+  const previewRawInterval = previewNextLine
+    ? Math.max(0.5, Number(previewNextLine.time) - previewLineStart)
+    : 3.5;
+  const isFastTempo = previewRawInterval < 1.2;
+
   return (
     <div className="lyrical-collapsed-preview">
       <div className="lyrical-collapsed-title-row">
@@ -654,17 +679,22 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
       </div>
       <motion.div
         key={`${collapsedLineIndex}-${collapsedLine?.time ?? 0}`}
-        className="lyrical-collapsed-lines"
-        initial={
-          reduceAnimations ? false : { opacity: 0, y: 8, scale: 0.99 }
-        }
-        animate={{
-          opacity: 1,
-          y: 0,
-          scale: 1,
-          transition: { duration: 0.20, ease: [0.22, 1, 0.36, 1] },
-        }}
-      >
+          className="lyrical-collapsed-lines"
+          initial={
+            reduceAnimations
+              ? false
+              : { opacity: 0, y: isFastTempo ? 4 : 8, scale: 0.99 }
+          }
+          animate={{
+            opacity: 1,
+            y: 0,
+            scale: 1,
+            transition: {
+              duration: reduceAnimations ? 0 : isFastTempo ? 0.12 : 0.20,
+              ease: [0.22, 1, 0.36, 1],
+            },
+          }}
+        >
         <div
           className={
             lyricsAnimationStyle === "archivetune"
