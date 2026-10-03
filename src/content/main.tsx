@@ -371,17 +371,45 @@ chrome.storage.onChanged.addListener((changes: any, namespace) => {
       showTranslatedLyrics: isTranslateEnabled,
     });
     log("Translation toggle:", isTranslateEnabled);
-    if (fetchedLyrics.length) autoProcessLyrics();
+    if (!isTranslateEnabled) {
+      chrome.runtime
+        .sendMessage({
+          type: "CANCEL_TRANSLATION",
+          videoId: currentSongInfo?.videoId,
+        })
+        .catch(() => {});
+      updateSecondaryLyricsState({
+        translatedLyrics: [],
+        isProcessingLyrics: false,
+      });
+    } else if (fetchedLyrics && fetchedLyrics.length) {
+      autoProcessLyrics();
+    }
   }
 
   if (changes.translationLanguage) {
     currentTranslationLang = changes.translationLanguage.newValue;
     log("Translation Lang:", currentTranslationLang);
-    // Clear cache for new language and re-process only if translation is enabled
+    // 1. Cancel in-flight background translation for prior language
+    chrome.runtime
+      .sendMessage({
+        type: "CANCEL_TRANSLATION",
+        videoId: currentSongInfo?.videoId,
+      })
+      .catch(() => {});
+    // 2. Clear translatedLyrics immediately so old language lines don't linger
     translatedLyrics = null;
-    // Read from store (more reliable than local variable)
+    activeProcessSessionId++;
+    useAppStore.setState({ translationLanguage: currentTranslationLang });
+    updateSecondaryLyricsState({
+      translatedLyrics: [],
+      isProcessingLyrics: true,
+    });
+    // 3. Re-process with new language if translation is active
     const translateEnabled = useAppStore.getState().isTranslateEnabled;
-    if (fetchedLyrics.length && translateEnabled) autoProcessLyrics();
+    if (fetchedLyrics && fetchedLyrics.length && translateEnabled) {
+      autoProcessLyrics();
+    }
   }
 
   // 3. Display Mode & Placement
@@ -4538,6 +4566,10 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
             extra.translatedLyrics ||
             prevTracks[trackId]?.translatedLyrics ||
             [],
+          translationTargetLang:
+            extra.translationTargetLang ||
+            prevTracks[trackId]?.translationTargetLang ||
+            undefined,
           timestamp: Date.now(),
         };
 
@@ -4744,23 +4776,31 @@ function restoreLyricsFromCacheEntry(
   }
 
   const store = useAppStore.getState();
+  const cachedTarget =
+    entry.translationTargetLang ||
+    (entry.tracks && activeTrackId && entry.tracks[activeTrackId]?.translationTargetLang) ||
+    null;
+  const transMatchesLang =
+    !cachedTarget ||
+    cachedTarget.toLowerCase() === (store.translationLanguage || "en").toLowerCase();
+
   const hasRom = Array.isArray(activeRomanized) && activeRomanized.length > 0;
   const hasTrans =
-    Array.isArray(activeTranslated) && activeTranslated.length > 0;
+    Array.isArray(activeTranslated) && activeTranslated.length > 0 && transMatchesLang;
   const needsRom = store.isRomanizationEnabled && !hasRom;
   const needsTrans = store.isTranslateEnabled && !hasTrans;
 
   if (needsRom || needsTrans) {
     updateSecondaryLyricsState({
-      romanizedLyrics: activeRomanized || [],
-      translatedLyrics: activeTranslated || [],
+      romanizedLyrics: hasRom ? activeRomanized : [],
+      translatedLyrics: hasTrans ? activeTranslated : [],
       isProcessingLyrics: true,
     });
     autoProcessLyrics();
   } else {
     updateSecondaryLyricsState({
-      romanizedLyrics: activeRomanized || [],
-      translatedLyrics: activeTranslated || [],
+      romanizedLyrics: hasRom ? activeRomanized : [],
+      translatedLyrics: hasTrans ? activeTranslated : [],
       isProcessingLyrics: false,
     });
   }
@@ -4893,6 +4933,12 @@ function resetLyricsState(reason = "", options: any = {}) {
   // Reset translation state and cancel active secondary processing & in-flight requests
   activeProcessSessionId++;
   abortCurrentFetch(`resetLyricsState: ${reason}`);
+  chrome.runtime
+    .sendMessage({
+      type: "CANCEL_TRANSLATION",
+      videoId: currentSongInfo?.videoId,
+    })
+    .catch(() => {});
   translatedLyrics = null;
   currentTranslationLang = null;
   isTranslationMode = false;
@@ -5211,15 +5257,76 @@ async function displayPrefetchedCaptions(lyrics, languageCode) {
   useAppStore.setState({
     captionLanguageLabel: (languageCode || "auto").toUpperCase(),
   });
+  const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
+  let cachedRom: any[] = [];
+  let cachedTrans: any[] = [];
+  let cachedTargetLang: string | null = null;
+
+  if (sourceKey && hasLocalStorageApi() && chrome?.storage?.local?.get) {
+    try {
+      const stored: any = await chrome.storage.local.get([sourceKey]);
+      const entry = stored?.[sourceKey];
+      const cachedTrack =
+        (entry?.tracks &&
+          Object.values(entry.tracks).find(
+            (ct: any) =>
+              (ct.language || "").split("-")[0].toLowerCase() ===
+              (languageCode || "").split("-")[0].toLowerCase(),
+          )) ||
+        (entry?.tracks && Object.values(entry.tracks)[0]) ||
+        entry;
+      if (cachedTrack) {
+        cachedRom = cachedTrack.romanizedLyrics || [];
+        cachedTrans = cachedTrack.translatedLyrics || [];
+        cachedTargetLang =
+          cachedTrack.translationTargetLang ||
+          entry?.translationTargetLang ||
+          null;
+      }
+    } catch {}
+  }
+
+  const currentStore = useAppStore.getState();
+  const currentTargetLang = currentStore.translationLanguage || "en";
+  const hasValidCachedTrans =
+    Array.isArray(cachedTrans) &&
+    cachedTrans.length > 0 &&
+    (!cachedTargetLang ||
+      cachedTargetLang.toLowerCase() === currentTargetLang.toLowerCase());
+  const hasValidCachedRom = Array.isArray(cachedRom) && cachedRom.length > 0;
+
+  if (hasValidCachedTrans || hasValidCachedRom) {
+    updateSecondaryLyricsState({
+      romanizedLyrics: hasValidCachedRom ? cachedRom : [],
+      translatedLyrics: hasValidCachedTrans ? cachedTrans : [],
+      isProcessingLyrics: false,
+    });
+  }
+
   persistLyricsCache(currentSongInfo, "captions", fetchedLyrics, {
     label: `Captions (${languageCode || "auto"})`,
     language: languageCode || null,
+    ...(hasValidCachedRom ? { romanizedLyrics: cachedRom } : {}),
+    ...(hasValidCachedTrans
+      ? {
+          translatedLyrics: cachedTrans,
+          translationTargetLang: currentTargetLang,
+        }
+      : {}),
   });
   startLyricsTimer(fetchedLyrics);
   if (window.initTranslationDropdown) {
     window.initTranslationDropdown();
   }
-  autoProcessLyrics();
+
+  const needsRom = currentStore.isRomanizationEnabled && !hasValidCachedRom;
+  const needsTrans = currentStore.isTranslateEnabled && !hasValidCachedTrans;
+
+  if (needsRom || needsTrans) {
+    autoProcessLyrics();
+  } else {
+    updateSecondaryLyricsState({ isProcessingLyrics: false });
+  }
 
   setTimeout(() => {
     lyricsJustLoaded = false;
@@ -5734,6 +5841,51 @@ async function tryDisplayCaptions(isManual = false) {
           `${languageCode}-${selectedTrack.kind || "std"}`
         : null,
     });
+    const sourceKey = getLyricsCacheKey(currentSongInfo, "captions");
+    let cachedRom: any[] = [];
+    let cachedTrans: any[] = [];
+    let cachedTargetLang: string | null = null;
+
+    if (sourceKey && hasLocalStorageApi() && chrome?.storage?.local?.get) {
+      try {
+        const stored: any = await chrome.storage.local.get([sourceKey]);
+        const entry = stored?.[sourceKey];
+        const activeTrackId =
+          selectedTrack?.vssId ||
+          `${languageCode}-${selectedTrack?.kind || "std"}`;
+        const cachedTrack =
+          entry?.tracks?.[activeTrackId] ||
+          (entry?.tracks && Object.values(entry.tracks)[0]) ||
+          entry;
+        if (cachedTrack) {
+          cachedRom = cachedTrack.romanizedLyrics || [];
+          cachedTrans = cachedTrack.translatedLyrics || [];
+          cachedTargetLang =
+            cachedTrack.translationTargetLang ||
+            entry?.translationTargetLang ||
+            null;
+        }
+      } catch {}
+    }
+
+    const currentStore = useAppStore.getState();
+    const currentTargetLang = currentStore.translationLanguage || "en";
+    const hasValidCachedTrans =
+      Array.isArray(cachedTrans) &&
+      cachedTrans.length > 0 &&
+      (!cachedTargetLang ||
+        cachedTargetLang.toLowerCase() === currentTargetLang.toLowerCase());
+    const hasValidCachedRom = Array.isArray(cachedRom) && cachedRom.length > 0;
+
+    // Immediately pre-hydrate store if cached secondary lyrics already exist
+    if (hasValidCachedTrans || hasValidCachedRom) {
+      updateSecondaryLyricsState({
+        romanizedLyrics: hasValidCachedRom ? cachedRom : [],
+        translatedLyrics: hasValidCachedTrans ? cachedTrans : [],
+        isProcessingLyrics: false,
+      });
+    }
+
     persistLyricsCache(currentSongInfo, "captions", fetchedLyrics, {
       label: `Captions (${languageCode || "auto"})`,
       language: languageCode || null,
@@ -5742,6 +5894,13 @@ async function tryDisplayCaptions(isManual = false) {
           `${languageCode}-${selectedTrack.kind || "std"}`
         : null,
       isAsr: selectedTrack?.kind === "asr",
+      ...(hasValidCachedRom ? { romanizedLyrics: cachedRom } : {}),
+      ...(hasValidCachedTrans
+        ? {
+            translatedLyrics: cachedTrans,
+            translationTargetLang: currentTargetLang,
+          }
+        : {}),
     });
     startLyricsTimer(fetchedLyrics);
     turnOffNativeCaptionsIfAutoEnabled();
@@ -5749,7 +5908,14 @@ async function tryDisplayCaptions(isManual = false) {
     // Init translation if needed (restored)
     if (window.initTranslationDropdown) window.initTranslationDropdown();
 
-    autoProcessLyrics();
+    const needsRom = currentStore.isRomanizationEnabled && !hasValidCachedRom;
+    const needsTrans = currentStore.isTranslateEnabled && !hasValidCachedTrans;
+
+    if (needsRom || needsTrans) {
+      autoProcessLyrics();
+    } else {
+      updateSecondaryLyricsState({ isProcessingLyrics: false });
+    }
 
     // Keep title/artwork in sync even when captions arrive before song metadata.
     if (!currentSongInfo?.title || !currentSongInfo?.artwork) {
@@ -7135,6 +7301,84 @@ async function autoProcessLyrics() {
       lang: translationLanguage,
     });
 
+    const liveStore = useAppStore.getState();
+    const hasStoreTrans =
+      Array.isArray(liveStore.translatedLyrics) &&
+      liveStore.translatedLyrics.length > 0 &&
+      (liveStore.translationLanguage || "").toLowerCase() ===
+        translationLanguage.toLowerCase();
+    const hasStoreRom =
+      Array.isArray(liveStore.romanizedLyrics) &&
+      liveStore.romanizedLyrics.length > 0;
+
+    let cachedRom: any[] = [];
+    let cachedTrans: any[] = [];
+    let cachedTargetLang: string | null = null;
+
+    const sourceKey = getLyricsCacheKey(currentSongInfo, initialSourceId);
+    if (sourceKey && hasLocalStorageApi() && chrome?.storage?.local?.get) {
+      try {
+        const stored: any = await chrome.storage.local.get([sourceKey]);
+        const entry = stored?.[sourceKey];
+        if (entry) {
+          if (initialSourceId === "captions" && entry.tracks) {
+            const activeTrackId =
+              liveStore.selectedCaptionTrackId || entry.activeTrackId;
+            const track =
+              (activeTrackId && entry.tracks[activeTrackId]) ||
+              Object.values(entry.tracks)[0] ||
+              entry;
+            cachedRom = track.romanizedLyrics || [];
+            cachedTrans = track.translatedLyrics || [];
+            cachedTargetLang =
+              track.translationTargetLang ||
+              entry.translationTargetLang ||
+              null;
+          } else {
+            cachedRom = entry.romanizedLyrics || [];
+            cachedTrans = entry.translatedLyrics || [];
+            cachedTargetLang = entry.translationTargetLang || null;
+          }
+        }
+      } catch {}
+    }
+
+    const effectiveTrans = hasStoreTrans
+      ? liveStore.translatedLyrics
+      : Array.isArray(cachedTrans) &&
+          cachedTrans.length > 0 &&
+          (!cachedTargetLang ||
+            cachedTargetLang.toLowerCase() ===
+              translationLanguage.toLowerCase())
+        ? cachedTrans
+        : [];
+    const effectiveRom = hasStoreRom
+      ? liveStore.romanizedLyrics
+      : Array.isArray(cachedRom) && cachedRom.length > 0
+        ? cachedRom
+        : [];
+
+    const needsRom = isRomanizationEnabled && effectiveRom.length === 0;
+    const needsTrans = isTranslateEnabled && effectiveTrans.length === 0;
+
+    if (!needsRom && !needsTrans) {
+      log("Auto-process: Secondary lyrics already available in cache/store");
+      updateSecondaryLyricsState({
+        romanizedLyrics: effectiveRom,
+        translatedLyrics: effectiveTrans,
+        isProcessingLyrics: false,
+      });
+      return;
+    }
+
+    // Hydrate any available portion immediately so UI doesn't delay showing existing data
+    if (effectiveRom.length > 0 || effectiveTrans.length > 0) {
+      updateSecondaryLyricsState({
+        romanizedLyrics: effectiveRom,
+        translatedLyrics: effectiveTrans,
+      });
+    }
+
     // Set loading indicator via store
     useAppStore.getState().setIsProcessingLyrics(true);
 
@@ -7148,79 +7392,82 @@ async function autoProcessLyrics() {
 
     // Execute Romanization and Translation in parallel to take advantage of
     // background Unison coalescing (1 shared API call) and faster load times.
-    const romanizePromise = isRomanizationEnabled
-      ? (async () => {
-          try {
-            log("Sending ROMANIZE_LYRICS to background...");
-            const data = await sendMessageWithTimeout(
-              {
-                type: "ROMANIZE_LYRICS",
-                lyrics: lyricsToProcess,
-                sourceLang: "auto",
-                targetLang: translationLanguage || "en",
-                videoId: currentSongInfo?.videoId,
-              },
-              processingTimeoutMs,
-            );
-            if (data?.error) {
-              console.warn("[Lyrical Panel] Romanization error:", data.error);
+    const romanizePromise =
+      isRomanizationEnabled && needsRom
+        ? (async () => {
+            try {
+              log("Sending ROMANIZE_LYRICS to background...");
+              const data = await sendMessageWithTimeout(
+                {
+                  type: "ROMANIZE_LYRICS",
+                  lyrics: lyricsToProcess,
+                  sourceLang: "auto",
+                  targetLang: translationLanguage || "en",
+                  videoId: currentSongInfo?.videoId,
+                },
+                processingTimeoutMs,
+              );
+              if (data?.error) {
+                console.warn("[Lyrical Panel] Romanization error:", data.error);
+                return [];
+              }
+              return data || [];
+            } catch (err) {
+              console.warn("[Lyrical Panel] Romanization failed:", err);
               return [];
             }
-            return data || [];
-          } catch (err) {
-            console.warn("[Lyrical Panel] Romanization failed:", err);
-            return [];
-          }
-        })()
-      : Promise.resolve([]);
+          })()
+        : Promise.resolve(effectiveRom);
 
-    const translatePromise = isTranslateEnabled
-      ? (async () => {
-          try {
-            const lyricsLanguage = useAppStore.getState().lyricsLanguage;
+    const translatePromise =
+      isTranslateEnabled && needsTrans
+        ? (async () => {
+            try {
+              const lyricsLanguage = useAppStore.getState().lyricsLanguage;
 
-            if (
-              lyricsLanguage &&
-              lyricsLanguage.toLowerCase() === translationLanguage.toLowerCase()
-            ) {
+              if (
+                lyricsLanguage &&
+                lyricsLanguage.toLowerCase() ===
+                  translationLanguage.toLowerCase()
+              ) {
+                log(
+                  "Skipping translation - source language matches target:",
+                  translationLanguage,
+                );
+                return lyricsToProcess.map((lyric) => ({
+                  time: lyric.time,
+                  text: lyric.text,
+                  translated: "",
+                  skipped: true,
+                  error: false,
+                }));
+              }
+
               log(
-                "Skipping translation - source language matches target:",
+                "[Lyrical Panel] Sending TRANSLATE_LYRICS to background...",
                 translationLanguage,
               );
-              return lyricsToProcess.map((lyric) => ({
-                time: lyric.time,
-                text: lyric.text,
-                translated: "",
-                skipped: true,
-                error: false,
-              }));
-            }
-
-            log(
-              "[Lyrical Panel] Sending TRANSLATE_LYRICS to background...",
-              translationLanguage,
-            );
-            const data = await sendMessageWithTimeout(
-              {
-                type: "TRANSLATE_LYRICS",
-                lyrics: lyricsToProcess,
-                targetLang: translationLanguage,
-                sourceLang: lyricsLanguage || "auto",
-                videoId: currentSongInfo?.videoId,
-              },
-              processingTimeoutMs,
-            );
-            if (data?.error) {
-              console.warn("[Lyrical Panel] Translation error:", data.error);
+              const data = await sendMessageWithTimeout(
+                {
+                  type: "TRANSLATE_LYRICS",
+                  lyrics: lyricsToProcess,
+                  targetLang: translationLanguage,
+                  sourceLang: lyricsLanguage || "auto",
+                  videoId: currentSongInfo?.videoId,
+                },
+                processingTimeoutMs,
+              );
+              if (data?.error) {
+                console.warn("[Lyrical Panel] Translation error:", data.error);
+                return [];
+              }
+              return data || [];
+            } catch (err) {
+              console.warn("[Lyrical Panel] Translation failed:", err);
               return [];
             }
-            return data || [];
-          } catch (err) {
-            console.warn("[Lyrical Panel] Translation failed:", err);
-            return [];
-          }
-        })()
-      : Promise.resolve([]);
+          })()
+        : Promise.resolve(effectiveTrans);
 
     const [resolvedRomanized, resolvedTranslated] = await Promise.all([
       romanizePromise,
@@ -7255,8 +7502,9 @@ async function autoProcessLyrics() {
     // Persist processed translations and romanizations into persistent cache for the source it was processed for
     if (currentSongInfo && initialSourceId && lyricsToProcess?.length) {
       persistLyricsCache(currentSongInfo, initialSourceId, lyricsToProcess, {
-        romanizedLyrics: romanizedData || [],
-        translatedLyrics: translatedData || [],
+        romanizedLyrics: romanizedData?.length ? romanizedData : effectiveRom,
+        translatedLyrics: translatedData?.length ? translatedData : effectiveTrans,
+        translationTargetLang: translationLanguage,
       });
     }
   } catch (err) {
@@ -8042,12 +8290,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         showRomanizedLyrics: Boolean(value),
       });
     } else if (key === "autoTranslate") {
+      const enabled = Boolean(value);
       useAppStore.setState({
-        isTranslateEnabled: Boolean(value),
-        showTranslatedLyrics: Boolean(value),
+        isTranslateEnabled: enabled,
+        showTranslatedLyrics: enabled,
       });
+      if (!enabled) {
+        chrome.runtime
+          .sendMessage({
+            type: "CANCEL_TRANSLATION",
+            videoId: currentSongInfo?.videoId,
+          })
+          .catch(() => {});
+        updateSecondaryLyricsState({
+          translatedLyrics: [],
+          isProcessingLyrics: false,
+        });
+      } else if (fetchedLyrics && fetchedLyrics.length) {
+        autoProcessLyrics();
+      }
     } else if (key === "translationLang") {
+      chrome.runtime
+        .sendMessage({
+          type: "CANCEL_TRANSLATION",
+          videoId: currentSongInfo?.videoId,
+        })
+        .catch(() => {});
+      activeProcessSessionId++;
+      updateSecondaryLyricsState({
+        translatedLyrics: [],
+        isProcessingLyrics: true,
+      });
       useAppStore.setState({ translationLanguage: value });
+      if (fetchedLyrics && fetchedLyrics.length && useAppStore.getState().isTranslateEnabled) {
+        autoProcessLyrics();
+      }
     }
     sendResponse({ success: true });
   } else if (request.action === "custom_themes_changed") {

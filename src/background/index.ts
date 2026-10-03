@@ -12,23 +12,60 @@ const translationCache = new Map();
 const romanizationCache = new Map();
 const TRANSLATE_TIMEOUT_MS = 12000;
 
+// Track active in-flight controllers so language switches immediately cancel prior batch runs
+const inFlightTranslations = new Map<string, AbortController>();
+const inFlightRomanizations = new Map<string, AbortController>();
+
+function abortInFlight(videoId?: string) {
+  if (videoId) {
+    inFlightTranslations.get(videoId)?.abort();
+    inFlightTranslations.delete(videoId);
+    inFlightRomanizations.get(videoId)?.abort();
+    inFlightRomanizations.delete(videoId);
+  }
+  inFlightTranslations.get("global")?.abort();
+  inFlightTranslations.delete("global");
+  inFlightRomanizations.get("global")?.abort();
+  inFlightRomanizations.delete("global");
+}
+
 async function fetchJsonWithTimeout(
   url,
-  options = {},
+  options: RequestInit = {},
   timeoutMs = TRANSLATE_TIMEOUT_MS,
+  signal?: AbortSignal,
 ) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) {
+      clearTimeout(timeout);
+      throw new Error("Aborted");
+    }
+    signal.addEventListener("abort", onExternalAbort);
+  }
+
   try {
     const res = await fetch(url, { ...options, signal: controller.signal });
     return res;
   } finally {
     clearTimeout(timeout);
+    if (signal) {
+      signal.removeEventListener("abort", onExternalAbort);
+    }
   }
 }
 
 // Message handler for translation requests
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.type === "CANCEL_TRANSLATION") {
+    abortInFlight(request.videoId);
+    sendResponse({ success: true });
+    return true;
+  }
+
   if (request.type === "TRANSLATE_LINE") {
     translateLine(request.text, request.targetLang)
       .then(sendResponse)
@@ -44,26 +81,58 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.type === "TRANSLATE_LYRICS") {
+    const vid = request.videoId || "global";
+    inFlightTranslations.get(vid)?.abort();
+    const controller = new AbortController();
+    inFlightTranslations.set(vid, controller);
+
     translateLyrics(
       request.lyrics,
       request.targetLang,
       request.sourceLang,
       request.videoId,
+      controller.signal,
     )
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err.message }));
+      .then((res) => {
+        if (inFlightTranslations.get(vid) === controller) {
+          inFlightTranslations.delete(vid);
+        }
+        sendResponse(res);
+      })
+      .catch((err) => {
+        if (inFlightTranslations.get(vid) === controller) {
+          inFlightTranslations.delete(vid);
+        }
+        sendResponse({ error: err.message, aborted: controller.signal.aborted });
+      });
     return true;
   }
 
   if (request.type === "ROMANIZE_LYRICS") {
+    const vid = request.videoId || "global";
+    inFlightRomanizations.get(vid)?.abort();
+    const controller = new AbortController();
+    inFlightRomanizations.set(vid, controller);
+
     romanizeLyrics(
       request.lyrics,
       request.sourceLang,
       request.targetLang,
       request.videoId,
+      controller.signal,
     )
-      .then(sendResponse)
-      .catch((err) => sendResponse({ error: err.message }));
+      .then((res) => {
+        if (inFlightRomanizations.get(vid) === controller) {
+          inFlightRomanizations.delete(vid);
+        }
+        sendResponse(res);
+      })
+      .catch((err) => {
+        if (inFlightRomanizations.get(vid) === controller) {
+          inFlightRomanizations.delete(vid);
+        }
+        sendResponse({ error: err.message, aborted: controller.signal.aborted });
+      });
     return true;
   }
 
@@ -306,8 +375,9 @@ async function enrichViaUnison(
   targetLang: string,
   sourceLang?: string,
   videoId?: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  if (!texts || texts.length === 0) return undefined;
+  if (!texts || texts.length === 0 || signal?.aborted) return undefined;
 
   const normalizedFrom =
     !sourceLang || sourceLang === "auto" ? undefined : sourceLang;
@@ -322,7 +392,7 @@ async function enrichViaUnison(
   const existing = inFlightUnison.get(body);
   if (existing) return existing;
 
-  const request = fetchUnisonTranslate(body, texts, targetLang || "en", sourceLang);
+  const request = fetchUnisonTranslate(body, texts, targetLang || "en", sourceLang, signal);
   inFlightUnison.set(body, request);
   return request.finally(() => inFlightUnison.delete(body));
 }
@@ -332,9 +402,16 @@ async function fetchUnisonTranslate(
   texts: string[],
   targetLang: string,
   sourceLang?: string,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) return undefined;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), UNISON_TIMEOUT_MS);
+
+  const onAbort = () => controller.abort();
+  if (signal) {
+    signal.addEventListener("abort", onAbort);
+  }
 
   try {
     const response = await fetch(UNISON_TRANSLATE_URL, {
@@ -406,8 +483,10 @@ async function fetchUnisonTranslate(
     console.log(
       `[Lyrical BG] Unison enrichment succeeded for ${texts.length} lines (lang: ${detectedLang})`,
     );
-    return detectedLang;
   } catch (err: any) {
+    if (signal?.aborted) {
+      return undefined;
+    }
     if (err?.name !== "AbortError") {
       console.warn("[Lyrical BG] Unison translate request failed:", err?.message || err);
     } else {
@@ -416,6 +495,9 @@ async function fetchUnisonTranslate(
     return undefined;
   } finally {
     clearTimeout(timeoutId);
+    if (signal) {
+      signal.removeEventListener("abort", onAbort);
+    }
   }
 }
 
@@ -520,13 +602,18 @@ function getRomanizeUrl(sourceLang, text) {
 /**
  * Translate a block of multiple lines in a single HTTP request using newline separators
  */
-async function translateBlock(lines, targetLang) {
-  if (!lines || lines.length === 0) return [];
+async function translateBlock(lines, targetLang, signal?: AbortSignal) {
+  if (!lines || lines.length === 0 || signal?.aborted) return [];
   const joinedText = lines.join("\n");
 
   try {
     const url = getTranslateUrl(targetLang, joinedText);
-    const response = await fetchJsonWithTimeout(url, { cache: "force-cache" });
+    const response = await fetchJsonWithTimeout(
+      url,
+      { cache: "force-cache" },
+      TRANSLATE_TIMEOUT_MS,
+      signal,
+    );
 
     if (!response.ok) {
       console.warn(`[Lyrical BG] translateBlock status=${response.status}`);
@@ -560,7 +647,9 @@ async function translateBlock(lines, targetLang) {
       });
     }
   } catch (err) {
-    console.warn("[Lyrical BG] translateBlock error:", err.message);
+    if (!signal?.aborted) {
+      console.warn("[Lyrical BG] translateBlock error:", err.message);
+    }
   }
   return null;
 }
@@ -568,8 +657,8 @@ async function translateBlock(lines, targetLang) {
 /**
  * Translate a single line of text
  */
-async function translateLine(text, targetLang) {
-  if (!text?.trim()) return { translated: "", original: text };
+async function translateLine(text, targetLang, signal?: AbortSignal) {
+  if (!text?.trim() || signal?.aborted) return { translated: "", original: text };
 
   const cacheKey = `${targetLang}_${text}`;
   if (translationCache.has(cacheKey)) {
@@ -579,7 +668,12 @@ async function translateLine(text, targetLang) {
   try {
     const url = getTranslateUrl(targetLang, text);
     console.log(`[Lyrical BG] translateLine: "${text.substring(0, 40)}" -> ${targetLang}`);
-    const response = await fetchJsonWithTimeout(url, { cache: "force-cache" });
+    const response = await fetchJsonWithTimeout(
+      url,
+      { cache: "force-cache" },
+      TRANSLATE_TIMEOUT_MS,
+      signal,
+    );
 
     if (!response.ok) {
       console.warn(`[Lyrical BG] translateLine FAILED: status=${response.status}`);
@@ -714,13 +808,18 @@ function extractRomanizationFromGoogleData(data: any, originalText: string): str
 /**
  * Romanize a block of multiple lines in a single HTTP request using newline separators
  */
-async function romanizeBlock(lines, sourceLang) {
-  if (!lines || lines.length === 0) return [];
+async function romanizeBlock(lines, sourceLang, signal?: AbortSignal) {
+  if (!lines || lines.length === 0 || signal?.aborted) return [];
   const joinedText = lines.join("\n");
 
   try {
     const url = getRomanizeUrl(sourceLang, joinedText);
-    const response = await fetchJsonWithTimeout(url, { cache: "force-cache" });
+    const response = await fetchJsonWithTimeout(
+      url,
+      { cache: "force-cache" },
+      TRANSLATE_TIMEOUT_MS,
+      signal,
+    );
 
     if (!response.ok) {
       console.warn(`[Lyrical BG] romanizeBlock status=${response.status}`);
@@ -748,7 +847,9 @@ async function romanizeBlock(lines, sourceLang) {
       });
     }
   } catch (err) {
-    console.warn("[Lyrical BG] romanizeBlock error:", err.message);
+    if (!signal?.aborted) {
+      console.warn("[Lyrical BG] romanizeBlock error:", err.message);
+    }
   }
   return null;
 }
@@ -756,8 +857,8 @@ async function romanizeBlock(lines, sourceLang) {
 /**
  * Romanize a single line of text (convert to Latin alphabet)
  */
-async function romanizeLine(text, sourceLang) {
-  if (!text?.trim()) return { romanized: "", original: text };
+async function romanizeLine(text, sourceLang, signal?: AbortSignal) {
+  if (!text?.trim() || signal?.aborted) return { romanized: "", original: text };
 
   // Fast-path: Check if the text consists entirely of Latin script, punctuation, numbers, and symbols.
   // If so, it doesn't need romanization (e.g. English, Spanish), bypassing the API call entirely.
@@ -775,7 +876,12 @@ async function romanizeLine(text, sourceLang) {
 
   try {
     const url = getRomanizeUrl(sourceLang, text);
-    const response = await fetchJsonWithTimeout(url, { cache: "force-cache" });
+    const response = await fetchJsonWithTimeout(
+      url,
+      { cache: "force-cache" },
+      TRANSLATE_TIMEOUT_MS,
+      signal,
+    );
 
     if (!response.ok) {
       console.warn(`[Lyrical BG] romanizeLine FAILED: status=${response.status}`);
@@ -812,7 +918,9 @@ async function translateLyrics(
   targetLang,
   sourceLang = "auto",
   videoId?: string,
+  signal?: AbortSignal,
 ) {
+  if (signal?.aborted) throw new Error("Translation aborted");
   console.log(
     "[Lyrical BG] Translating",
     lyrics.length,
@@ -842,7 +950,8 @@ async function translateLyrics(
 
   // 1. Primary enrichment: Unison Translate API
   if (uncachedTexts.length > 0) {
-    await enrichViaUnison(uncachedTexts, targetLang, sourceLang, videoId);
+    if (signal?.aborted) throw new Error("Translation aborted");
+    await enrichViaUnison(uncachedTexts, targetLang, sourceLang, videoId, signal);
 
     // Filter out texts successfully resolved by Unison
     const stillUncached: string[] = [];
@@ -861,8 +970,10 @@ async function translateLyrics(
   // 2. Fallback: Google Translate batch chunks for remaining uncached lines
   const blockSize = 20;
   for (let i = 0; i < uncachedTexts.length; i += blockSize) {
+    if (signal?.aborted) throw new Error("Translation aborted");
     const block = uncachedTexts.slice(i, i + blockSize);
-    const blockResults = await translateBlock(block, targetLang);
+    const blockResults = await translateBlock(block, targetLang, signal);
+    if (signal?.aborted) throw new Error("Translation aborted");
 
     if (blockResults && blockResults.length === block.length) {
       block.forEach((text, idx) => {
@@ -871,8 +982,9 @@ async function translateLyrics(
     } else {
       // Fallback: Translate individually with gentle pacing (120ms delay)
       for (const text of block) {
+        if (signal?.aborted) throw new Error("Translation aborted");
         try {
-          const res = await translateLine(text, targetLang);
+          const res = await translateLine(text, targetLang, signal);
           translatedLookup.set(text, res);
         } catch {
           translatedLookup.set(text, {
@@ -924,7 +1036,9 @@ async function romanizeLyrics(
   sourceLang = "auto",
   targetLang = "en",
   videoId?: string,
+  signal?: AbortSignal,
 ) {
+  if (signal?.aborted) throw new Error("Romanization aborted");
   console.log("[Lyrical BG] Romanizing", lyrics.length, "lines from", sourceLang);
 
   const uniqueTexts: string[] = Array.from(
@@ -957,7 +1071,8 @@ async function romanizeLyrics(
 
   // 1. Primary enrichment: Unison Translate API
   if (uncachedTexts.length > 0) {
-    await enrichViaUnison(uncachedTexts, targetLang || "en", sourceLang, videoId);
+    if (signal?.aborted) throw new Error("Romanization aborted");
+    await enrichViaUnison(uncachedTexts, targetLang || "en", sourceLang, videoId, signal);
 
     // Filter out texts successfully resolved by Unison
     const stillUncached: string[] = [];
@@ -976,8 +1091,10 @@ async function romanizeLyrics(
   // 2. Fallback: Google Translate batch chunks for remaining uncached lines
   const blockSize = 20;
   for (let i = 0; i < uncachedTexts.length; i += blockSize) {
+    if (signal?.aborted) throw new Error("Romanization aborted");
     const block = uncachedTexts.slice(i, i + blockSize);
-    const blockResults = await romanizeBlock(block, sourceLang);
+    const blockResults = await romanizeBlock(block, sourceLang, signal);
+    if (signal?.aborted) throw new Error("Romanization aborted");
 
     if (blockResults && blockResults.length === block.length) {
       block.forEach((text, idx) => {
@@ -986,8 +1103,9 @@ async function romanizeLyrics(
     } else {
       // Fallback: Romanize individually with gentle pacing (120ms delay)
       for (const text of block) {
+        if (signal?.aborted) throw new Error("Romanization aborted");
         try {
-          const res = await romanizeLine(text, sourceLang);
+          const res = await romanizeLine(text, sourceLang, signal);
           romanizedLookup.set(text, res);
         } catch {
           romanizedLookup.set(text, {
