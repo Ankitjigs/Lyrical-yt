@@ -368,6 +368,36 @@ function isMiniplayerActive(): boolean {
   return mini.hasAttribute("active") || (mini as HTMLElement).offsetWidth > 0;
 }
 
+function getVisibleMiniplayerElement(): HTMLElement | null {
+  const mini = document.querySelector("ytd-miniplayer");
+  if (!mini) return null;
+
+  // Search for the true visible card/player element in YouTube's DOM
+  const candidates = [
+    mini.querySelector<HTMLElement>("#card"),
+    mini.querySelector<HTMLElement>("[id='card']"),
+    mini.querySelector<HTMLElement>(".video-container"),
+    mini.querySelector<HTMLElement>("#player-container"),
+    mini.querySelector<HTMLElement>(".ytp-miniplayer-ui"),
+    mini.querySelector<HTMLElement>("video"),
+  ];
+
+  for (const el of candidates) {
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 100 && rect.height > 60) {
+        return el;
+      }
+    }
+  }
+
+  const miniRect = mini.getBoundingClientRect();
+  if (miniRect.width > 100 && miniRect.height > 60) {
+    return mini as HTMLElement;
+  }
+
+  return null;
+}
 
 function getActiveMediaVideoElement(): HTMLVideoElement | null {
   if (isMiniplayerActive()) {
@@ -462,29 +492,48 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   const [miniWidth, setMiniWidth] = useState(340);
   const [isDismissed, setIsDismissed] = useState(false);
 
-  // Position calculation relative to YouTube's <ytd-miniplayer>
+  // Position calculation relative to YouTube's miniplayer
   useEffect(() => {
+    let observedTarget: HTMLElement | null = null;
+    let ro: ResizeObserver | null = null;
+
     const updatePosition = () => {
-      const mini = document.querySelector("ytd-miniplayer");
-      if (mini) {
-        const rect = mini.getBoundingClientRect();
-        const distFromBottom = Math.max(16, window.innerHeight - rect.top);
-        setBottomOffset(distFromBottom + 12);
-        const distFromRight = Math.max(16, window.innerWidth - rect.right);
-        setRightOffset(distFromRight);
-        if (rect.width > 0) {
-          setMiniWidth(Math.max(300, Math.min(420, rect.width)));
+      const target = getVisibleMiniplayerElement();
+      if (target) {
+        const rect = target.getBoundingClientRect();
+        if (rect.width > 50 && rect.height > 50) {
+          const clientW =
+            document.documentElement.clientWidth || window.innerWidth;
+          const clientH =
+            document.documentElement.clientHeight || window.innerHeight;
+          const distFromBottom = Math.max(16, clientH - rect.top);
+          setBottomOffset(distFromBottom + 12);
+          const distFromRight = Math.max(0, clientW - rect.right);
+          setRightOffset(distFromRight);
+          setMiniWidth(
+            Math.max(280, Math.min(clientW - 24, Math.round(rect.width))),
+          );
+
+          if (target !== observedTarget && typeof ResizeObserver !== "undefined") {
+            ro?.disconnect();
+            observedTarget = target;
+            ro = new ResizeObserver(() => {
+              updatePosition();
+            });
+            ro.observe(target);
+          }
         }
       }
     };
 
     updatePosition();
-    const interval = setInterval(updatePosition, 800);
+    const interval = setInterval(updatePosition, 600);
     window.addEventListener("resize", updatePosition);
 
     return () => {
       clearInterval(interval);
       window.removeEventListener("resize", updatePosition);
+      ro?.disconnect();
     };
   }, []);
 
@@ -1493,6 +1542,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         maxWidth: "calc(100vw - 32px)",
         zIndex: 2200,
         pointerEvents: "auto",
+        boxSizing: "border-box",
       }}
     >
       <AnimatePresence>
@@ -1508,6 +1558,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
           }}
           style={{
             width: "100%",
+            boxSizing: "border-box",
             background: "var(--lyrical-card-bg, rgba(22, 22, 28, 0.94))",
             backdropFilter: "blur(20px)",
             WebkitBackdropFilter: "blur(20px)",
