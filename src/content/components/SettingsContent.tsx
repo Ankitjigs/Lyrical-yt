@@ -21,8 +21,9 @@ import {
   Move,
   Sparkles,
   Disc3,
+  Database,
 } from "lucide-react";
-import { useAppStore } from "../store";
+import { useAppStore, getCanonicalSourceSyncType } from "../store";
 import { log } from "../utils/logger";
 import SourcePreferenceList from "./SourcePreferenceList";
 
@@ -49,6 +50,29 @@ import {
   updateStoredCustomThemeFromDraft,
 } from "../../themes/customThemeUtils";
 import { t } from "../../i18n";
+import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
+
+function extractVideoId(val: any): string | null {
+  if (!val) return null;
+  if (typeof val.videoId === "string" && val.videoId.trim()) {
+    return val.videoId.trim();
+  }
+  if (typeof val.tracks === "object" && val.tracks) {
+    for (const tr of Object.values(val.tracks)) {
+      if (typeof (tr as any)?.videoId === "string" && (tr as any).videoId.trim()) {
+        return (tr as any).videoId.trim();
+      }
+    }
+  }
+  if (typeof val === "object") {
+    for (const v of Object.values(val)) {
+      if (typeof (v as any)?.videoId === "string" && (v as any).videoId.trim()) {
+        return (v as any).videoId.trim();
+      }
+    }
+  }
+  return null;
+}
 
 function getCacheSongId(key) {
   if (key.startsWith("lyrics_versions_")) {
@@ -64,6 +88,124 @@ function getCacheSongId(key) {
   }
 
   return null;
+}
+
+const SYNC_CATEGORIES = [
+  { key: "syllable", label: "Syllable", color: "#fcd34d" },
+  { key: "word", label: "Word", color: "#93c5fd" },
+  { key: "line", label: "Line", color: "#86efac" },
+  { key: "unsynced", label: "Unsynced", color: "rgba(255, 255, 255, 0.5)" },
+] as const;
+
+function formatBytes(bytes: number) {
+  if (!+bytes) return "0 Bytes";
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function detectSyncType(val: any, entryKey?: string): "syllable" | "word" | "line" | "unsynced" {
+  // 1. Extract source ID from entryKey (e.g. lyrics_artist_title__sourceId)
+  let sourceId: string | null = null;
+  if (entryKey && entryKey.startsWith("lyrics_") && !entryKey.startsWith("lyrics_versions_")) {
+    const rest = entryKey.slice("lyrics_".length);
+    const sep = rest.lastIndexOf("__");
+    if (sep !== -1) {
+      sourceId = rest.slice(sep + 2).trim().toLowerCase();
+    }
+  }
+
+  // 2. If not in key (e.g. Primary Cache), look in payload
+  if (!sourceId) {
+    const s = val?.source || val?.sourceId || val?.provider || val?.metadata?.source;
+    if (typeof s === "string" && s.trim()) {
+      sourceId = s.trim().toLowerCase();
+    }
+  }
+
+  // 3. Match against canonical source preference list
+  if (sourceId) {
+    const canonical = getCanonicalSourceSyncType(sourceId);
+    if (canonical) {
+      return canonical;
+    }
+  }
+
+  if (!val) return "unsynced";
+
+  // 4. If this is a versions collection object (lyrics_versions_*), check child versions
+  if (!Array.isArray(val.lyrics) && typeof val === "object") {
+    const versionList = Object.values(val).filter(
+      (v: any) =>
+        v &&
+        typeof v === "object" &&
+        (Array.isArray(v.lyrics) || v.synced !== undefined),
+    ) as any[];
+    if (versionList.length > 0) {
+      for (const v of versionList) {
+        const vst = detectSyncType(v, entryKey);
+        if (vst === "syllable" || vst === "word") return vst;
+      }
+      return versionList.some((v: any) => v.synced || Array.isArray(v.lyrics))
+        ? "line"
+        : "unsynced";
+    }
+  }
+
+  // 5. Check metadata / rawType (ONLY 4 syllable sources are allowed to be syllable)
+  const isOneOf4SyllableSources =
+    sourceId === "lyrical" ||
+    sourceId === "unison-richsynced" ||
+    sourceId === "binimum-richsynced" ||
+    sourceId === "youlyplus-richsynced";
+
+  const rawType = (val.syncType || val.metadata?.syncType || "").toLowerCase();
+  if (rawType === "syllable" || rawType === "richsync") {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+  if (rawType === "word" || rawType === "wordsync") return "word";
+  if (rawType === "line" || rawType === "linesync") return "line";
+  if (rawType === "unsynced" || rawType === "plain") return "unsynced";
+  if (val.format?.toLowerCase() === "ttml") {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+
+  // 6. Deep inspection of parsed lyrics array
+  const lyrics = Array.isArray(val.lyrics) ? val.lyrics : [];
+  if (lyrics.length === 0) return "unsynced";
+
+  let hasLineTimestamps = false;
+  let hasWordTimestamps = false;
+
+  for (let i = 0; i < Math.min(lyrics.length, 30); i++) {
+    const line = lyrics[i];
+    if (
+      typeof line?.time === "number" ||
+      typeof line?.startTime === "number" ||
+      typeof line?.start === "number"
+    ) {
+      hasLineTimestamps = true;
+    }
+    if (
+      (Array.isArray(line?.parts) && line.parts.length > 1) ||
+      (Array.isArray(line?.words) && line.words.length > 0) ||
+      (Array.isArray(line?.syllables) && line.syllables.length > 0) ||
+      (Array.isArray(line?.ranges) && line.ranges.length > 0)
+    ) {
+      hasWordTimestamps = true;
+      break;
+    }
+  }
+
+  if (hasWordTimestamps) {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+  if (hasLineTimestamps) return "line";
+  return "unsynced";
 }
 
 const LYRICS_SIZE_PRESETS = [
@@ -133,7 +275,15 @@ const SettingsContent = () => {
     isVocalMuted: false,
     showMiniCompanion: true,
   });
-  const [cacheInfo, setCacheInfo] = useState({ bytes: 0, songCount: 0 });
+  const [cacheInfo, setCacheInfo] = useState<{
+    bytes: number;
+    songCount: number;
+    syncCounts: Record<string, number>;
+  }>({
+    bytes: 0,
+    songCount: 0,
+    syncCounts: { syllable: 0, word: 0, line: 0, unsynced: 0 },
+  });
   const themeId = settings.themeId || DEFAULT_THEME_ID;
   const currentTheme = getThemeById(themeId, customThemes);
   const currentThemeName = currentTheme.isCustom
@@ -209,12 +359,42 @@ const SettingsContent = () => {
         (key) =>
           key.startsWith("lyrics_") || key.startsWith("lyrics_versions_"),
       );
-      const uniqueSongs = new Set(
-        lyricsKeys.map((key) => getCacheSongId(key)).filter(Boolean),
-      );
 
-      chrome.storage.local.getBytesInUse(null, (bytes) => {
-        setCacheInfo({ bytes, songCount: uniqueSongs.size });
+      const uniqueSongKeys = new Set<string>();
+      const syncCounts: Record<string, number> = {
+        syllable: 0,
+        word: 0,
+        line: 0,
+        unsynced: 0,
+      };
+      let totalBytes = 0;
+
+      for (const key of lyricsKeys) {
+        const item = items[key] as any;
+        if (item?.missing === true) continue;
+
+        if (typeof item === "string") totalBytes += item.length;
+        else {
+          try {
+            totalBytes += JSON.stringify(item).length;
+          } catch {}
+        }
+
+        const songId = getCacheSongId(key);
+        if (!songId) continue;
+        const vid = extractVideoId(item);
+        const groupKey = vid ? `vid_${vid}` : `song_${songId}`;
+        uniqueSongKeys.add(groupKey);
+
+        const st = detectSyncType(item, key);
+        if (st in syncCounts) syncCounts[st]++;
+        else syncCounts.unsynced++;
+      }
+
+      setCacheInfo({
+        bytes: totalBytes,
+        songCount: uniqueSongKeys.size,
+        syncCounts,
       });
     });
   }, []);
@@ -866,41 +1046,249 @@ const SettingsContent = () => {
                   desc={t("settings_showLogs_desc")}
                 />
                 <div style={dividerStyle} />
+                {/* Better Lyrics Style Twin Stat Tiles */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "10px",
+                    marginTop: "6px",
+                    marginBottom: "6px",
+                  }}
+                >
+                  {/* Tile 1: Total Lyrics */}
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "2px",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      background:
+                        "linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%), var(--lyrical-card-bg-elevated, #1c1f24)",
+                      border: "1px solid var(--lyrical-border-soft, rgba(255, 255, 255, 0.08))",
+                      boxShadow: "inset 0 1px 0 0 rgba(255, 255, 255, 0.05)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "22px",
+                          fontWeight: "700",
+                          color: "var(--lyrical-text-primary, #ffffff)",
+                          letterSpacing: "-0.01em",
+                          lineHeight: "1.1",
+                        }}
+                      >
+                        {cacheInfo.songCount}
+                      </span>
+                      <SyncTypeIcon type="line" size={16} style={{ opacity: 0.5, marginTop: "2px" }} />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.5))",
+                        fontWeight: "450",
+                        marginTop: "2px",
+                      }}
+                    >
+                      {t("cacheEditor_totalLyricsInCache", undefined, "Total lyrics in cache")}
+                    </span>
+
+                    {/* Segmented Distribution Bar */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "2px",
+                        height: "6px",
+                        borderRadius: "999px",
+                        background: "rgba(255, 255, 255, 0.06)",
+                        overflow: "hidden",
+                        width: "100%",
+                        marginTop: "12px",
+                      }}
+                    >
+                      {(() => {
+                        const totalSyncCount =
+                          (cacheInfo.syncCounts.syllable || 0) +
+                          (cacheInfo.syncCounts.word || 0) +
+                          (cacheInfo.syncCounts.line || 0) +
+                          (cacheInfo.syncCounts.unsynced || 0);
+
+                        if (totalSyncCount === 0) {
+                          return (
+                            <div
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                background: "rgba(255, 255, 255, 0.06)",
+                              }}
+                            />
+                          );
+                        }
+
+                        return SYNC_CATEGORIES.map((cat) => {
+                          const count = cacheInfo.syncCounts[cat.key] || 0;
+                          if (count === 0) return null;
+                          const pct = Math.round((count / totalSyncCount) * 100);
+                          return (
+                            <div
+                              key={cat.key}
+                              title={`${cat.label}: ${count} (${pct}%)`}
+                              style={{
+                                flexGrow: count,
+                                minWidth: "6px",
+                                height: "100%",
+                                background: cat.color,
+                                borderRadius: "1px",
+                              }}
+                            />
+                          );
+                        });
+                      })()}
+                    </div>
+                  </div>
+
+                  {/* Tile 2: Storage Used */}
+                  <div
+                    style={{
+                      position: "relative",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "2px",
+                      padding: "12px 14px",
+                      borderRadius: "12px",
+                      background:
+                        "linear-gradient(180deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.015) 100%), var(--lyrical-card-bg-elevated, #1c1f24)",
+                      border: "1px solid var(--lyrical-border-soft, rgba(255, 255, 255, 0.08))",
+                      boxShadow: "inset 0 1px 0 0 rgba(255, 255, 255, 0.05)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: "22px",
+                          fontWeight: "700",
+                          color: "var(--lyrical-text-primary, #ffffff)",
+                          letterSpacing: "-0.01em",
+                          lineHeight: "1.1",
+                        }}
+                      >
+                        {formatBytes(cacheInfo.bytes)}
+                      </span>
+                      <Database
+                        size={16}
+                        style={{
+                          color: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.4))",
+                          marginTop: "2px",
+                        }}
+                      />
+                    </div>
+                    <span
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.5))",
+                        fontWeight: "450",
+                        marginTop: "2px",
+                      }}
+                    >
+                      {t("cacheEditor_storageUsed", undefined, "Storage used")}
+                    </span>
+
+                    {/* Storage Bar */}
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "2px",
+                        height: "6px",
+                        borderRadius: "999px",
+                        background: "rgba(255, 255, 255, 0.06)",
+                        overflow: "hidden",
+                        width: "100%",
+                        marginTop: "12px",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${Math.min(100, Math.max(8, Math.round((cacheInfo.bytes / (5 * 1024 * 1024)) * 100)))}%`,
+                          height: "100%",
+                          background: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.4))",
+                          borderRadius: "999px",
+                          transition: "width 0.3s ease",
+                        }}
+                        title={`Storage used: ${formatBytes(cacheInfo.bytes)}`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Better Lyrics Style Clear Cache Action Row */}
                 <div
                   style={{
                     display: "flex",
-                    flexDirection: "column",
+                    justifyContent: "space-between",
+                    alignItems: "center",
                     gap: "12px",
+                    padding: "10px 4px 4px",
                   }}
                 >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <div>
-                      <div style={{ fontSize: "14px", fontWeight: "500" }}>
-                        {t("settings_cache_label")}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "12px",
-                          color: "var(--lyrical-text-muted)",
-                        }}
-                      >
-                        {t("settings_cache_desc")}
-                      </div>
+                  <div>
+                    <div style={{ fontSize: "14px", fontWeight: "500", color: "var(--lyrical-text-primary)" }}>
+                      {t("settings_cache_label", undefined, "Clear cached lyrics")}
                     </div>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        color: "var(--lyrical-text-muted)",
+                        marginTop: "2px",
+                      }}
+                    >
+                      {t("settings_cache_desc", undefined, "They download again as you play")}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsCacheEditorOpen(true)}
+                      style={{
+                        background: "rgba(255, 255, 255, 0.06)",
+                        color: "var(--lyrical-text-primary)",
+                        border: "1px solid var(--lyrical-border)",
+                        padding: "7px 12px",
+                        borderRadius: "8px",
+                        fontSize: "12px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        transition: "all 0.16s ease",
+                      }}
+                    >
+                      <Database size={13} style={{ opacity: 0.7 }} />
+                      <span>{t("settings_cache_openEditor", undefined, "Cache Editor")}</span>
+                    </button>
                     <button
                       type="button"
                       style={{
-                        background:
-                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))",
-                        color: "var(--lyrical-danger-text, #f87171)",
-                        border:
-                          "1px solid var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))",
+                        background: "#ef4444",
+                        color: "#ffffff",
+                        border: "none",
                         padding: "7px 13px",
                         borderRadius: "8px",
                         fontSize: "12px",
@@ -910,94 +1298,28 @@ const SettingsContent = () => {
                         alignItems: "center",
                         gap: "6px",
                         transition: "all 0.16s ease",
-                        boxShadow: "0 2px 6px rgba(239, 68, 68, 0.08)",
+                        boxShadow: "inset 0 1px 0 0 rgba(255, 255, 255, 0.2), 0 2px 6px rgba(239, 68, 68, 0.2)",
                       }}
                       onMouseEnter={(e) => {
-                        e.currentTarget.style.background =
-                          "var(--lyrical-danger-hover, rgba(239, 68, 68, 0.24))";
-                        e.currentTarget.style.borderColor =
-                          "rgba(239, 68, 68, 0.55)";
-                        e.currentTarget.style.color = "#ffffff";
+                        e.currentTarget.style.background = "#dc2626";
                       }}
                       onMouseLeave={(e) => {
-                        e.currentTarget.style.background =
-                          "var(--lyrical-danger-soft, rgba(239, 68, 68, 0.14))";
-                        e.currentTarget.style.borderColor =
-                          "var(--lyrical-danger-border, rgba(239, 68, 68, 0.32))";
-                        e.currentTarget.style.color =
-                          "var(--lyrical-danger-text, #f87171)";
+                        e.currentTarget.style.background = "#ef4444";
                       }}
                       onClick={() => {
-                        chrome.storage.local.clear(() => {
-                          refreshCacheInfo();
-                          alert(t("settings_cache_cleared"));
-                        });
+                        if (confirm("Are you sure you want to clear all cached lyrics?")) {
+                          chrome.storage.local.get(null, (all) => {
+                            const keysToRemove = Object.keys(all).filter((k) => k.startsWith("lyrics_"));
+                            chrome.storage.local.remove(keysToRemove, () => {
+                              refreshCacheInfo();
+                            });
+                          });
+                        }
                       }}
                     >
-                      <Trash2 size={14} />
-                      {t("settings_cache_clear")}
+                      <Trash2 size={13} />
+                      <span>{t("settings_cache_clear", undefined, "Clear cache")}</span>
                     </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsCacheEditorOpen(true)}
-                    style={{
-                      background: "var(--lyrical-card-bg-elevated)",
-                      color: "var(--lyrical-text-primary)",
-                      border: "1px solid var(--lyrical-border)",
-                      padding: "10px 14px",
-                      borderRadius: "10px",
-                      fontSize: "12px",
-                      fontWeight: "700",
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "8px",
-                      alignSelf: "flex-start",
-                    }}
-                  >
-                    {t("settings_cache_openEditor")}
-                  </button>
-                  {/* Cache Info Display */}
-                  <div
-                    style={{
-                      background: "var(--lyrical-accent-soft)",
-                      padding: "10px 12px",
-                      borderRadius: "8px",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: "12px",
-                        color: "var(--lyrical-text-secondary)",
-                      }}
-                    >
-                      {t("settings_cache_storageUsed")}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: "12px",
-                        color: "var(--lyrical-accent)",
-                        fontWeight: "600",
-                      }}
-                    >
-                      {cacheInfo.bytes >= 1024 * 1024
-                        ? `${(cacheInfo.bytes / (1024 * 1024)).toFixed(2)} MB`
-                        : cacheInfo.bytes >= 1024
-                          ? `${(cacheInfo.bytes / 1024).toFixed(1)} KB`
-                          : `${cacheInfo.bytes} bytes`}
-                      {" - "}
-                      {cacheInfo.songCount === 1
-                        ? t("settings_cache_songCached", [
-                            String(cacheInfo.songCount),
-                          ])
-                        : t("settings_cache_songsCached", [
-                            String(cacheInfo.songCount),
-                          ])}
-                    </span>
                   </div>
                 </div>
               </div>

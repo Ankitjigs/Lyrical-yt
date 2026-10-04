@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import ShinyText from "./ShinyText";
 import SearchingVibeIcon from "./SearchingVibeIcons";
+import TranslatorAnimatedIcon from "./TranslatorAnimatedIcon";
 import CollapsedLyricsPreview from "./CollapsedLyricsPreview";
 import { useLyricsEngine } from "../../hooks/useLyricsEngine";
 import {
@@ -2502,9 +2503,14 @@ const LyricsPanel = () => {
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
+                          gap: "8px",
                           pointerEvents: "none",
                         }}
                       >
+                        <TranslatorAnimatedIcon
+                          size={20}
+                          reduceAnimations={reduceAnimations}
+                        />
                         <ShinyText
                           text={t("lyricsPanel_processing")}
                           disabled={reduceAnimations}

@@ -3,10 +3,10 @@ import React from "react";
 export type SyncType = "syllable" | "word" | "line" | "unsynced" | string;
 
 export const syncTypeColors: Record<string, string> = {
-  syllable: "#fde69b",
-  word: "#aad1ff",
-  line: "#c9f8da",
-  unsynced: "rgba(255, 255, 255, 0.7)",
+  syllable: "#fcd34d",
+  word: "#93c5fd",
+  line: "#86efac",
+  unsynced: "rgba(255, 255, 255, 0.5)",
 };
 
 export const syncTypeIcons: Record<string, string> = {

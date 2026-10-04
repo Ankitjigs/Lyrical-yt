@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
 import {
   ArrowLeft,
   Database,
@@ -15,9 +15,11 @@ import {
   Type,
   ListMusic,
   Check,
+  Link2,
 } from "lucide-react";
 import { t } from "../../i18n";
-import { useAppStore } from "../store";
+import { useAppStore, getCanonicalSourceSyncType } from "../store";
+import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
 
 const YouTubeIcon = ({ size = 16 }: { size?: number }) => (
   <svg
@@ -82,16 +84,29 @@ const YouTubeBadgeButton = ({
   );
 };
 
-const SOURCE_LABELS = {
+const SOURCE_LABELS: Record<string, string> = {
   lyrical: "Lyrical",
   "test-lyrical": "Test Lyrical",
+  "unison-richsynced": "Better Lyrics Unison",
+  "unison-wordsynced": "Better Lyrics Unison",
+  "unison-synced": "Better Lyrics Unison",
+  "unison-plain": "Better Lyrics Unison",
+  "portato-richsynced": "Better Lyrics Portato",
+  portato: "Better Lyrics Portato",
   better_lyrics: "Better Lyrics",
+  "bLyrics-synced": "Better Lyrics",
+  "legato-synced": "Better Lyrics Legato",
+  legato: "Better Lyrics Legato",
   "youlyplus-richsynced": "YouLy+",
   "youlyplus-synced": "YouLy+",
   musixmatch: "Musixmatch",
   "musixmatch-richsync": "Musixmatch RichSync",
+  "musixmatch-synced": "Musixmatch",
+  "binimum-richsynced": "BiniLyrics",
+  "binimum-synced": "BiniLyrics",
   lrclib: "LRCLib",
   captions: "YouTube Captions",
+  "youtube-captions": "YouTube Captions",
 };
 
 function getSourceLabel(sourceId) {
@@ -132,9 +147,272 @@ function parseCacheKey(key) {
   return null;
 }
 
+function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cleanLabel: string } {
+  if (!rawKey) {
+    return { artist: "", title: t("cacheEditor_unknownSong"), cleanLabel: t("cacheEditor_unknownSong") };
+  }
+
+  const stripSuffixes = (str: string) => {
+    return str
+      .replace(/\s*[\(\[\{]?(Official\s+)?(Music\s+Video|Video|Audio|MV|Lyric\s+Video|Visualizer)[\)\]\}]?\s*$/i, "")
+      .replace(/\s*[\(\[\{]?(Full\s+Song|Full\s+Version|Teaser)[\)\]\}]?\s*$/i, "")
+      .trim();
+  };
+
+  const underscoreIdx = rawKey.indexOf("_");
+  let rawArtist = underscoreIdx !== -1 ? rawKey.slice(0, underscoreIdx).trim() : "";
+  let rawTitle = underscoreIdx !== -1 ? rawKey.slice(underscoreIdx + 1).trim() : rawKey.trim();
+
+  rawTitle = stripSuffixes(rawTitle);
+
+  // If rawTitle contains brackets like 「...」, 『...』, "...", or '...'
+  const bracketMatch = rawTitle.match(/^(.*?)[「『"“]([^」』"”]+)[」』"”](.*)$/);
+  if (bracketMatch) {
+    const prefix = bracketMatch[1].trim();
+    const songName = bracketMatch[2].trim();
+    if (prefix.length > 2) {
+      const cleanArtist = prefix
+        .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
+        .replace(/\s*[x×]\s*/g, " × ")
+        .trim();
+      return {
+        artist: cleanArtist,
+        title: songName,
+        cleanLabel: `${cleanArtist} • ${songName}`,
+      };
+    }
+    const cleanArtist = rawArtist
+      .replace(/\s*and\s+.*Official.*Channel/gi, "")
+      .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
+      .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
+      .trim();
+    return {
+      artist: cleanArtist,
+      title: songName,
+      cleanLabel: cleanArtist ? `${cleanArtist} • ${songName}` : songName,
+    };
+  }
+
+  // If rawTitle has " - "
+  if (rawTitle.includes(" - ")) {
+    const parts = rawTitle.split(" - ");
+    const cleanArtist = parts[0].trim();
+    const songName = parts.slice(1).join(" - ").trim();
+    return {
+      artist: cleanArtist,
+      title: songName,
+      cleanLabel: `${cleanArtist} • ${songName}`,
+    };
+  }
+
+  const cleanArtist = rawArtist
+    .replace(/\s*and\s+.*Official.*Channel/gi, "")
+    .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
+    .trim();
+  const cleanLabel = cleanArtist ? `${cleanArtist} • ${rawTitle}` : rawTitle;
+  return {
+    artist: cleanArtist,
+    title: rawTitle,
+    cleanLabel,
+  };
+}
+
+function extractCoreSongTitle(rawKey: string): string {
+  if (!rawKey) return "";
+  const bracketMatch = rawKey.match(/[「『"“]([^」』"”]+)[」』"”]/);
+  if (bracketMatch && bracketMatch[1]) {
+    return bracketMatch[1].trim();
+  }
+  const clean = cleanDisplayTrack(rawKey);
+  return clean.title || clean.cleanLabel;
+}
+
+function normalizeTitleForCompare(str: string): string {
+  if (!str) return "";
+  return str.toLowerCase().replace(/[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/g, "");
+}
+
 function formatSongLabel(songKey) {
   if (!songKey) return t("cacheEditor_unknownSong");
-  return songKey.replaceAll("_", " • ");
+  return cleanDisplayTrack(songKey).cleanLabel;
+}
+
+const SYNC_CATEGORIES = [
+  { key: "syllable", label: "Syllable", color: "#fcd34d" },
+  { key: "word", label: "Word", color: "#93c5fd" },
+  { key: "line", label: "Line", color: "#86efac" },
+  { key: "unsynced", label: "Unsynced", color: "rgba(255, 255, 255, 0.5)" },
+] as const;
+
+const getSyncBadgeStyles = (tag: string) => {
+  const norm = (tag || "").toLowerCase();
+  switch (norm) {
+    case "syllable":
+      return {
+        color: "#fcd34d",
+        background: "rgba(252, 211, 77, 0.15)",
+        border: "1px solid rgba(252, 211, 77, 0.25)",
+      };
+    case "word":
+      return {
+        color: "#93c5fd",
+        background: "rgba(96, 165, 250, 0.15)",
+        border: "1px solid rgba(96, 165, 250, 0.25)",
+      };
+    case "line":
+      return {
+        color: "#86efac",
+        background: "rgba(74, 222, 128, 0.15)",
+        border: "1px solid rgba(74, 222, 128, 0.25)",
+      };
+    case "unsynced":
+    default:
+      return {
+        color: "rgba(255, 255, 255, 0.6)",
+        background: "rgba(255, 255, 255, 0.06)",
+        border: "1px solid rgba(255, 255, 255, 0.12)",
+      };
+  }
+};
+
+const SyncTypeBadge = ({ type, size = 11 }: { type: string; size?: number }) => {
+  const styles = getSyncBadgeStyles(type);
+  const label = type.charAt(0).toUpperCase() + type.slice(1).toLowerCase();
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        height: "20px",
+        padding: "0 7px 0 6px",
+        borderRadius: "6px",
+        background: styles.background,
+        color: styles.color,
+        border: styles.border,
+        boxShadow: "rgba(0, 0, 0, 0.05) 0 8px 8px -3px, inset rgba(255, 255, 255, 0.08) 0 1px 0 0",
+        fontSize: `${size}px`,
+        fontWeight: "600",
+        letterSpacing: "0",
+        lineHeight: "1",
+        whiteSpace: "nowrap",
+        boxSizing: "border-box",
+      }}
+    >
+      <SyncTypeIcon type={type} size={12} style={{ fill: styles.color }} />
+      <span>{label}</span>
+    </span>
+  );
+};
+
+function estimateEntryBytes(val: any): number {
+  if (!val) return 0;
+  if (typeof val === "string") return val.length;
+  try {
+    return JSON.stringify(val).length;
+  } catch {
+    return 0;
+  }
+}
+
+function detectSyncType(val: any, entryKey?: string): "syllable" | "word" | "line" | "unsynced" {
+  // 1. Extract source ID from entryKey (e.g. lyrics_artist_title__sourceId)
+  let sourceId: string | null = null;
+  if (entryKey && entryKey.startsWith("lyrics_") && !entryKey.startsWith("lyrics_versions_")) {
+    const rest = entryKey.slice("lyrics_".length);
+    const sep = rest.lastIndexOf("__");
+    if (sep !== -1) {
+      sourceId = rest.slice(sep + 2).trim().toLowerCase();
+    }
+  }
+
+  // 2. If not in key (e.g. Primary Cache), look in payload
+  if (!sourceId) {
+    const s = val?.source || val?.sourceId || val?.provider || val?.metadata?.source;
+    if (typeof s === "string" && s.trim()) {
+      sourceId = s.trim().toLowerCase();
+    }
+  }
+
+  // 3. Match against canonical source preference list
+  if (sourceId) {
+    const canonical = getCanonicalSourceSyncType(sourceId);
+    if (canonical) {
+      return canonical;
+    }
+  }
+
+  if (!val) return "unsynced";
+
+  // 4. If this is a versions collection object (lyrics_versions_*), check child versions
+  if (!Array.isArray(val.lyrics) && typeof val === "object") {
+    const versionList = Object.values(val).filter(
+      (v: any) =>
+        v &&
+        typeof v === "object" &&
+        (Array.isArray(v.lyrics) || v.synced !== undefined),
+    ) as any[];
+    if (versionList.length > 0) {
+      for (const v of versionList) {
+        const vst = detectSyncType(v, entryKey);
+        if (vst === "syllable" || vst === "word") return vst;
+      }
+      return versionList.some((v: any) => v.synced || Array.isArray(v.lyrics))
+        ? "line"
+        : "unsynced";
+    }
+  }
+
+  // 5. Check metadata / rawType (ONLY 4 syllable sources are allowed to be syllable)
+  const isOneOf4SyllableSources =
+    sourceId === "lyrical" ||
+    sourceId === "unison-richsynced" ||
+    sourceId === "binimum-richsynced" ||
+    sourceId === "youlyplus-richsynced";
+
+  const rawType = (val.syncType || val.metadata?.syncType || "").toLowerCase();
+  if (rawType === "syllable" || rawType === "richsync") {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+  if (rawType === "word" || rawType === "wordsync") return "word";
+  if (rawType === "line" || rawType === "linesync") return "line";
+  if (rawType === "unsynced" || rawType === "plain") return "unsynced";
+  if (val.format?.toLowerCase() === "ttml") {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+
+  // 6. Deep inspection of parsed lyrics array
+  const lyrics = Array.isArray(val.lyrics) ? val.lyrics : [];
+  if (lyrics.length === 0) return "unsynced";
+
+  let hasLineTimestamps = false;
+  let hasWordTimestamps = false;
+
+  for (let i = 0; i < Math.min(lyrics.length, 30); i++) {
+    const line = lyrics[i];
+    if (
+      typeof line?.time === "number" ||
+      typeof line?.startTime === "number" ||
+      typeof line?.start === "number"
+    ) {
+      hasLineTimestamps = true;
+    }
+    if (
+      (Array.isArray(line?.parts) && line.parts.length > 1) ||
+      (Array.isArray(line?.words) && line.words.length > 0) ||
+      (Array.isArray(line?.syllables) && line.syllables.length > 0) ||
+      (Array.isArray(line?.ranges) && line.ranges.length > 0)
+    ) {
+      hasWordTimestamps = true;
+      break;
+    }
+  }
+
+  if (hasWordTimestamps) {
+    return isOneOf4SyllableSources ? "syllable" : "word";
+  }
+  if (hasLineTimestamps) return "line";
+  return "unsynced";
 }
 
 function formatBytes(bytes) {
@@ -251,6 +529,24 @@ function extractVideoIdFromGroup(grp: any): string | null {
   return null;
 }
 
+function extractAlternateTitle(altId: string, currentTitle: string): string | null {
+  if (!altId) return null;
+  const coreAlt = extractCoreSongTitle(altId);
+  const coreCurrent = extractCoreSongTitle(currentTitle);
+
+  // If the core song titles match (ignoring case, spaces, and punctuation), it is NOT a different language title!
+  if (!coreAlt || normalizeTitleForCompare(coreAlt) === normalizeTitleForCompare(coreCurrent)) {
+    return null;
+  }
+
+  // If currentTitle already contains this alternate title, don't show it
+  if (currentTitle.toLowerCase().includes(coreAlt.toLowerCase())) {
+    return null;
+  }
+
+  return coreAlt;
+}
+
 function normalizeCacheGroups(
   items: Record<string, any>,
   activeContext?: { videoId?: string | null; songKey?: string | null },
@@ -268,7 +564,7 @@ function normalizeCacheGroups(
     const parsed = parseCacheKey(key);
     if (!parsed) return;
 
-    const sizeBytes = new Blob([JSON.stringify(value)]).size;
+    const sizeBytes = estimateEntryBytes(value);
     const lyrics = Array.isArray(value?.lyrics) ? value.lyrics : [];
     const romanizedLyrics = Array.isArray(value?.romanizedLyrics)
       ? value.romanizedLyrics
@@ -287,8 +583,16 @@ function normalizeCacheGroups(
     const versionCount =
       parsed.type === "versions" ? Object.keys(value || {}).length : 0;
 
+    const resolvedSourceId =
+      parsed.sourceId ||
+      value?.source ||
+      value?.sourceId ||
+      value?.metadata?.source ||
+      null;
+
     const entry = {
       ...parsed,
+      sourceId: resolvedSourceId,
       sizeBytes,
       preview,
       timestamp: value?.timestamp || null,
@@ -299,11 +603,16 @@ function normalizeCacheGroups(
       romanizedLyrics,
       translatedLyrics,
       value,
-      sourceLabel: parsed.sourceId
-        ? getSourceLabel(parsed.sourceId)
-        : parsed.type === "versions"
-          ? t("cacheEditor_savedVersions")
-          : t("cacheEditor_primaryCache"),
+      sourceLabel:
+        parsed.type === "primary-cache"
+          ? resolvedSourceId
+            ? `${t("cacheEditor_primaryCache", undefined, "Primary Cache")} (${getSourceLabel(resolvedSourceId)})`
+            : t("cacheEditor_primaryCache", undefined, "Primary Cache")
+          : resolvedSourceId
+            ? getSourceLabel(resolvedSourceId)
+            : parsed.type === "versions"
+              ? t("cacheEditor_savedVersions")
+              : t("cacheEditor_primaryCache"),
     };
 
     if (!grouped.has(parsed.songKey)) {
@@ -356,6 +665,11 @@ function normalizeCacheGroups(
         }
         primary.altIds.push(group.id);
 
+        if (!primary.altTitles) {
+          primary.altTitles = [];
+        }
+
+        const prevPrimaryTitle = primary.title;
         // If the current group matches active songKey, prioritize its title/id
         if (
           (storeSongKey &&
@@ -368,9 +682,20 @@ function normalizeCacheGroups(
           primary.title = group.title;
           primary.id = group.id;
         }
+
+        const altA = extractAlternateTitle(group.id, primary.title);
+        if (altA && !primary.altTitles.includes(altA)) {
+          primary.altTitles.push(altA);
+        }
+        const altB = extractAlternateTitle(prevPrimaryTitle, primary.title);
+        if (altB && !primary.altTitles.includes(altB)) {
+          primary.altTitles.push(altB);
+        }
+
         continue;
       } else {
         group.altIds = [group.id];
+        group.altTitles = [];
         videoIdToGroup.set(group.videoId, group);
       }
     }
@@ -378,40 +703,152 @@ function normalizeCacheGroups(
   }
 
   return finalGroups
-    .map((group: any) => ({
-      ...group,
-      totalBytes: group.entries.reduce(
-        (sum: number, entry: any) => sum + entry.sizeBytes,
-        0,
-      ),
-      latestTimestamp: group.entries.reduce(
-        (latest: number, entry: any) => Math.max(latest, entry.timestamp || 0),
-        0,
-      ),
-      entries: group.entries.sort((a: any, b: any) => {
-        const priority: Record<string, number> = {
-          "primary-cache": 0,
-          "source-cache": 1,
-          versions: 2,
-        };
-        return (
-          (priority[a.type] ?? 99) - (priority[b.type] ?? 99) ||
-          (b.timestamp || 0) - (a.timestamp || 0)
+    .map((group: any) => {
+      if (Array.isArray(group.altTitles)) {
+        group.altTitles = group.altTitles.filter(
+          (alt: string) => alt && !group.title.includes(alt),
         );
-      }),
-    }))
-    .sort((a: any, b: any) => (b.latestTimestamp || 0) - (a.latestTimestamp || 0));
+      }
+
+      // Deduplicate entries by type and sourceId:
+      // If there are multiple entries for the same type (e.g. multiple "primary-cache"),
+      // keep the best one (highest completeness and newest timestamp) and attach the others as aliasKeys!
+      const entryMap = new Map<string, any>();
+      for (const entry of group.entries) {
+        const dedupKey =
+          entry.type === "primary-cache"
+            ? "primary-cache"
+            : entry.type === "versions"
+              ? "versions"
+              : `source_${entry.sourceId || ""}`;
+
+        if (!entryMap.has(dedupKey)) {
+          entryMap.set(dedupKey, { ...entry, aliasKeys: [] });
+        } else {
+          const existing = entryMap.get(dedupKey);
+          const score = (e: any) =>
+            (e.romanizedCount > 0 ? 1000 : 0) +
+            (e.translatedCount > 0 ? 1000 : 0) +
+            ((e.lineCount || 0) * 10) +
+            (e.timestamp || 0) / 1e12;
+
+          const existingScore = score(existing);
+          const currentScore = score(entry);
+
+          if (currentScore > existingScore) {
+            const aliasKeys = Array.from(
+              new Set([...(existing.aliasKeys || []), existing.key]),
+            );
+            entryMap.set(dedupKey, {
+              ...entry,
+              aliasKeys,
+              sizeBytes: existing.sizeBytes + entry.sizeBytes,
+            });
+          } else {
+            existing.aliasKeys = Array.from(
+              new Set([...(existing.aliasKeys || []), entry.key]),
+            );
+            existing.sizeBytes += entry.sizeBytes;
+          }
+        }
+      }
+
+      const deduplicatedEntries = Array.from(entryMap.values());
+
+      const SYNC_PRIORITY: Record<string, number> = {
+        syllable: 3,
+        word: 2,
+        line: 1,
+        unsynced: 0,
+      };
+
+      let bestSyncType: "syllable" | "word" | "line" | "unsynced" = "unsynced";
+      const syncSet = new Set<"syllable" | "word" | "line" | "unsynced">();
+
+      for (const entry of deduplicatedEntries) {
+        const st = detectSyncType(entry.value, entry.key);
+        entry.syncType = st;
+        syncSet.add(st);
+        if ((SYNC_PRIORITY[st] ?? 0) > (SYNC_PRIORITY[bestSyncType] ?? 0)) {
+          bestSyncType = st;
+        }
+      }
+
+      const availableSyncTypes = (
+        ["syllable", "word", "line", "unsynced"] as const
+      ).filter((st) => syncSet.has(st));
+
+      return {
+        ...group,
+        bestSyncType,
+        availableSyncTypes,
+        totalBytes: deduplicatedEntries.reduce(
+          (sum: number, entry: any) => sum + entry.sizeBytes,
+          0,
+        ),
+        latestTimestamp: deduplicatedEntries.reduce(
+          (latest: number, entry: any) =>
+            Math.max(latest, entry.timestamp || 0),
+          0,
+        ),
+        entries: deduplicatedEntries.sort((a: any, b: any) => {
+          const priority: Record<string, number> = {
+            "primary-cache": 0,
+            "source-cache": 1,
+            versions: 2,
+          };
+          return (
+            (priority[a.type] ?? 99) - (priority[b.type] ?? 99) ||
+            (b.timestamp || 0) - (a.timestamp || 0)
+          );
+        }),
+      };
+    })
+    .sort(
+      (a: any, b: any) => (b.latestTimestamp || 0) - (a.latestTimestamp || 0),
+    );
 }
 
 const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   const [groups, setGroups] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const deferredSearchTerm = useDeferredValue(searchTerm);
+  const [hoveredSyncType, setHoveredSyncType] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [expandedKeys, setExpandedKeys] = useState(() => new Set());
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const [viewTabs, setViewTabs] = useState<Record<string, "formatted" | "raw">>({});
   const [selectedEntryTracks, setSelectedEntryTracks] = useState<Record<string, string>>({});
   const [openTrackDropdownKey, setOpenTrackDropdownKey] = useState<string | null>(null);
+
+  const statsSummary = useMemo(() => {
+    let totalBytes = 0;
+    const syncCounts: Record<string, number> = {
+      syllable: 0,
+      word: 0,
+      line: 0,
+      unsynced: 0,
+    };
+
+    for (const group of groups as any[]) {
+      totalBytes += group.totalBytes || 0;
+      for (const entry of group.entries || []) {
+        const syncType =
+          entry.syncType || detectSyncType(entry.value, entry.key);
+        if (syncType in syncCounts) {
+          syncCounts[syncType]++;
+        } else {
+          syncCounts.unsynced++;
+        }
+      }
+    }
+
+    return {
+      songCount: groups.length,
+      totalBytes,
+      syncCounts,
+    };
+  }, [groups]);
 
   const refreshCache = async () => {
     setLoading(true);
@@ -447,20 +884,23 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
       });
 
       // Silently backfill videoId into storage for any group that resolved it
-      // so it persists permanently for subsequent opens
+      // so it persists permanently for subsequent opens (batched in single write)
+      const backfillBatch: Record<string, any> = {};
       for (const grp of normalized) {
         if (grp.videoId) {
           for (const entry of grp.entries) {
             if (entry.key && !entry.value?.videoId) {
-              chrome.storage.local.set({
-                [entry.key]: {
-                  ...entry.value,
-                  videoId: grp.videoId,
-                },
-              }).catch(() => {});
+              backfillBatch[entry.key] = {
+                ...entry.value,
+                videoId: grp.videoId,
+              };
             }
           }
         }
+      }
+
+      if (Object.keys(backfillBatch).length > 0) {
+        chrome.storage.local.set(backfillBatch).catch(() => {});
       }
 
       setGroups(normalized);
@@ -500,17 +940,18 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   }, [openTrackDropdownKey]);
 
   const filteredGroups = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
+    const query = deferredSearchTerm.trim().toLowerCase();
     if (!query) return groups;
 
     return groups
-      .map((group) => {
-        const matchingEntries = group.entries.filter((entry) => {
+      .map((group: any) => {
+        const matchingEntries = group.entries.filter((entry: any) => {
           const searchableText = [
             group.title,
             entry.key,
             entry.sourceLabel,
             entry.preview,
+            group.bestSyncType || "",
           ]
             .join(" ")
             .toLowerCase();
@@ -525,7 +966,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         return { ...group, entries: matchingEntries };
       })
       .filter(Boolean);
-  }, [groups, searchTerm]);
+  }, [groups, deferredSearchTerm]);
 
   const toggleExpanded = (key) => {
     setExpandedKeys((prev) => {
@@ -673,7 +1114,12 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
     const key = typeof entryOrKey === "string" ? entryOrKey : entryOrKey?.key;
     if (!key) return;
 
-    await chrome.storage.local.remove(key);
+    const keysToRemove = [key];
+    if (typeof entryOrKey === "object" && Array.isArray(entryOrKey.aliasKeys)) {
+      keysToRemove.push(...entryOrKey.aliasKeys);
+    }
+
+    await chrome.storage.local.remove(keysToRemove);
 
     const entry = typeof entryOrKey === "object" ? entryOrKey : null;
     const vid =
@@ -801,6 +1247,56 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         </button>
       </div>
 
+      {/* Compact Status Strip */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "10px 24px",
+          borderBottom: "1px solid var(--lyrical-border-soft)",
+          background: "rgba(255, 255, 255, 0.02)",
+          fontSize: "12px",
+          color: "var(--lyrical-text-secondary)",
+          flexShrink: 0,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span>
+            <strong style={{ color: "var(--lyrical-text-primary)" }}>{statsSummary.songCount}</strong> {t("cacheEditor_totalLyricsInCache", undefined, "songs in cache")}
+          </span>
+          <span style={{ opacity: 0.4 }}>•</span>
+          <span>
+            <strong style={{ color: "var(--lyrical-text-primary)" }}>{formatBytes(statsSummary.totalBytes)}</strong> {t("cacheEditor_storageUsed", undefined, "used")}
+          </span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          {SYNC_CATEGORIES.map((cat) => {
+            const count = statsSummary.syncCounts[cat.key] || 0;
+            if (count === 0) return null;
+            return (
+              <span
+                key={cat.key}
+                style={{
+                  fontSize: "10.5px",
+                  fontWeight: "600",
+                  color: cat.color,
+                  background: "rgba(255, 255, 255, 0.04)",
+                  padding: "1.5px 6px",
+                  borderRadius: "4px",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "3.5px",
+                }}
+              >
+                <span style={{ width: "4px", height: "4px", borderRadius: "50%", background: cat.color }} />
+                <span>{cat.label}: {count}</span>
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
       <div
         style={{
           padding: "18px 24px 16px",
@@ -875,7 +1371,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
             {t("cacheEditor_noMatches")}
           </div>
         ) : (
-          filteredGroups.map((group) => {
+          filteredGroups.map((group: any) => {
             const isGroupExpanded = expandedGroups.has(group.id);
             return (
               <div
@@ -884,6 +1380,8 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                   borderRadius: "18px",
                   background: "var(--lyrical-card-bg)",
                   border: "1px solid var(--lyrical-border-soft)",
+                  contentVisibility: isGroupExpanded ? "visible" : "auto",
+                  containIntrinsicSize: "0 74px",
                 }}
               >
                 <div
@@ -900,7 +1398,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                   }}
                   onClick={() => toggleGroupExpanded(group.id)}
                 >
-                  <div style={{ minWidth: 0 }}>
+                  <div style={{ minWidth: 0, flex: 1, maxWidth: "56%" }}>
                     <div
                       style={{
                         display: "flex",
@@ -909,16 +1407,59 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         marginBottom: "6px",
                       }}
                     >
-                      <Music size={14} color="var(--lyrical-accent)" />
-                      <span
+                      <Music
+                        size={14}
+                        color="var(--lyrical-accent)"
+                        style={{ flexShrink: 0 }}
+                      />
+                      <div
                         style={{
-                          fontSize: "14px",
-                          fontWeight: "700",
-                          color: "var(--lyrical-text-primary)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "6px",
+                          minWidth: 0,
+                          flex: 1,
                         }}
                       >
-                        {group.title}
-                      </span>
+                        <span
+                          title={group.title}
+                          style={{
+                            fontSize: "14px",
+                            fontWeight: "700",
+                            color: "var(--lyrical-text-primary)",
+                            letterSpacing: "-0.01em",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                            minWidth: 0,
+                          }}
+                        >
+                          {group.title}
+                        </span>
+                        {group.altTitles && group.altTitles.length > 0 && (
+                          <span
+                            style={{
+                              fontSize: "11px",
+                              fontWeight: "500",
+                              color: "var(--lyrical-accent, #30c7c7)",
+                              background:
+                                "var(--lyrical-accent-soft, rgba(48, 199, 199, 0.12))",
+                              border: "1px solid var(--lyrical-border-soft)",
+                              padding: "1.5px 8px",
+                              borderRadius: "999px",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "4px",
+                              letterSpacing: "0.01em",
+                              flexShrink: 0,
+                            }}
+                            title={`Alternative title: ${group.altTitles.join(", ")}`}
+                          >
+                            <Languages size={10} style={{ opacity: 0.85 }} />
+                            <span>{group.altTitles.join(" • ")}</span>
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div
                       style={{
@@ -935,6 +1476,16 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         {formatBytes(group.totalBytes)}
                       </span>
                       <span style={{ opacity: 0.5 }}>•</span>
+                      {group.availableSyncTypes && group.availableSyncTypes.length > 0 && (
+                        <>
+                          <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                            {group.availableSyncTypes.map((st: string) => (
+                              <SyncTypeBadge key={st} type={st} size={10} />
+                            ))}
+                          </div>
+                          <span style={{ opacity: 0.5 }}>•</span>
+                        </>
+                      )}
                       <YouTubeBadgeButton videoId={group.videoId} songKey={group.id} />
                     </div>
                   </div>
@@ -1130,7 +1681,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                 >
                                   <span
                                     style={{
-                                      padding: "4px 8px",
+                                      padding: "3px 8px",
                                       borderRadius: "999px",
                                       background: "var(--lyrical-accent-soft)",
                                       color: "var(--lyrical-accent)",
@@ -1144,6 +1695,9 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                       ? t("cacheEditor_savedVersions")
                                       : entry.sourceLabel}
                                   </span>
+                                  {entry.syncType && (
+                                    <SyncTypeBadge type={entry.syncType} size={10.5} />
+                                  )}
                                   <span
                                     style={{
                                       fontSize: "11px",
@@ -1154,13 +1708,35 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                                       ? formatRelativeTime(entry.timestamp)
                                       : t("cacheEditor_noTimestamp")}
                                   </span>
+                                  {entry.aliasKeys && entry.aliasKeys.length > 0 && (
+                                    <span
+                                      style={{
+                                        display: "inline-flex",
+                                        alignItems: "center",
+                                        gap: "4px",
+                                        fontSize: "10.5px",
+                                        fontWeight: "500",
+                                        color: "var(--lyrical-text-secondary)",
+                                        background: "rgba(255, 255, 255, 0.05)",
+                                        border: "1px solid var(--lyrical-border-soft)",
+                                        borderRadius: "999px",
+                                        padding: "1.5px 7px",
+                                        cursor: "help",
+                                      }}
+                                      title={`Unified with ${entry.aliasKeys.length} alternate title key(s):\n${entry.aliasKeys.join("\n")}`}
+                                    >
+                                      <Link2 size={10} style={{ opacity: 0.7 }} />
+                                      <span>+{entry.aliasKeys.length} linked alias</span>
+                                    </span>
+                                  )}
                                 </div>
                                 <div
                                   style={{
-                                    fontSize: "12px",
+                                    fontSize: "11.5px",
                                     color: "var(--lyrical-text-secondary)",
                                     fontFamily: "monospace",
                                     wordBreak: "break-all",
+                                    opacity: 0.85,
                                   }}
                                 >
                                   {entry.key}

@@ -4486,6 +4486,54 @@ function isValidCachedTrackLyrics(
   return true;
 }
 
+async function syncPrimaryCache(songInfo: any, entry: any, sourceId?: string | null) {
+  if (!songInfo || !entry) return;
+  const genericKey = getLyricsCacheKey(songInfo);
+  if (!genericKey) return;
+  if (!hasLocalStorageApi() || !chrome?.storage?.local?.set) return;
+
+  const currentVideoId =
+    songInfo?.videoId ||
+    (typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null) ||
+    entry?.videoId ||
+    null;
+
+  const resolvedSource = sourceId || entry.source || entry.sourceId || null;
+
+  const primaryEntry = {
+    ...entry,
+    source: resolvedSource,
+    ...(currentVideoId ? { videoId: currentVideoId } : {}),
+    timestamp: Date.now(),
+  };
+
+  const updates: Record<string, any> = {
+    [genericKey]: primaryEntry,
+  };
+
+  if (currentVideoId && chrome?.storage?.local?.get) {
+    try {
+      const allItems = await chrome.storage.local.get(null);
+      for (const [k, v] of Object.entries(allItems)) {
+        if (
+          k.startsWith("lyrics_") &&
+          !k.includes("__") &&
+          k !== genericKey &&
+          (v as any)?.videoId === currentVideoId
+        ) {
+          updates[k] = primaryEntry;
+        }
+      }
+    } catch {}
+  }
+
+  await chrome.storage.local.set(updates).catch((err) => {
+    warn("[Lyrical] Failed to sync primary cache:", err);
+  });
+}
+
 async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
   if (!Array.isArray(lyrics) || lyrics.length === 0 || !sourceId) return;
 
@@ -4606,10 +4654,40 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     if (!hasLocalStorageApi() || !chrome?.storage?.local?.set) {
       throw new Error("chrome.storage.local.set unavailable");
     }
-    await chrome.storage.local.set({
-      [genericKey]: entry,
+
+    const activePlayingSource =
+      useAppStore.getState().lyricsSource || currentFetchWinningSourceId;
+    const isActivePlaying =
+      !activePlayingSource || activePlayingSource === sourceId;
+
+    const updates: Record<string, any> = {
       [sourceKey]: entry,
-    });
+    };
+
+    // Only update the Primary Cache if this source is currently playing!
+    if (isActivePlaying) {
+      updates[genericKey] = entry;
+
+      // If currentVideoId is known, check if other keys in storage share this same videoId
+      // (e.g. alternate Japanese or English titles) and sync them so all title aliases stay up to date
+      if (currentVideoId && chrome?.storage?.local?.get) {
+        try {
+          const allItems = await chrome.storage.local.get(null);
+          for (const [k, v] of Object.entries(allItems)) {
+            if (
+              k.startsWith("lyrics_") &&
+              !k.includes("__") &&
+              k !== genericKey &&
+              (v as any)?.videoId === currentVideoId
+            ) {
+              updates[k] = entry;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    await chrome.storage.local.set(updates);
   } catch (err) {
     if (err?.message?.includes("Extension context invalidated")) return;
     warn("[Lyrical Panel] Cache persist failed:", err);
@@ -4806,6 +4884,9 @@ function restoreLyricsFromCacheEntry(
   }
 
   startLyricsTimer(cleanActiveLyrics);
+
+  // Sync the active playing lyrics as the Primary Cache!
+  syncPrimaryCache(currentSongInfo, entry, currentSource);
 
   setTimeout(() => {
     lyricsJustLoaded = false;
@@ -6830,6 +6911,7 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
 
   log("[Lyrical] User manually selected source:", sourceId);
   currentFetchWinningSourceId = sourceId;
+  useAppStore.setState({ lyricsSource: sourceId });
   if (sourceId === "captions") {
     captionSourceReachedForCurrentFetch = true;
     userSongOffset = 0;

@@ -131,6 +131,84 @@ export function normalizeSourcePreferences(prefs: unknown): SourcePreference[] {
   return normalized;
 }
 
+export const SOURCE_TAG_MAP: Record<string, "syllable" | "word" | "line" | "unsynced"> = {
+  // Syllable (Exactly 4 sources)
+  "lyrical": "syllable",
+  "unison-richsynced": "syllable",
+  "binimum-richsynced": "syllable",
+  "youlyplus-richsynced": "syllable",
+
+  // Word
+  "unison-wordsynced": "word",
+  "portato-richsynced": "word",
+  "portato": "word",
+  "musixmatch": "word",
+  "musixmatch-richsync": "word",
+  "cubey": "word",
+
+  // Line
+  "youlyplus-synced": "line",
+  "blyrics-synced": "line",
+  "better_lyrics": "line",
+  "legato-synced": "line",
+  "legato": "line",
+  "musixmatch-synced": "line",
+  "unison-synced": "line",
+  "binimum-synced": "line",
+  "captions": "line",
+  "youtube-captions": "line",
+  "lrclib": "line",
+
+  // Unsynced
+  "unison-plain": "unsynced",
+};
+
+export function getCanonicalSourceSyncType(
+  sourceId?: string | null,
+): "syllable" | "word" | "line" | "unsynced" | null {
+  if (!sourceId) return null;
+  const normalized = sourceId.trim().toLowerCase();
+
+  if (normalized in SOURCE_TAG_MAP) {
+    return SOURCE_TAG_MAP[normalized];
+  }
+
+  // Handle minor variations or suffixes
+  if (
+    normalized.includes("unison-richsynced") ||
+    normalized === "lyrical" ||
+    normalized.includes("binimum-richsynced") ||
+    normalized.includes("youlyplus-richsynced")
+  ) {
+    return "syllable";
+  }
+  if (
+    normalized.includes("portato") ||
+    normalized.includes("wordsynced") ||
+    normalized.includes("wordsync") ||
+    normalized === "musixmatch" ||
+    normalized === "musixmatch-richsync" ||
+    normalized === "cubey"
+  ) {
+    return "word";
+  }
+  if (
+    normalized.includes("musixmatch-synced") ||
+    normalized.includes("legato") ||
+    normalized.includes("lrclib") ||
+    normalized.includes("captions") ||
+    normalized.includes("linesync") ||
+    normalized.includes("synced")
+  ) {
+    return "line";
+  }
+  if (normalized.includes("plain") || normalized.includes("unsynced")) {
+    return "unsynced";
+  }
+
+  return null;
+}
+
 export function isRichsyncSourceId(
   sourceId: LyricsSourceId | string | null | undefined,
   lyrics?: any[],

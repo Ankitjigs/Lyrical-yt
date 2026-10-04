@@ -11,26 +11,26 @@ const getBadgeStyles = (tag: string) => {
   switch (norm) {
     case "syllable":
       return {
-        color: "#fde69b",
-        background: "rgba(253, 230, 155, 0.12)",
-        border: "1px solid rgba(253, 230, 155, 0.25)",
+        color: "#fcd34d",
+        background: "rgba(252, 211, 77, 0.15)",
+        border: "1px solid rgba(252, 211, 77, 0.25)",
       };
     case "word":
       return {
-        color: "#aad1ff",
-        background: "rgba(170, 209, 255, 0.12)",
-        border: "1px solid rgba(170, 209, 255, 0.25)",
+        color: "#93c5fd",
+        background: "rgba(96, 165, 250, 0.15)",
+        border: "1px solid rgba(96, 165, 250, 0.25)",
       };
     case "line":
       return {
-        color: "#c9f8da",
-        background: "rgba(201, 248, 218, 0.12)",
-        border: "1px solid rgba(201, 248, 218, 0.25)",
+        color: "#86efac",
+        background: "rgba(74, 222, 128, 0.15)",
+        border: "1px solid rgba(74, 222, 128, 0.25)",
       };
     case "unsynced":
     default:
       return {
-        color: "rgba(255, 255, 255, 0.7)",
+        color: "rgba(255, 255, 255, 0.6)",
         background: "rgba(255, 255, 255, 0.06)",
         border: "1px solid rgba(255, 255, 255, 0.12)",
       };
@@ -266,18 +266,22 @@ const SourcePreferenceList: React.FC = () => {
                     <span
                       key={tag}
                       style={{
-                        fontSize: "10px",
-                        fontWeight: "700",
+                        fontSize: "11px",
+                        fontWeight: "600",
                         color: badgeStyle.color,
                         background: badgeStyle.background,
                         border: badgeStyle.border,
-                        padding: "2px 7px",
-                        borderRadius: "5px",
-                        textTransform: "uppercase",
+                        height: "20px",
+                        padding: "0 7px 0 6px",
+                        borderRadius: "6px",
                         display: "inline-flex",
                         alignItems: "center",
                         gap: "4px",
-                        letterSpacing: "0.4px",
+                        boxShadow: "rgba(0, 0, 0, 0.05) 0 8px 8px -3px, inset rgba(255, 255, 255, 0.08) 0 1px 0 0",
+                        letterSpacing: "0",
+                        lineHeight: "1",
+                        whiteSpace: "nowrap",
+                        boxSizing: "border-box",
                       }}
                     >
                       <SyncTypeIcon
@@ -286,7 +290,7 @@ const SourcePreferenceList: React.FC = () => {
                         className=""
                         style={{ fill: badgeStyle.color }}
                       />
-                      {tag}
+                      <span style={{ textTransform: "capitalize" }}>{tag.toLowerCase()}</span>
                     </span>
                   );
                 })}

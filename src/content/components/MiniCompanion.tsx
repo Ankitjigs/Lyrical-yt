@@ -11,6 +11,7 @@ import {
 } from "./KaraokeLyricDisplay";
 import SearchingVibeIcon from "./SearchingVibeIcons";
 import ShinyText from "./ShinyText";
+import TranslatorAnimatedIcon from "./TranslatorAnimatedIcon";
 import { t } from "../../i18n";
 import {
   isInstrumentalLine,
@@ -449,6 +450,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     isOffsetResolved,
     lyricsSource,
     searchingIndicatorStyle,
+    isProcessingLyrics,
   } = useAppStore(
     useShallow((state) => ({
       songInfo: state.songInfo,
@@ -466,6 +468,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       miniCompanionCustomPosition: state.miniCompanionCustomPosition,
       isAdPlaying: state.isAdPlaying,
       isLoading: state.isLoading,
+      isProcessingLyrics: state.isProcessingLyrics,
       rawRomanizedLyrics: state.romanizedLyrics,
       rawTranslatedLyrics: state.translatedLyrics,
       isRomanizationEnabled: state.isRomanizationEnabled,
@@ -2034,6 +2037,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         ) : lyrics && lyrics.length > 0 ? (
           <div
             style={{
+              position: "relative",
               padding: "10px 14px",
               display: "flex",
               flexDirection: "column",
@@ -2043,6 +2047,55 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
               gap: "0px",
             }}
           >
+            {/* Floating processing indicator on the far right that slides away on complete */}
+            <AnimatePresence>
+              {isProcessingLyrics && (
+                <motion.div
+                  key="companion-processing-indicator"
+                  initial={
+                    reduceAnimations
+                      ? { opacity: 0 }
+                      : { opacity: 0, x: 22, scale: 0.85 }
+                  }
+                  animate={{ opacity: 1, x: 0, scale: 1 }}
+                  exit={
+                    reduceAnimations
+                      ? { opacity: 0 }
+                      : {
+                          opacity: 0,
+                          x: 28,
+                          scale: 0.85,
+                          transition: { duration: 0.28, ease: "easeInOut" },
+                        }
+                  }
+                  transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
+                  title="Processing lyrics (translation & romanization)..."
+                  style={{
+                    position: "absolute",
+                    right: "10px",
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    zIndex: 10,
+                    pointerEvents: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "4px 6px",
+                    borderRadius: "7px",
+                    background: "rgba(0, 0, 0, 0.45)",
+                    backdropFilter: "blur(8px)",
+                    border: "1px solid rgba(255, 255, 255, 0.12)",
+                    boxShadow: "0 2px 8px rgba(0, 0, 0, 0.35)",
+                  }}
+                >
+                  <TranslatorAnimatedIcon
+                    size={19}
+                    reduceAnimations={reduceAnimations}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {(() => {
               const lineStart = Number(activeLine?.time ?? 0);
               const nextLine = lyrics?.[activeLineIndex + 1];
@@ -2075,6 +2128,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                   style={{
                     width: "100%",
                     textAlign: "left",
+                    paddingRight: isProcessingLyrics ? "32px" : "0px",
+                    transition: "padding-right 0.2s ease",
                   }}
                 >
                   {/* Original lyrics line */}
