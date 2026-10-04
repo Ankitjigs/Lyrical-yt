@@ -674,7 +674,7 @@
     "description": "Musixmatch line synced source label."
   },
   "source_musixmatch_richsync": {
-    "message": "Musixmatch RichSync",
+    "message": "Musixmatch",
     "description": "Musixmatch RichSync source label."
   },
   "source_lrclib": {

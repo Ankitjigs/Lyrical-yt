@@ -16,6 +16,7 @@ import {
   useAppStore,
   DEFAULT_SOURCE_PREFERENCES,
   isRichsyncSourceId,
+  getCanonicalSourceSyncType,
 } from "../store";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
@@ -76,20 +77,25 @@ function normalizeSourceId(
   sourceId: LyricsSourceId | null | undefined,
 ): LyricsSourceId | null {
   if (!sourceId) return null;
-  if (sourceId === "musixmatch-richsync") return "musixmatch";
+  if (sourceId === "musixmatch") return "musixmatch-richsync";
   return sourceId;
 }
 
 function sourceOptionFor(sourceId: LyricsSourceId, prefs: SourcePreference[]) {
-  return (
+  const found =
     prefs.find((source) => source.id === sourceId) ||
-    DEFAULT_SOURCE_PREFERENCES.find((source) => source.id === sourceId) || {
-      id: sourceId,
-      label: SOURCE_LABELS[sourceId] || String(sourceId),
-      enabled: true,
-      tags: [],
-    }
-  );
+    DEFAULT_SOURCE_PREFERENCES.find((source) => source.id === sourceId);
+  if (found) return found;
+
+  const syncType = getCanonicalSourceSyncType(sourceId);
+  const tag = syncType ? syncType.toUpperCase() : "LINE";
+
+  return {
+    id: sourceId,
+    label: SOURCE_LABELS[sourceId] || String(sourceId),
+    enabled: true,
+    tags: [tag],
+  };
 }
 
 function formatOffset(value: number) {

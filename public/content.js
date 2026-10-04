@@ -43,12 +43,14 @@ window.getSongInfoFromPage = function () {
             let isMediaSessionForMini = false;
 
             if (msInfo && msInfo.title && miniTitle) {
-                const normMini = miniTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const normMedia = msInfo.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+                const normMini = miniTitle.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+                const normMedia = msInfo.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+                const sliceLen = Math.min(6, Math.min(normMini.length, normMedia.length));
                 if (
                     normMini.length > 0 &&
                     normMedia.length > 0 &&
-                    (normMini.includes(normMedia.slice(0, 6)) || normMedia.includes(normMini.slice(0, 6)))
+                    sliceLen > 0 &&
+                    (normMini.includes(normMedia.slice(0, sliceLen)) || normMedia.includes(normMini.slice(0, sliceLen)))
                 ) {
                     isMediaSessionForMini = true;
                 }
@@ -150,6 +152,50 @@ window.getSongInfoFromPage = function () {
             if (hasAdClass || (hasAdChildren && hasAdOverlay)) {
                 isAd = true;
             }
+        }
+    }
+
+    // YouTube Watch Page - Better-Lyrics style atomic player verification
+    if (isYouTube && isWatchUrl && videoId) {
+        const player = document.getElementById('movie_player');
+        let playerVid = null;
+        try {
+            if (player && typeof player.getVideoData === 'function') {
+                playerVid = player.getVideoData()?.video_id || null;
+            }
+        } catch {}
+
+        // If player has already loaded this video, return authoritative atomic info directly
+        if (playerVid && playerVid === videoId) {
+            try {
+                const pData = player.getVideoData();
+                if (pData && pData.title && typeof pData.title === 'string' && pData.title.trim()) {
+                    let title = pData.title.trim();
+                    let artist = (pData.author || "").trim();
+                    if (title.includes(" - ")) {
+                        const parts = title.split(" - ");
+                        artist = parts[0].trim();
+                        title = parts.slice(1).join(" - ").trim();
+                    }
+                    title = title
+                        .replace(/\(.*?(official|music|lyric|audio|video).*?\)/gi, '')
+                        .replace(/\[.*?(official|music|lyric|audio|video).*?\]/gi, '')
+                        .replace(/\|.*$/g, '')
+                        .trim();
+                    return {
+                        videoId: videoId,
+                        title: title,
+                        artist: artist || "Playing on YouTube",
+                        artwork: getYouTubeArtworkFromPage(videoId),
+                    };
+                }
+            } catch {}
+        }
+
+        // If player exists and is still on a different video, the page is transitioning and DOM/MediaSession is stale!
+        if (playerVid && playerVid !== videoId) {
+            console.debug('[Content] Player video_id (' + playerVid + ') does not match URL videoId (' + videoId + ') - waiting for player transition');
+            return null;
         }
     }
 

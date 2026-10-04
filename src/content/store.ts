@@ -48,7 +48,12 @@ export const DEFAULT_SOURCE_PREFERENCES: SourcePreference[] = [
     enabled: true,
     tags: ["WORD"],
   },
-  { id: "musixmatch", label: "Musixmatch", enabled: true, tags: ["WORD"] },
+  {
+    id: "musixmatch-richsync",
+    label: "Musixmatch",
+    enabled: true,
+    tags: ["WORD"],
+  },
   {
     id: "youlyplus-synced",
     label: "YouLy+",
@@ -109,8 +114,11 @@ export function normalizeSourcePreferences(prefs: unknown): SourcePreference[] {
   const seen = new Set();
 
   for (const pref of incoming as Partial<SourcePreference>[]) {
-    if (!pref?.id || seen.has(pref.id)) continue;
-    const fallback = defaultMap.get(pref.id);
+    if (!pref?.id) continue;
+    const effectiveId =
+      pref.id === "musixmatch" ? "musixmatch-richsync" : pref.id;
+    if (seen.has(effectiveId)) continue;
+    const fallback = defaultMap.get(effectiveId);
     if (!fallback) continue;
 
     normalized.push({
@@ -119,7 +127,7 @@ export function normalizeSourcePreferences(prefs: unknown): SourcePreference[] {
       enabled: typeof pref.enabled === "boolean" ? pref.enabled : fallback.enabled,
       tags: fallback.tags,
     });
-    seen.add(pref.id);
+    seen.add(effectiveId);
   }
 
   for (const fallback of DEFAULT_SOURCE_PREFERENCES) {
@@ -459,7 +467,15 @@ export const useAppStore = create<LyricalAppState>((set) => ({
 
     set((state) => {
       const nextSource = source || null;
-      const isDifferentSource = nextSource !== state.lyricsSource;
+      const isMusixmatchFamily =
+        (nextSource === "musixmatch" ||
+          nextSource === "musixmatch-richsync" ||
+          nextSource === "musixmatch-synced") &&
+        (state.lyricsSource === "musixmatch" ||
+          state.lyricsSource === "musixmatch-richsync" ||
+          state.lyricsSource === "musixmatch-synced");
+      const isDifferentSource =
+        nextSource !== state.lyricsSource && !isMusixmatchFamily;
       return {
         lyrics: cleanLyrics,
         lyricsVideoId: effectiveVideoId,

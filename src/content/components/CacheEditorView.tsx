@@ -100,7 +100,7 @@ const SOURCE_LABELS: Record<string, string> = {
   "youlyplus-richsynced": "YouLy+",
   "youlyplus-synced": "YouLy+",
   musixmatch: "Musixmatch",
-  "musixmatch-richsync": "Musixmatch RichSync",
+  "musixmatch-richsync": "Musixmatch",
   "musixmatch-synced": "Musixmatch",
   "binimum-richsynced": "BiniLyrics",
   "binimum-synced": "BiniLyrics",
@@ -193,7 +193,18 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
     };
   }
 
-  // If rawTitle has " - "
+  // If rawTitle has " • " or " - "
+  if (rawTitle.includes(" • ")) {
+    const parts = rawTitle.split(" • ");
+    const cleanArtist = parts[0].trim();
+    const songName = parts.slice(1).join(" • ").trim();
+    return {
+      artist: cleanArtist,
+      title: songName,
+      cleanLabel: `${cleanArtist} • ${songName}`,
+    };
+  }
+
   if (rawTitle.includes(" - ")) {
     const parts = rawTitle.split(" - ");
     const cleanArtist = parts[0].trim();
@@ -230,6 +241,47 @@ function extractCoreSongTitle(rawKey: string): string {
 function normalizeTitleForCompare(str: string): string {
   if (!str) return "";
   return str.toLowerCase().replace(/[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]/g, "");
+}
+
+// Handles western bullet (•), Katakana middle dot (・, U+30FB), middle dot (·), dashes, slashes, pipes, tildes
+const TITLE_PART_SPLIT_REGEX = /\s*[\u2022\u30fb\u00b7•・·\/\-\u2013\u2014\uff0d\uff0f|｜~～]+\s*/;
+
+function cleanAlternateTitlesList(altTitles: string[], currentTitle: string): string[] {
+  if (!Array.isArray(altTitles) || altTitles.length === 0) return [];
+  const normTitle = (currentTitle || "").toLowerCase();
+  const normTitleAlnum = normalizeTitleForCompare(currentTitle);
+  const cleaned: string[] = [];
+
+  for (const alt of altTitles) {
+    if (!alt || typeof alt !== "string") continue;
+    const parts = alt
+      .split(TITLE_PART_SPLIT_REGEX)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const candidateParts = parts.length > 1 ? parts : [alt.trim()];
+
+    for (const part of candidateParts) {
+      if (!part) continue;
+      const normPart = part.toLowerCase();
+      const normPartAlnum = normalizeTitleForCompare(part);
+
+      // If the main title already contains this subpart, skip it!
+      if (normTitle.includes(normPart)) continue;
+      if (normPartAlnum && normTitleAlnum.includes(normPartAlnum)) continue;
+
+      if (
+        !cleaned.some(
+          (c) =>
+            c.toLowerCase() === normPart ||
+            normalizeTitleForCompare(c) === normPartAlnum,
+        )
+      ) {
+        cleaned.push(part);
+      }
+    }
+  }
+
+  return cleaned;
 }
 
 function formatSongLabel(songKey) {
@@ -544,6 +596,21 @@ function extractAlternateTitle(altId: string, currentTitle: string): string | nu
     return null;
   }
 
+  // If coreAlt contains multiple sub-parts (e.g. "ハルジオン ・ Halzion"), extract only the sub-parts not in currentTitle!
+  const subParts = coreAlt
+    .split(TITLE_PART_SPLIT_REGEX)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  if (subParts.length > 1) {
+    const remaining = subParts.filter(
+      (p) =>
+        !currentTitle.toLowerCase().includes(p.toLowerCase()) &&
+        !normalizeTitleForCompare(currentTitle).includes(normalizeTitleForCompare(p)),
+    );
+    if (remaining.length === 0) return null;
+    return remaining.join(" • ");
+  }
+
   return coreAlt;
 }
 
@@ -681,6 +748,12 @@ function normalizeCacheGroups(
         ) {
           primary.title = group.title;
           primary.id = group.id;
+        } else if (!/[a-zA-Z]/.test(primary.title) && /[a-zA-Z]/.test(group.title)) {
+          // International/Romanized video title preference:
+          // If primary has only non-Latin characters (e.g. native Kanji) and the incoming group has Latin
+          // (matching YouTube video title), prioritize the Latin/video title as primary!
+          primary.title = group.title;
+          primary.id = group.id;
         }
 
         const altA = extractAlternateTitle(group.id, primary.title);
@@ -704,10 +777,10 @@ function normalizeCacheGroups(
 
   return finalGroups
     .map((group: any) => {
+
+
       if (Array.isArray(group.altTitles)) {
-        group.altTitles = group.altTitles.filter(
-          (alt: string) => alt && !group.title.includes(alt),
-        );
+        group.altTitles = cleanAlternateTitlesList(group.altTitles, group.title);
       }
 
       // Deduplicate entries by type and sourceId:
@@ -945,9 +1018,13 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
 
     return groups
       .map((group: any) => {
+        const altTitlesText = Array.isArray(group.altTitles)
+          ? group.altTitles.join(" ")
+          : "";
         const matchingEntries = group.entries.filter((entry: any) => {
           const searchableText = [
             group.title,
+            altTitlesText,
             entry.key,
             entry.sourceLabel,
             entry.preview,
@@ -958,7 +1035,10 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
           return searchableText.includes(query);
         });
 
-        if (group.title.toLowerCase().includes(query)) {
+        if (
+          group.title.toLowerCase().includes(query) ||
+          altTitlesText.toLowerCase().includes(query)
+        ) {
           return group;
         }
 
@@ -1398,13 +1478,13 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                   }}
                   onClick={() => toggleGroupExpanded(group.id)}
                 >
-                  <div style={{ minWidth: 0, flex: 1, maxWidth: "56%" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
                     <div
                       style={{
                         display: "flex",
                         alignItems: "center",
                         gap: "8px",
-                        marginBottom: "6px",
+                        marginBottom: "7px",
                       }}
                     >
                       <Music
@@ -1416,7 +1496,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         style={{
                           display: "flex",
                           alignItems: "center",
-                          gap: "6px",
+                          gap: "8px",
                           minWidth: 0,
                           flex: 1,
                         }}
@@ -1432,35 +1512,71 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
                             minWidth: 0,
+                            flexShrink: 1,
                           }}
                         >
                           {group.title}
                         </span>
-                        {group.altTitles && group.altTitles.length > 0 && (
-                          <span
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: "500",
-                              color: "var(--lyrical-accent, #30c7c7)",
-                              background:
-                                "var(--lyrical-accent-soft, rgba(48, 199, 199, 0.12))",
-                              border: "1px solid var(--lyrical-border-soft)",
-                              padding: "1.5px 8px",
-                              borderRadius: "999px",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "4px",
-                              letterSpacing: "0.01em",
-                              flexShrink: 0,
-                            }}
-                            title={`Alternative title: ${group.altTitles.join(", ")}`}
-                          >
-                            <Languages size={10} style={{ opacity: 0.85 }} />
-                            <span>{group.altTitles.join(" • ")}</span>
-                          </span>
-                        )}
+                        {(() => {
+                          const displayAltTitles = cleanAlternateTitlesList(
+                            group.altTitles || [],
+                            group.title,
+                          );
+                          if (displayAltTitles.length === 0) return null;
+                          return (
+                            <span
+                              style={{
+                                fontSize: "11px",
+                                fontWeight: "500",
+                                color: "var(--lyrical-accent, #30c7c7)",
+                                background:
+                                  "var(--lyrical-accent-soft, rgba(48, 199, 199, 0.12))",
+                                border: "1px solid var(--lyrical-border-soft)",
+                                padding: "1.5px 8px",
+                                borderRadius: "999px",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: "4px",
+                                letterSpacing: "0.01em",
+                                flexShrink: 0,
+                                maxWidth: "240px",
+                              }}
+                              title={`Alternative title: ${displayAltTitles.join(", ")}`}
+                            >
+                              <Languages size={10} style={{ opacity: 0.85, flexShrink: 0 }} />
+                              <span
+                                style={{
+                                  overflow: "hidden",
+                                  textOverflow: "ellipsis",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {displayAltTitles.join(" • ")}
+                              </span>
+                            </span>
+                          );
+                        })()}
                       </div>
                     </div>
+
+                    {/* Row 2: Sync Type Badges */}
+                    {group.availableSyncTypes && group.availableSyncTypes.length > 0 && (
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          marginBottom: "7px",
+                          paddingLeft: "22px",
+                        }}
+                      >
+                        {group.availableSyncTypes.map((st: string) => (
+                          <SyncTypeBadge key={st} type={st} size={10} />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Row 3: Entries • Size • YouTube */}
                     <div
                       style={{
                         fontSize: "12px",
@@ -1468,24 +1584,15 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         display: "flex",
                         alignItems: "center",
                         gap: "6px",
-                        flexWrap: "wrap",
+                        paddingLeft: "22px",
                       }}
                     >
                       <span>
-                        {group.entries.length} entries •{" "}
-                        {formatBytes(group.totalBytes)}
+                        {group.entries.length} {group.entries.length === 1 ? "entry" : "entries"}
                       </span>
-                      <span style={{ opacity: 0.5 }}>•</span>
-                      {group.availableSyncTypes && group.availableSyncTypes.length > 0 && (
-                        <>
-                          <div style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}>
-                            {group.availableSyncTypes.map((st: string) => (
-                              <SyncTypeBadge key={st} type={st} size={10} />
-                            ))}
-                          </div>
-                          <span style={{ opacity: 0.5 }}>•</span>
-                        </>
-                      )}
+                      <span style={{ opacity: 0.4 }}>•</span>
+                      <span>{formatBytes(group.totalBytes)}</span>
+                      <span style={{ opacity: 0.4 }}>•</span>
                       <YouTubeBadgeButton videoId={group.videoId} songKey={group.id} />
                     </div>
                   </div>

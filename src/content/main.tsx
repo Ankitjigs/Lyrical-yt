@@ -2871,15 +2871,33 @@ function extractFastSongInfo(videoId: string | null): any {
         !player.closest?.("ytd-inline-preview-player, #inline-preview-player")
       ) {
         const data = player.getVideoData?.();
-        if (data && (!currentVid || data.video_id === currentVid)) {
-          if (data.title && !title) {
-            if (data.title.includes(" - ")) {
-              const parts = data.title.split(" - ");
-              artist = artist || parts[0].trim();
-              title = parts.slice(1).join(" - ").trim();
-            } else {
-              title = data.title;
-              artist = artist || data.author || "";
+        if (data && data.video_id) {
+          if (currentVid && data.video_id !== currentVid) {
+            // Player is still on the previous video! DOM and MediaSession are stale.
+            log(
+              "[Lyrical Panel] Player video_id (" +
+                data.video_id +
+                ") !== currentVid (" +
+                currentVid +
+                ") - waiting for transition",
+            );
+            return {
+              videoId: currentVid,
+              title: "",
+              artist: "",
+              artwork: artwork,
+            };
+          }
+          if (!currentVid || data.video_id === currentVid) {
+            if (data.title && !title) {
+              if (data.title.includes(" - ")) {
+                const parts = data.title.split(" - ");
+                artist = artist || parts[0].trim();
+                title = parts.slice(1).join(" - ").trim();
+              } else {
+                title = data.title;
+                artist = artist || data.author || "";
+              }
             }
           }
         }
@@ -2971,10 +2989,18 @@ function ensureMiniCompanion() {
     return;
   }
 
-  // Ensure song info and lyrics are fetched if not present
+  // Ensure song info and lyrics are fetched if not present or stale
   const currentSongInfo = useAppStore.getState().songInfo;
   const stateLyrics = useAppStore.getState().lyrics;
-  if (!currentSongInfo || !stateLyrics?.length) {
+  const domVid = getMiniplayerDOMVideoId();
+  const isStaleMiniStore = Boolean(
+    domVid && currentSongInfo?.videoId && domVid !== currentSongInfo.videoId,
+  );
+
+  if (!currentSongInfo || !stateLyrics?.length || isStaleMiniStore) {
+    if (isStaleMiniStore) {
+      useAppStore.getState().clearLyricsForNewTrack();
+    }
     const info = window.getSongInfoFromPage?.();
     if (info?.title && !info.isAd) {
       autoFetchLyrics(info);
@@ -3087,8 +3113,8 @@ function getMiniplayerDOMVideoId(): string | null {
         if (
           mini.querySelector(`a[href*='${msVid}'], img[src*='${msVid}']`) ||
           (navigator.mediaSession.metadata.title &&
-            mini.innerText.toLowerCase().replace(/[^a-z0-9]/g, "").includes(
-              navigator.mediaSession.metadata.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 6)
+            mini.innerText.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "").includes(
+              navigator.mediaSession.metadata.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "").slice(0, 6)
             ))
         ) {
           return msVid;
@@ -3211,12 +3237,14 @@ function checkMiniplayerSongChange() {
     currentStore.songInfo?.title &&
     (currentStore.lyrics?.length > 0 || currentStore.isLoading)
   ) {
-    const normMs = msTitle.toLowerCase().replace(/[^a-z0-9]/g, "");
-    const normStore = currentStore.songInfo.title.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const normMs = msTitle.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const normStore = currentStore.songInfo.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+    const sliceLen = Math.min(6, Math.min(normMs.length, normStore.length));
     if (
       normMs.length > 0 &&
       normStore.length > 0 &&
-      (normMs.includes(normStore.slice(0, 6)) || normStore.includes(normMs.slice(0, 6)))
+      sliceLen > 0 &&
+      (normMs.includes(normStore.slice(0, sliceLen)) || normStore.includes(normMs.slice(0, sliceLen)))
     ) {
       if (videoEventListeners) {
         const live = getActiveMediaVideoElement();
@@ -3257,6 +3285,8 @@ function checkMiniplayerSongChange() {
     pendingMainWorldCaptionLanguage = null;
     pendingMainWorldCaptionVideoId = null;
     mainWorldCaptionTracksVideoId = null;
+    // Immediately clear store so MiniCompanion doesn't display stale previous song lyrics
+    useAppStore.getState().clearLyricsForNewTrack(info);
     autoFetchLyrics(info, { reason: "miniplayer song change" });
   }
 }
@@ -3319,7 +3349,14 @@ function setupMiniplayerObserver() {
       document.querySelector<HTMLVideoElement>("#movie_player video");
     if (video && !(video as any)._hasLyricalMiniHooks) {
       (video as any)._hasLyricalMiniHooks = true;
-      const onFastSongTransition = () => {
+      const onFastSongTransition = (e: Event) => {
+        if (e.type === "loadstart" || e.type === "emptied") {
+          const domVid = getMiniplayerDOMVideoId();
+          const currentStore = useAppStore.getState();
+          if (domVid && currentStore.songInfo?.videoId && domVid !== currentStore.songInfo.videoId) {
+            currentStore.clearLyricsForNewTrack();
+          }
+        }
         checkAndManageMiniCompanion();
         checkMiniplayerSongChange();
       };
@@ -4221,7 +4258,12 @@ async function applyDynamicTheme(artworkUrl?: string | null) {
   }
 }
 
-async function hydrateSongInfoWithRetry(maxAttempts = 6, delayMs = 350) {
+async function hydrateSongInfoWithRetry(maxAttempts = 12, delayMs = 250) {
+  const currentUrlVid =
+    typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null;
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     let info = null;
     try {
@@ -4230,16 +4272,16 @@ async function hydrateSongInfoWithRetry(maxAttempts = 6, delayMs = 350) {
       info = null;
     }
 
-    if (info && (info.title || info.artist || info.artwork)) {
-      updateSongInfo(info);
-      if (info.title && info.artwork) {
+    if (info && info.title && !info.isAd) {
+      if (!currentUrlVid || !info.videoId || info.videoId === currentUrlVid) {
+        updateSongInfo(info);
         return true;
       }
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
-  return !!currentSongInfo;
+  return !!(currentSongInfo && currentSongInfo.title);
 }
 
 // Update lyrics content
@@ -4486,54 +4528,6 @@ function isValidCachedTrackLyrics(
   return true;
 }
 
-async function syncPrimaryCache(songInfo: any, entry: any, sourceId?: string | null) {
-  if (!songInfo || !entry) return;
-  const genericKey = getLyricsCacheKey(songInfo);
-  if (!genericKey) return;
-  if (!hasLocalStorageApi() || !chrome?.storage?.local?.set) return;
-
-  const currentVideoId =
-    songInfo?.videoId ||
-    (typeof window !== "undefined" && window.location?.search
-      ? new URLSearchParams(window.location.search).get("v")
-      : null) ||
-    entry?.videoId ||
-    null;
-
-  const resolvedSource = sourceId || entry.source || entry.sourceId || null;
-
-  const primaryEntry = {
-    ...entry,
-    source: resolvedSource,
-    ...(currentVideoId ? { videoId: currentVideoId } : {}),
-    timestamp: Date.now(),
-  };
-
-  const updates: Record<string, any> = {
-    [genericKey]: primaryEntry,
-  };
-
-  if (currentVideoId && chrome?.storage?.local?.get) {
-    try {
-      const allItems = await chrome.storage.local.get(null);
-      for (const [k, v] of Object.entries(allItems)) {
-        if (
-          k.startsWith("lyrics_") &&
-          !k.includes("__") &&
-          k !== genericKey &&
-          (v as any)?.videoId === currentVideoId
-        ) {
-          updates[k] = primaryEntry;
-        }
-      }
-    } catch {}
-  }
-
-  await chrome.storage.local.set(updates).catch((err) => {
-    warn("[Lyrical] Failed to sync primary cache:", err);
-  });
-}
-
 async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
   if (!Array.isArray(lyrics) || lyrics.length === 0 || !sourceId) return;
 
@@ -4636,13 +4630,15 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     extra?.videoId ||
     null;
 
+  const { skipGeneric = false, ...cleanedExtra } = extra || {};
+
   const entry: any = {
     lyrics,
     source: sourceId,
     cacheSchemaVersion: LYRICS_CACHE_SCHEMA_VERSION,
     timestamp: Date.now(),
     ...(currentVideoId ? { videoId: currentVideoId } : {}),
-    ...extra,
+    ...cleanedExtra,
   };
 
   if (tracksMap) {
@@ -4654,39 +4650,12 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     if (!hasLocalStorageApi() || !chrome?.storage?.local?.set) {
       throw new Error("chrome.storage.local.set unavailable");
     }
-
-    const activePlayingSource =
-      useAppStore.getState().lyricsSource || currentFetchWinningSourceId;
-    const isActivePlaying =
-      !activePlayingSource || activePlayingSource === sourceId;
-
     const updates: Record<string, any> = {
       [sourceKey]: entry,
     };
-
-    // Only update the Primary Cache if this source is currently playing!
-    if (isActivePlaying) {
+    if (!skipGeneric) {
       updates[genericKey] = entry;
-
-      // If currentVideoId is known, check if other keys in storage share this same videoId
-      // (e.g. alternate Japanese or English titles) and sync them so all title aliases stay up to date
-      if (currentVideoId && chrome?.storage?.local?.get) {
-        try {
-          const allItems = await chrome.storage.local.get(null);
-          for (const [k, v] of Object.entries(allItems)) {
-            if (
-              k.startsWith("lyrics_") &&
-              !k.includes("__") &&
-              k !== genericKey &&
-              (v as any)?.videoId === currentVideoId
-            ) {
-              updates[k] = entry;
-            }
-          }
-        } catch {}
-      }
     }
-
     await chrome.storage.local.set(updates);
   } catch (err) {
     if (err?.message?.includes("Extension context invalidated")) return;
@@ -4884,9 +4853,6 @@ function restoreLyricsFromCacheEntry(
   }
 
   startLyricsTimer(cleanActiveLyrics);
-
-  // Sync the active playing lyrics as the Primary Cache!
-  syncPrimaryCache(currentSongInfo, entry, currentSource);
 
   setTimeout(() => {
     lyricsJustLoaded = false;
@@ -5185,7 +5151,7 @@ async function tryFetchCubey(songInfo, preferredIdentity = "musixmatch") {
 
       fetchedLyrics = richLyrics;
       lyricsByVersion.default = {
-        id: "cubey-rich",
+        id: richSourceIdentity,
         label: richLabel,
         synced: true,
         lyrics: richLyrics,
@@ -5225,9 +5191,10 @@ async function tryFetchCubey(songInfo, preferredIdentity = "musixmatch") {
     if (lyrics && lyrics.length) {
       log(`[Lyrical] ✅ Cubey found Line-Synced lyrics.`);
 
+      const lineSourceIdentity = "musixmatch-synced";
       fetchedLyrics = lyrics;
       lyricsByVersion.default = {
-        id: "cubey",
+        id: lineSourceIdentity,
         label: data.musixmatchSyncedLyrics ? "Musixmatch" : "LRCLib",
         synced: true,
         lyrics: lyrics,
@@ -5239,8 +5206,8 @@ async function tryFetchCubey(songInfo, preferredIdentity = "musixmatch") {
 
       useAppStore
         .getState()
-        .setLyrics(lyrics, "musixmatch", detectLyricsLanguage(lyrics));
-      persistLyricsCache(currentSongInfo, "musixmatch", lyrics, {
+        .setLyrics(lyrics, lineSourceIdentity, detectLyricsLanguage(lyrics));
+      persistLyricsCache(currentSongInfo, lineSourceIdentity, lyrics, {
         label: data.musixmatchSyncedLyrics ? "Musixmatch" : "LRCLib",
       });
 
@@ -6478,6 +6445,7 @@ async function backgroundPreScanAllSources(
             label: fetchedData.label || source.label,
             language: fetchedData.language || null,
             synced: true,
+            skipGeneric: true,
           },
         );
         useAppStore.getState().addAvailableLyricsSource(source.id);
@@ -6768,11 +6736,17 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
         case "binimum-synced":
         case "portato-richsynced":
         case "legato-synced":
-        case "musixmatch-synced":
           found = await tryFetchUnifiedSource(songInfo, source.id);
           break;
+        case "musixmatch-richsync":
         case "musixmatch":
-          found = await tryFetchCubey(songInfo, "musixmatch");
+          found = await tryFetchCubey(songInfo, "musixmatch-richsync");
+          break;
+        case "musixmatch-synced":
+          found = await tryFetchUnifiedSource(songInfo, source.id);
+          if (!found) {
+            found = await tryFetchCubey(songInfo, "musixmatch-synced");
+          }
           break;
         case "lrclib":
           found = await tryFetchLRCLib(songInfo, fetchAbortSignal);
@@ -6799,7 +6773,11 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
       }
 
       if (found && !currentFetchWinningSourceId) {
-        lockCurrentFetchWinner(source.id);
+        const winningSource =
+          useAppStore.getState().lyricsSource ||
+          lyricsByVersion.default?.id ||
+          source.id;
+        lockCurrentFetchWinner(winningSource);
       }
 
       // Captions can be injected asynchronously via MAIN world postMessage while
@@ -6911,7 +6889,6 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
 
   log("[Lyrical] User manually selected source:", sourceId);
   currentFetchWinningSourceId = sourceId;
-  useAppStore.setState({ lyricsSource: sourceId });
   if (sourceId === "captions") {
     captionSourceReachedForCurrentFetch = true;
     userSongOffset = 0;
@@ -6940,6 +6917,27 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
   );
   if (restored) {
     log("[Lyrical] Successfully switched to cached source:", sourceId);
+    // Explicit user switch: keep the song's primary genericKey in sync with user's selected source
+    const genericKey = getLyricsCacheKey(currentSongInfo);
+    const sourceKey = getLyricsCacheKey(currentSongInfo, sourceId);
+    if (
+      genericKey &&
+      sourceKey &&
+      hasLocalStorageApi() &&
+      chrome?.storage?.local?.get &&
+      chrome?.storage?.local?.set
+    ) {
+      try {
+        const stored: any = await chrome.storage.local.get([sourceKey]);
+        const entry = stored?.[sourceKey];
+        if (entry && genericKey) {
+          await chrome.storage.local.set({ [genericKey]: entry });
+          log("[Lyrical] Synced primary cache for user-selected source:", sourceId);
+        }
+      } catch (err) {
+        warn("[Lyrical] Failed to sync primary cache on source switch:", err);
+      }
+    }
     return;
   }
 
@@ -8079,12 +8077,15 @@ async function initialize() {
         );
         waitForVideoInProgress = false;
         if (fetchedLyrics && fetchedLyrics.length > 0) {
+          const currentStore = useAppStore.getState();
           const currentSource =
+            currentStore.lyricsSource ||
             currentFetchWinningSourceId ||
             lyricsByVersion.default?.id ||
-            useAppStore.getState().lyricsSource ||
             "default";
-          useAppStore.getState().setLyrics(fetchedLyrics, currentSource);
+          if (!currentStore.lyrics?.length || currentStore.lyricsSource !== currentSource) {
+            currentStore.setLyrics(fetchedLyrics, currentSource);
+          }
           useAppStore.setState({ isLoading: false, headerText: "" });
         } else if (useAppStore.getState().lyrics?.length) {
           useAppStore.setState({ isLoading: false, headerText: "" });
@@ -8142,6 +8143,8 @@ async function initialize() {
         .clearLyricsForNewTrack(fastInfo?.title ? fastInfo : null);
       if (fastInfo?.title) {
         updateSongInfo(fastInfo);
+      } else {
+        useAppStore.setState({ isLoading: true, headerText: "Loading lyrics..." });
       }
 
       // Check if panel is already mounted and healthy in DOM
@@ -8170,8 +8173,8 @@ async function initialize() {
         if (fastInfo?.title && !fastInfo.isAd) {
           autoFetchLyrics(fastInfo);
         } else {
-          hydrateSongInfoWithRetry(8, 250).then((hasInfo) => {
-            if (hasInfo && currentSongInfo && currentSongInfo.title) {
+          hydrateSongInfoWithRetry(12, 250).then((hasInfo) => {
+            if (hasInfo && currentSongInfo && currentSongInfo.title && !currentSongInfo.isAd) {
               autoFetchLyrics(currentSongInfo);
             }
           });
@@ -8185,11 +8188,11 @@ async function initialize() {
           const info =
             (fastInfo?.title ? fastInfo : null) ||
             window.getSongInfoFromPage?.();
-          if (info?.title && !info.isAd) {
+          if (info?.title && !info.isAd && (!currentUrlVideoId || info.videoId === currentUrlVideoId)) {
             autoFetchLyrics(info);
           } else {
-            hydrateSongInfoWithRetry(8, 250).then((hasInfo) => {
-              if (hasInfo && currentSongInfo && currentSongInfo.title) {
+            hydrateSongInfoWithRetry(12, 250).then((hasInfo) => {
+              if (hasInfo && currentSongInfo && currentSongInfo.title && !currentSongInfo.isAd) {
                 autoFetchLyrics(currentSongInfo);
               }
             });
