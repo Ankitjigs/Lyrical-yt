@@ -22,6 +22,7 @@ import {
   Sparkles,
   Disc3,
   Database,
+  Search,
 } from "lucide-react";
 import { useAppStore, getCanonicalSourceSyncType } from "../store";
 import { log } from "../utils/logger";
@@ -34,6 +35,7 @@ const LanguageExclusionsModal = lazy(() => import("./LanguageExclusionsModal"));
 const CacheEditorView = lazy(() => import("./CacheEditorView"));
 const FloatingLyricsModal = lazy(() => import("./FloatingLyricsModal"));
 const SearchingVibeModal = lazy(() => import("./SearchingVibeModal"));
+const SearchableSelectModal = lazy(() => import("./SearchableSelectModal"));
 import { AVAILABLE_LANGUAGES } from "../utils/languages";
 import {
   CUSTOM_THEMES_STORAGE_KEY,
@@ -245,9 +247,20 @@ const SettingsContent = () => {
   const [isCacheEditorOpen, setIsCacheEditorOpen] = useState(false);
   const [isFloatingLyricsModalOpen, setIsFloatingLyricsModalOpen] = useState(false);
   const [isSearchingVibeModalOpen, setIsSearchingVibeModalOpen] = useState(false);
+  const [isTranslationLangModalOpen, setIsTranslationLangModalOpen] = useState(false);
   const searchingIndicatorStyle = useAppStore(
     (state) => state.searchingIndicatorStyle || "lofi",
   );
+
+  const languageOptions = useMemo(
+    () =>
+      AVAILABLE_LANGUAGES.map((lang) => ({
+        value: lang.code,
+        label: lang.label,
+      })),
+    [],
+  );
+
   const [editingCustomThemeId, setEditingCustomThemeId] = useState(null);
   const [customThemeRecords, setCustomThemeRecords] = useState([]);
   const [customThemes, setCustomThemes] = useState([]);
@@ -275,6 +288,16 @@ const SettingsContent = () => {
     isVocalMuted: false,
     showMiniCompanion: true,
   });
+
+  const currentTranslationLangLabel = useMemo(() => {
+    const match = AVAILABLE_LANGUAGES.find(
+      (l) => l.code === settings.translationLang,
+    );
+    return match
+      ? `${match.label} (${match.code})`
+      : settings.translationLang || "English (en)";
+  }, [settings.translationLang]);
+
   const [cacheInfo, setCacheInfo] = useState<{
     bytes: number;
     songCount: number;
@@ -2818,19 +2841,34 @@ const SettingsContent = () => {
                   >
                     {t("settings_language_translationLanguage")}
                   </label>
-                  <select
-                    value={settings.translationLang}
-                    onChange={(e) =>
-                      updateSetting("translationLang", e.target.value)
-                    }
-                    style={inputStyle}
+                  <button
+                    type="button"
+                    onClick={() => setIsTranslationLangModalOpen(true)}
+                    style={{
+                      ...inputStyle,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      padding: "10px 14px",
+                      borderRadius: "10px",
+                    }}
                   >
-                    {AVAILABLE_LANGUAGES.map((lang) => (
-                      <option key={lang.code} value={lang.code}>
-                        {lang.label}
-                      </option>
-                    ))}
-                  </select>
+                    <span
+                      style={{
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {currentTranslationLangLabel}
+                    </span>
+                    <Search
+                      size={14}
+                      style={{ opacity: 0.6, flexShrink: 0, marginLeft: "8px" }}
+                    />
+                  </button>
                 </div>
 
                 <div style={dividerStyle} />
@@ -3283,6 +3321,19 @@ const SettingsContent = () => {
               updateSetting("romanizationExclusions", newExclusions.romanization);
               updateSetting("translationExclusions", newExclusions.translation);
             }}
+          />
+        </Suspense>
+      )}
+      {isTranslationLangModalOpen && (
+        <Suspense fallback={null}>
+          <SearchableSelectModal
+            isOpen={isTranslationLangModalOpen}
+            onClose={() => setIsTranslationLangModalOpen(false)}
+            title={t("settings_language_translationLanguage")}
+            options={languageOptions}
+            selectedValue={settings.translationLang || "en"}
+            onSelect={(code) => updateSetting("translationLang", code)}
+            placeholder={t("common_searchLanguage", undefined, "Search languages...")}
           />
         </Suspense>
       )}

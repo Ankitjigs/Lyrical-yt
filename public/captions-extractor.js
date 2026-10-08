@@ -14,6 +14,22 @@ let networkHooksInstalled = false;
 let lastKnownPoToken = null;
 const cachedTimedTextByVideo = new Map();
 const pendingTimedTextResolvers = new Set();
+let timedtextRateLimitedUntil = 0;
+
+function parseRetryAfterHeader(headerValue) {
+  if (!headerValue) return 60;
+  const trimmed = String(headerValue).trim();
+  if (/^\d+$/.test(trimmed)) {
+    const sec = parseInt(trimmed, 10);
+    return Number.isFinite(sec) && sec > 0 ? sec : 60;
+  }
+  const parsedDateMs = Date.parse(trimmed);
+  if (!Number.isNaN(parsedDateMs)) {
+    const diffSec = Math.ceil((parsedDateMs - Date.now()) / 1000);
+    return diffSec > 0 ? diffSec : 5;
+  }
+  return 60;
+}
 let currentVideoDetails = null;
 let currentTracks = null;
 let currentSelectedTrack = null;
@@ -611,6 +627,13 @@ async function requestPlayerCaptionTrack(track) {
     }
   }
 
+  if (Date.now() < timedtextRateLimitedUntil) {
+    console.warn(
+      `[Lyrical Extractor] Active 429 rate limit backoff until ${new Date(timedtextRateLimitedUntil).toLocaleTimeString()} — skipping Player API track request`,
+    );
+    return null;
+  }
+
   // Preserve user's existing native caption choice
   let userHadCaptionsActive = false;
   let userInitialTrack = null;
@@ -754,8 +777,15 @@ async function fetchLyricsForTrack(track) {
     candidateUrls.push(rawTrackUrl);
   }
 
-  const maxAttempts = track?.kind === "asr" ? 3 : 2;
-  const retryBaseDelayMs = track?.kind === "asr" ? 200 : 150;
+  if (Date.now() < timedtextRateLimitedUntil) {
+    console.warn(
+      `[Lyrical Extractor] Active 429 rate limit backoff until ${new Date(timedtextRateLimitedUntil).toLocaleTimeString()} — skipping caption fetch`,
+    );
+    return null;
+  }
+
+  const maxAttempts = track?.kind === "asr" ? 2 : 1;
+  const retryBaseDelayMs = 150;
 
   let hitBotBlock = false;
   for (const url of candidateUrls) {
@@ -767,20 +797,23 @@ async function fetchLyricsForTrack(track) {
         });
         if (!res.ok) {
           if (res.status === 429) {
-            console.log(
-              "[Lyrical Extractor] Timedtext returned 429 — falling back to player API",
+            const retryAfter = res.headers?.get?.("Retry-After");
+            const backoffSec = parseRetryAfterHeader(retryAfter);
+            timedtextRateLimitedUntil = Date.now() + backoffSec * 1000;
+            console.warn(
+              `[Lyrical Extractor] Timedtext returned 429 (Rate Limited) — suppressing timedtext requests until ${new Date(timedtextRateLimitedUntil).toLocaleTimeString()}; suppressing Player API request`,
             );
-            hitBotBlock = true;
+            return null;
           }
           break;
         }
 
         const text = await res.text();
 
-        // HARD GUARD: If response is HTML or Google bot-block page, stop direct fetch immediately
+        // HARD GUARD: If response is HTML or Google bot-block page, stop direct fetch immediately and hand off to Player API
         if (isHtmlOrBlockPage(text)) {
           console.log(
-            "[Lyrical Extractor] Timedtext returned HTML or bot-block page — falling back to player API",
+            "[Lyrical Extractor] Timedtext returned HTML or bot-block page — falling back immediately to player API",
           );
           hitBotBlock = true;
           break;
