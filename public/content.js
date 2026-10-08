@@ -59,7 +59,7 @@ window.getSongInfoFromPage = function () {
             if (isMediaSessionForMini && msInfo) {
                 // Legitimate miniplayer track confirmed! Extract real videoId from MediaSession artwork
                 if (msInfo.artwork) {
-                    const m = msInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+                    const m = msInfo.artwork.match(/\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//);
                     if (m && m[1]) videoId = m[1];
                 }
                 if (!videoId) {
@@ -117,9 +117,9 @@ window.getSongInfoFromPage = function () {
 
             if (!videoId) {
                 try {
-                    const imgs = mini.querySelectorAll("img[src*='/vi/']");
+                    const imgs = mini.querySelectorAll("img[src*='/vi/'], img[src*='/vi_webp/']");
                     for (const img of Array.from(imgs)) {
-                        const m = img.src.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
+                        const m = img.src.match(/\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//);
                         if (m && m[1]) {
                             videoId = m[1];
                             break;
@@ -156,6 +156,8 @@ window.getSongInfoFromPage = function () {
     }
 
     // YouTube Watch Page - Better-Lyrics style atomic player verification
+    let watchPageIdentityVerified = false;
+    let verifiedWatchPageData = null;
     if (isYouTube && isWatchUrl && videoId) {
         const player = document.getElementById('movie_player');
         let playerVid = null;
@@ -167,6 +169,7 @@ window.getSongInfoFromPage = function () {
 
         // If player has already loaded this video, return authoritative atomic info directly
         if (playerVid && playerVid === videoId) {
+            watchPageIdentityVerified = true;
             try {
                 const pData = player.getVideoData();
                 if (pData && pData.title && typeof pData.title === 'string' && pData.title.trim()) {
@@ -197,6 +200,49 @@ window.getSongInfoFromPage = function () {
             console.debug('[Content] Player video_id (' + playerVid + ') does not match URL videoId (' + videoId + ') - waiting for player transition');
             return null;
         }
+
+        // During SPA navigation, MediaSession and visible title nodes can still describe
+        // the previous track. Only use those fallbacks after YouTube's page data confirms
+        // that it has switched to the URL's video.
+        try {
+            verifiedWatchPageData = window.ytInitialPlayerResponse?.videoDetails || null;
+            const pageDataVideoId =
+                verifiedWatchPageData?.videoId ||
+                window.ytplayer?.config?.args?.video_id ||
+                null;
+            if (pageDataVideoId === videoId) {
+                watchPageIdentityVerified = true;
+            } else if (pageDataVideoId) {
+                return null;
+            }
+        } catch {}
+
+        if (!watchPageIdentityVerified) {
+            return null;
+        }
+
+        // When the player API is not ready yet, use the identity-verified player
+        // response rather than YouTube's title DOM, which can lag during SPA swaps.
+        if (verifiedWatchPageData?.videoId === videoId && verifiedWatchPageData.title) {
+            let title = verifiedWatchPageData.title.trim();
+            let artist = (verifiedWatchPageData.author || '').trim();
+            if (title.includes(' - ')) {
+                const parts = title.split(' - ');
+                artist = artist || parts[0].trim();
+                title = parts.slice(1).join(' - ').trim();
+            }
+            title = title
+                .replace(/\(.*?(official|music|lyric|audio|video).*?\)/gi, '')
+                .replace(/\[.*?(official|music|lyric|audio|video).*?\]/gi, '')
+                .replace(/\|.*$/g, '')
+                .trim();
+            return {
+                videoId,
+                title,
+                artist: artist || 'Playing on YouTube',
+                artwork: getYouTubeArtworkFromPage(videoId),
+            };
+        }
     }
 
     // Try MediaSession for watch page
@@ -221,11 +267,14 @@ window.getSongInfoFromPage = function () {
     if (mediaSessionInfo && mediaSessionInfo.title) {
         isMediaSessionValid = true;
         if (videoId && mediaSessionInfo.artwork) {
-            const artMatch = mediaSessionInfo.artwork.match(/\/vi\/([a-zA-Z0-9_-]{11})\//);
-            if (artMatch && artMatch[1] && artMatch[1] !== videoId) {
-                console.debug('[Content] MediaSession artwork videoId (' + artMatch[1] + ') does not match active videoId (' + videoId + ') - rejecting hover preview session');
+            const artMatch = mediaSessionInfo.artwork.match(/\/vi(?:_webp)?\/([a-zA-Z0-9_-]{11})\//);
+            if (!artMatch || artMatch[1] !== videoId) {
+                console.debug('[Content] MediaSession artwork does not verify active videoId (' + videoId + ') - rejecting possibly stale session');
                 isMediaSessionValid = false;
             }
+        } else if (videoId) {
+            // Missing artwork cannot establish which watch-page video owns this metadata.
+            isMediaSessionValid = false;
         }
     }
 
@@ -237,6 +286,12 @@ window.getSongInfoFromPage = function () {
             mediaSessionInfo.videoId = videoId;
         }
         return mediaSessionInfo;
+    }
+
+    // Do not fall back to watch-page title nodes when identity is known but the
+    // current response has no title yet; those nodes may still show the old route.
+    if (isYouTube && isWatchUrl && videoId && !verifiedWatchPageData?.title) {
+        return null;
     }
 
     // Fallback to page scraping
@@ -320,7 +375,7 @@ function getMediaSessionMetadata() {
             const parts = title.split(' - ');
             return {
                 artist: parts[0].trim(),
-                title: parts[1].trim(),
+                title: parts.slice(1).join(' - ').trim(),
                 album: album || "",
                 artwork: artworkUrl
             };

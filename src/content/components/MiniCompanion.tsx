@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from "react";
 import { X, ExternalLink, RotateCcw } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useAnimationControls } from "motion/react";
 import { useAppStore } from "../store";
 import { useShallow } from "zustand/react/shallow";
 import { getThemeCssVariables } from "../../themes";
@@ -445,7 +445,6 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     isTranslateEnabled,
     showRomanizedLyrics,
     showTranslatedLyrics,
-    storeActiveIndex,
     userOffset,
     isOffsetResolved,
     lyricsSource,
@@ -475,7 +474,6 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       isTranslateEnabled: state.isTranslateEnabled,
       showRomanizedLyrics: state.showRomanizedLyrics,
       showTranslatedLyrics: state.showTranslatedLyrics,
-      storeActiveIndex: state.activeIndex,
       userOffset: state.userOffset,
       isOffsetResolved: state.isOffsetResolved,
       lyricsSource: state.lyricsSource,
@@ -488,8 +486,10 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   const dragPositionRef = useRef<{ top: number; left: number } | null>(null);
   const hasDraggedRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [rawVideoTime, setRawVideoTime] = useState(0);
+  // Derive adjusted time in render so an async auto-sync offset change cannot
+  // leave one frame pairing the new active line with the old adjusted clock.
+  const currentTime = rawVideoTime - offset;
   const [bottomOffset, setBottomOffset] = useState(236);
   const [rightOffset, setRightOffset] = useState(16);
   const [miniWidth, setMiniWidth] = useState(340);
@@ -544,7 +544,6 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
   useEffect(() => {
     let rafId: number | null = null;
     let lastTime = -1;
-    let cachedVideo: HTMLVideoElement | null = null;
 
     let currentVideo: HTMLVideoElement | null = getActiveMediaVideoElement();
 
@@ -570,10 +569,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
 
       if (currentVideo && currentVideo.isConnected) {
         const vTime = currentVideo.currentTime;
-        const t = vTime - offset;
-        if (Math.abs(t - lastTime) > 0.016) {
-          lastTime = t;
-          setCurrentTime(t);
+        if (Math.abs(vTime - lastTime) > 0.016) {
+          lastTime = vTime;
           setRawVideoTime(vTime);
         }
       }
@@ -671,17 +668,20 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       document.removeEventListener("visibilitychange", onPlayerSwap);
       window.removeEventListener("focus", onPlayerSwap);
     };
-  }, [lyrics, offset]);
+  }, [lyrics]);
 
-  // Active line calculation matching collapsedPreview and karaokeDisplay adaptive early transition
+  // Match KaraokeLyricDisplay and CollapsedLyricsPreview: prepare each line
+  // slightly before its timestamp so the entrance settles before vocals begin.
+  // Use the store's resolved offset, but don't read/write the main timer's
+  // activeIndex because it changes at the exact lyric timestamp (without lead).
   const activeLineIndex = useMemo(() => {
-    if (!lyrics || lyrics.length === 0) return -1;
+    if (!isOffsetResolved || !lyrics?.length) return -1;
 
     const time = Math.max(0, currentTime);
-
     const firstLine = lyrics[0];
     const firstLineTime = Number(firstLine?.time ?? 0);
     const firstLead = getLineTransitionLead(0, firstLineTime);
+
     if (
       firstLineTime >= 4.5 &&
       !isInstrumentalLine(firstLine) &&
@@ -690,37 +690,104 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
       return -1;
     }
 
-    if (time < firstLineTime - firstLead) {
-      return 0;
-    }
+    if (time < firstLineTime - firstLead) return 0;
 
-    for (let i = 0; i < lyrics.length; i++) {
-      const line = lyrics[i];
-      const nextLine = lyrics[i + 1];
+    for (let index = 0; index < lyrics.length; index += 1) {
+      const line = lyrics[index];
+      const nextLine = lyrics[index + 1];
       const lineStart = Number(line.time ?? 0);
       const nextStart = nextLine ? Number(nextLine.time ?? Infinity) : Infinity;
-
-      const prevLine = lyrics[i - 1];
-      const prevStart = prevLine ? Number(prevLine.time ?? 0) : 0;
-      const startLead = getLineTransitionLead(prevStart, lineStart, prevLine?.parts);
+      const previousLine = lyrics[index - 1];
+      const previousStart = previousLine ? Number(previousLine.time ?? 0) : 0;
+      const startLead = getLineTransitionLead(
+        previousStart,
+        lineStart,
+        previousLine?.parts,
+      );
       const endLead = nextLine
         ? getLineTransitionLead(lineStart, nextStart, line.parts)
         : 0;
 
-      const effectiveStart = lineStart - startLead;
-      const effectiveEnd = nextStart - endLead;
-
-      if (time >= effectiveStart && time < effectiveEnd) {
-        return i;
+      if (time >= lineStart - startLead && time < nextStart - endLead) {
+        return index;
       }
     }
 
     return lyrics.length - 1;
-  }, [lyrics, currentTime]);
+  }, [lyrics, currentTime, isOffsetResolved]);
 
   const activeLine = activeLineIndex >= 0 ? lyrics[activeLineIndex] : null;
   const isInstrumental = isInstrumentalLine(activeLine);
   const activeText = activeLine?.text?.trim() || "";
+  const lineAnimationControls = useAnimationControls();
+  const previousLineMotionRef = useRef({
+    activeLineIndex: Number.NaN,
+    offset,
+    offsetChangedAt: Number.NEGATIVE_INFINITY,
+  });
+
+  const lineStart = Number(activeLine?.time ?? 0);
+  const nextLine = lyrics?.[activeLineIndex + 1];
+  const rawLineInterval = nextLine
+    ? Math.max(0.5, Number(nextLine.time) - lineStart)
+    : 3.5;
+  const isFastTempo = rawLineInterval < 1.2;
+
+  // Keep the normal line entrance, but don't replay it when a corrected offset
+  // moves the active index. An offset can update just before the main timer's
+  // immediate tick, so keep the suppression window brief and bounded.
+  useLayoutEffect(() => {
+    const previous = previousLineMotionRef.current;
+    const now = performance.now();
+    const lineChanged = previous.activeLineIndex !== activeLineIndex;
+    const offsetChanged = previous.offset !== offset;
+    const offsetChangedAt = offsetChanged ? now : previous.offsetChangedAt;
+    const skipEntrance =
+      offsetChanged || now - offsetChangedAt < 350;
+
+    previousLineMotionRef.current = {
+      activeLineIndex,
+      offset,
+      offsetChangedAt,
+    };
+
+    if (offsetChanged) {
+      lineAnimationControls.set({ opacity: 1, y: 0, scale: 1 });
+      return;
+    }
+    if (!lineChanged) return;
+
+    if (reduceAnimations || activeLineIndex < 0) {
+      lineAnimationControls.set({ opacity: 1, y: 0, scale: 1 });
+      return;
+    }
+
+    if (skipEntrance) {
+      lineAnimationControls.set({ opacity: 1, y: 0, scale: 1 });
+      return;
+    }
+
+    lineAnimationControls.set({
+      opacity: 0,
+      y: isFastTempo ? 4 : 8,
+      scale: 0.98,
+    });
+    void lineAnimationControls.start({
+      opacity: 1,
+      y: 0,
+      scale: 1,
+      transition: {
+        duration: isFastTempo ? 0.12 : 0.2,
+        ease: [0.22, 1, 0.36, 1],
+      },
+    });
+  }, [
+    activeLineIndex,
+    offset,
+    reduceAnimations,
+    isFastTempo,
+    lineAnimationControls,
+  ]);
 
   // Resolve romanized text for the active line, matching LyricsPanel's alignment logic:
   // 1. Check the lyrics line's own .romanized property
@@ -2096,42 +2163,16 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
               )}
             </AnimatePresence>
 
-            {(() => {
-              const lineStart = Number(activeLine?.time ?? 0);
-              const nextLine = lyrics?.[activeLineIndex + 1];
-              const rawInterval = nextLine
-                ? Math.max(0.5, Number(nextLine.time) - lineStart)
-                : 3.5;
-              const isFastTempo = rawInterval < 1.2;
-
-              return (
-                <motion.div
-                  key={`line-${activeLineIndex}`}
-                  initial={
-                    reduceAnimations
-                      ? false
-                      : { opacity: 0, y: isFastTempo ? 4 : 8, scale: 0.98 }
-                  }
-                  animate={{
-                    opacity: 1,
-                    y: 0,
-                    scale: 1,
-                    transition: {
-                      duration: reduceAnimations
-                        ? 0
-                        : isFastTempo
-                        ? 0.12
-                        : 0.20,
-                      ease: [0.22, 1, 0.36, 1],
-                    },
-                  }}
-                  style={{
-                    width: "100%",
-                    textAlign: "left",
-                    paddingRight: isProcessingLyrics ? "32px" : "0px",
-                    transition: "padding-right 0.2s ease",
-                  }}
-                >
+            <motion.div
+              animate={lineAnimationControls}
+              initial={false}
+              style={{
+                width: "100%",
+                textAlign: "left",
+                paddingRight: isProcessingLyrics ? "32px" : "0px",
+                transition: "padding-right 0.2s ease",
+              }}
+            >
                   {/* Original lyrics line */}
                   <div
                     style={{
@@ -2190,9 +2231,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                       {activeTranslated}
                     </div>
                   )}
-                </motion.div>
-              );
-            })()}
+            </motion.div>
           </div>
         ) : isLoading || (headerText && headerText.toLowerCase().includes("search")) ? (
           <div

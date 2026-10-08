@@ -152,6 +152,15 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
     return { artist: "", title: t("cacheEditor_unknownSong"), cleanLabel: t("cacheEditor_unknownSong") };
   }
 
+  // Keep Cache Editor labels aligned with the artist normalization used for
+  // YouTube metadata, without changing the persisted cache key.
+  const normalizeCacheArtist = (artist: string) =>
+    artist
+      .replace(/\s*-\s*Topic$/i, "")
+      .replace(/(?<=[a-zA-Z0-9])VEVO$/i, "")
+      .replace(/,\s*&\s*/g, ", ")
+      .trim();
+
   const stripSuffixes = (str: string) => {
     return str
       .replace(/\s*[\(\[\{]?(Official\s+)?(Music\s+Video|Video|Audio|MV|Lyric\s+Video|Visualizer)[\)\]\}]?\s*$/i, "")
@@ -171,21 +180,25 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
     const prefix = bracketMatch[1].trim();
     const songName = bracketMatch[2].trim();
     if (prefix.length > 2) {
-      const cleanArtist = prefix
-        .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
-        .replace(/\s*[x×]\s*/g, " × ")
-        .trim();
+      const cleanArtist = normalizeCacheArtist(
+        prefix
+          .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
+          .replace(/\s*[x×]\s*/g, " × ")
+          .trim(),
+      );
       return {
         artist: cleanArtist,
         title: songName,
         cleanLabel: `${cleanArtist} • ${songName}`,
       };
     }
-    const cleanArtist = rawArtist
-      .replace(/\s*and\s+.*Official.*Channel/gi, "")
-      .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
-      .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
-      .trim();
+    const cleanArtist = normalizeCacheArtist(
+      rawArtist
+        .replace(/\s*and\s+.*Official.*Channel/gi, "")
+        .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
+        .replace(/([a-z0-9])x([a-z0-9])/gi, "$1 × $2")
+        .trim(),
+    );
     return {
       artist: cleanArtist,
       title: songName,
@@ -196,7 +209,7 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
   // If rawTitle has " • " or " - "
   if (rawTitle.includes(" • ")) {
     const parts = rawTitle.split(" • ");
-    const cleanArtist = parts[0].trim();
+    const cleanArtist = normalizeCacheArtist(parts[0].trim());
     const songName = parts.slice(1).join(" • ").trim();
     return {
       artist: cleanArtist,
@@ -207,7 +220,7 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
 
   if (rawTitle.includes(" - ")) {
     const parts = rawTitle.split(" - ");
-    const cleanArtist = parts[0].trim();
+    const cleanArtist = normalizeCacheArtist(parts[0].trim());
     const songName = parts.slice(1).join(" - ").trim();
     return {
       artist: cleanArtist,
@@ -216,10 +229,12 @@ function cleanDisplayTrack(rawKey: string): { artist: string; title: string; cle
     };
   }
 
-  const cleanArtist = rawArtist
-    .replace(/\s*and\s+.*Official.*Channel/gi, "")
-    .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
-    .trim();
+  const cleanArtist = normalizeCacheArtist(
+    rawArtist
+      .replace(/\s*and\s+.*Official.*Channel/gi, "")
+      .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
+      .trim(),
+  );
   const cleanLabel = cleanArtist ? `${cleanArtist} • ${rawTitle}` : rawTitle;
   return {
     artist: cleanArtist,

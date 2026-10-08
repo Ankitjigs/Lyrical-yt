@@ -188,21 +188,31 @@ function handleInterceptedTimedText(text, url) {
 }
 
 function getVideoId() {
-  try {
-    const player = document.getElementById("movie_player");
-    const playerV = player?.getVideoData?.()?.video_id;
-    if (playerV) return playerV;
-  } catch {}
-
+  // On watch pages the URL identifies the requested video. YouTube may leave
+  // another player/preview connected while navigating, so do not let that
+  // player's stale getVideoData() override the URL.
   const params = new URLSearchParams(window.location.search);
-  const v = params.get("v");
-  if (v) return v;
+  const urlVideoId = params.get("v");
+  if (window.location.pathname.includes("/watch") && urlVideoId) {
+    return urlVideoId;
+  }
+
+  // On feed/history routes, only trust the player hosted by the active
+  // miniplayer. A generic #movie_player can belong to a hover preview.
+  try {
+    const player = window.location.pathname.includes("/watch")
+      ? document.getElementById("movie_player")
+      : document.querySelector("ytd-miniplayer #movie_player");
+    const playerV = player?.getVideoData?.()?.video_id;
+    if (playerV && /^[a-zA-Z0-9_-]{11}$/.test(playerV)) return playerV;
+  } catch {}
 
   // 1. The playing video title link inside the HTML5 player controls (.ytp-title-link always has the playing video)
   try {
-    const titleLink = document.querySelector(
-      "ytd-miniplayer .ytp-title-link[href*='watch?v='], ytd-miniplayer a.ytp-title-link, .ytp-title-link[href*='watch?v=']"
-    );
+    const titleLinkSelector = window.location.pathname.includes("/watch")
+      ? ".ytp-title-link[href*='watch?v=']"
+      : "ytd-miniplayer .ytp-title-link[href*='watch?v='], ytd-miniplayer a.ytp-title-link";
+    const titleLink = document.querySelector(titleLinkSelector);
     if (titleLink && titleLink.href) {
       const match = titleLink.href.match(/[?&]v=([^&]+)/);
       if (match && match[1]) return match[1];
@@ -220,8 +230,13 @@ function getVideoId() {
     }
   } catch {}
 
-  // 3. MediaSession artwork
-  if ("mediaSession" in navigator && navigator.mediaSession.metadata?.artwork) {
+  // MediaSession is a last resort on non-watch routes: it can lag behind a
+  // playlist transition or briefly describe a hover preview.
+  if (
+    !window.location.pathname.includes("/watch") &&
+    "mediaSession" in navigator &&
+    navigator.mediaSession.metadata?.artwork
+  ) {
     try {
       const arts = navigator.mediaSession.metadata.artwork;
       for (let i = arts.length - 1; i >= 0; i--) {
@@ -986,6 +1001,56 @@ function postCaptionData({
   );
 }
 
+// Publish identity-verified player metadata to the isolated content script.
+// Unlike the visible title DOM or MediaSession, the player API binds these
+// fields to the actual video_id currently loaded by YouTube's player.
+function publishPlayerMetadata() {
+  try {
+    if (
+      !window.location.hostname.includes("youtube.com") ||
+      !window.location.pathname.includes("/watch")
+    ) {
+      return;
+    }
+
+    const urlVideoId = new URLSearchParams(window.location.search).get("v");
+    if (!urlVideoId || !/^[a-zA-Z0-9_-]{11}$/.test(urlVideoId)) return;
+
+    const player = document.getElementById("movie_player");
+    if (!player || isAdPlaying(player)) return;
+
+    const playerData = player.getVideoData?.();
+    const playerVideoId = playerData?.video_id;
+    if (playerVideoId !== urlVideoId) return;
+
+    const playerResponse = player.getPlayerResponse?.();
+    const videoDetails = playerResponse?.videoDetails;
+    const title = String(videoDetails?.title || playerData?.title || "").trim();
+    const artist = String(videoDetails?.author || playerData?.author || "").trim();
+    if (!title || !artist) return;
+
+    const responseDuration = Number(videoDetails?.lengthSeconds);
+    const playerDuration = Number(player.getDuration?.());
+    const duration =
+      Number.isFinite(responseDuration) && responseDuration > 0
+        ? responseDuration
+        : Number.isFinite(playerDuration) && playerDuration > 0
+          ? playerDuration
+          : 0;
+
+    window.postMessage(
+      {
+        type: "LYRICAL_PLAYER_METADATA",
+        videoId: urlVideoId,
+        title,
+        artist,
+        duration,
+      },
+      "*",
+    );
+  } catch {}
+}
+
 async function processPlayerResponsePayload(payload, source = "unknown") {
   const currentVideoId = getVideoId();
   if (!currentVideoId) return false;
@@ -1191,6 +1256,7 @@ function attachPlayerListeners(player) {
   try {
     player.addEventListener("onVideoDataChange", () => {
       console.log("[Lyrical Extractor] onVideoDataChange fired — video changed");
+      publishPlayerMetadata();
       onVideoChange();
     });
   } catch {}
@@ -1207,12 +1273,14 @@ function attachPlayerListeners(player) {
   try {
     player.addEventListener("onReady", () => {
       console.log("[Lyrical Extractor] player ready — rechecking captions");
+      publishPlayerMetadata();
       scheduleExtraction(400);
     });
   } catch {}
 
   try {
     player.addEventListener("onStateChange", (e) => {
+      publishPlayerMetadata();
       const currentVid = getVideoId();
       if (currentVid && currentVid !== currentTrackedVideoId) {
         console.log("[Lyrical Extractor] onStateChange detected video ID change:", currentVid);
@@ -1399,6 +1467,7 @@ function installNetworkInterceptors() {
 
 function onVideoChange() {
   removeCaptionHiderStyle();
+  publishPlayerMetadata();
   const currentVideoId = getVideoId();
   if (currentVideoId && currentVideoId !== currentTrackedVideoId) {
     console.log("[Lyrical Extractor] New video:", currentVideoId);
@@ -1428,7 +1497,10 @@ function setupMiniplayerTracking() {
     observer.observe(mini, { childList: true, subtree: true, attributes: true });
   }
 }
-setInterval(setupMiniplayerTracking, 1000);
+setInterval(() => {
+  setupMiniplayerTracking();
+  publishPlayerMetadata();
+}, 1000);
 
 removeCaptionHiderStyle();
 installNetworkInterceptors();

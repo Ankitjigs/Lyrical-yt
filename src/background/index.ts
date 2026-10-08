@@ -936,6 +936,7 @@ async function translateLyrics(
     ),
   );
   const translatedLookup = new Map();
+  let cachedTranslationLines = 0;
 
   // Check cache first
   const uncachedTexts: string[] = [];
@@ -943,9 +944,15 @@ async function translateLyrics(
     const cacheKey = `${targetLang}_${text}`;
     if (translationCache.has(cacheKey)) {
       translatedLookup.set(text, translationCache.get(cacheKey));
+      cachedTranslationLines += 1;
     } else {
       uncachedTexts.push(text);
     }
+  }
+  if (cachedTranslationLines > 0) {
+    console.log(
+      `[Lyrical BG] Loaded cached translations for ${cachedTranslationLines}/${uniqueTexts.length} unique lines (${targetLang})`,
+    );
   }
 
   // 1. Primary enrichment: Unison Translate API
@@ -1049,6 +1056,7 @@ async function romanizeLyrics(
     ),
   );
   const romanizedLookup = new Map();
+  let cachedRomanizationLines = 0;
 
   // Check cache and Latin fast-path first
   const uncachedTexts: string[] = [];
@@ -1064,9 +1072,15 @@ async function romanizeLyrics(
     const cacheKey = `rom_${sourceLang}_${text}`;
     if (romanizationCache.has(cacheKey)) {
       romanizedLookup.set(text, romanizationCache.get(cacheKey));
+      cachedRomanizationLines += 1;
     } else {
       uncachedTexts.push(text);
     }
+  }
+  if (cachedRomanizationLines > 0) {
+    console.log(
+      `[Lyrical BG] Loaded cached romanizations for ${cachedRomanizationLines}/${uniqueTexts.length} unique lines (${sourceLang})`,
+    );
   }
 
   // 1. Primary enrichment: Unison Translate API
