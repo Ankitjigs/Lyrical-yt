@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useDeferredValue } from "react";
+import React, { useEffect, useMemo, useRef, useState, useDeferredValue } from "react";
 import {
   ArrowLeft,
   Database,
@@ -302,6 +302,12 @@ function cleanAlternateTitlesList(altTitles: string[], currentTitle: string): st
 function formatSongLabel(songKey) {
   if (!songKey) return t("cacheEditor_unknownSong");
   return cleanDisplayTrack(songKey).cleanLabel;
+}
+
+function needsTitleRomanization(title: string) {
+  return /[^\p{Script=Latin}\p{P}\p{Z}\p{N}\p{S}\p{M}]/u.test(
+    (title || "").trim(),
+  );
 }
 
 const SYNC_CATEGORIES = [
@@ -899,6 +905,8 @@ function normalizeCacheGroups(
 
 const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   const [groups, setGroups] = useState([]);
+  const [romanizedTitles, setRomanizedTitles] = useState<Record<string, string>>({});
+  const requestedTitleRomanizations = useRef(new Set<string>());
   const [searchTerm, setSearchTerm] = useState("");
   const deferredSearchTerm = useDeferredValue(searchTerm);
   const [hoveredSyncType, setHoveredSyncType] = useState<string | null>(null);
@@ -1004,6 +1012,67 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen || typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
+      return;
+    }
+
+    let cancelled = false;
+    const titlesToRomanize = (groups as any[])
+      .map((group) => ({
+        key: group.id,
+        title: cleanDisplayTrack(group.id).title,
+      }))
+      .filter(
+        ({ key, title }) =>
+          Boolean(key) &&
+          needsTitleRomanization(title) &&
+          !romanizedTitles[key] &&
+          !requestedTitleRomanizations.current.has(key),
+      );
+    let nextTitleIndex = 0;
+
+    const romanizeNextTitle = async () => {
+      while (!cancelled && nextTitleIndex < titlesToRomanize.length) {
+        const { key, title } = titlesToRomanize[nextTitleIndex++];
+        requestedTitleRomanizations.current.add(key);
+
+        await new Promise<void>((resolve) => {
+          try {
+            chrome.runtime.sendMessage(
+              { type: "ROMANIZE_LINE", text: title, sourceLang: "auto" },
+              (result: any) => {
+                const failed = Boolean(chrome.runtime.lastError);
+                const romanized =
+                  typeof result?.romanized === "string"
+                    ? result.romanized.trim()
+                    : "";
+                if (!failed && romanized) {
+                  setRomanizedTitles((previous) => ({
+                    ...previous,
+                    [key]: romanized,
+                  }));
+                } else {
+                  requestedTitleRomanizations.current.delete(key);
+                }
+                resolve();
+              },
+            );
+          } catch {
+            requestedTitleRomanizations.current.delete(key);
+            resolve();
+          }
+        });
+      }
+    };
+
+    // Keep background requests modest while the Cache Editor remains responsive.
+    void Promise.all([romanizeNextTitle(), romanizeNextTitle()]);
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, groups]);
+
+  useEffect(() => {
     if (!openTrackDropdownKey) return;
 
     const handleClickOutside = (event: MouseEvent) => {
@@ -1033,12 +1102,14 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
 
     return groups
       .map((group: any) => {
+        const romanizedTitle = romanizedTitles[group.id] || "";
         const altTitlesText = Array.isArray(group.altTitles)
           ? group.altTitles.join(" ")
           : "";
         const matchingEntries = group.entries.filter((entry: any) => {
           const searchableText = [
             group.title,
+            romanizedTitle,
             altTitlesText,
             entry.key,
             entry.sourceLabel,
@@ -1052,6 +1123,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
 
         if (
           group.title.toLowerCase().includes(query) ||
+          romanizedTitle.toLowerCase().includes(query) ||
           altTitlesText.toLowerCase().includes(query)
         ) {
           return group;
@@ -1061,7 +1133,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         return { ...group, entries: matchingEntries };
       })
       .filter(Boolean);
-  }, [groups, deferredSearchTerm]);
+  }, [groups, deferredSearchTerm, romanizedTitles]);
 
   const toggleExpanded = (key) => {
     setExpandedKeys((prev) => {
@@ -1468,6 +1540,7 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         ) : (
           filteredGroups.map((group: any) => {
             const isGroupExpanded = expandedGroups.has(group.id);
+            const romanizedTitle = romanizedTitles[group.id] || "";
             return (
               <div
                 key={group.id}
@@ -1517,7 +1590,11 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                         }}
                       >
                         <span
-                          title={group.title}
+                          title={
+                            romanizedTitle
+                              ? `${group.title} (${romanizedTitle})`
+                              : group.title
+                          }
                           style={{
                             fontSize: "14px",
                             fontWeight: "700",
@@ -1531,11 +1608,27 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
                           }}
                         >
                           {group.title}
+                          {romanizedTitle ? (
+                            <span
+                              style={{
+                                color: "#e4e4e7",
+                                fontSize: "12px",
+                                fontWeight: "500",
+                              }}
+                            >
+                              {` (${romanizedTitle})`}
+                            </span>
+                          ) : null}
                         </span>
                         {(() => {
                           const displayAltTitles = cleanAlternateTitlesList(
                             group.altTitles || [],
                             group.title,
+                          ).filter(
+                            (altTitle) =>
+                              !romanizedTitle ||
+                              normalizeTitleForCompare(altTitle) !==
+                                normalizeTitleForCompare(romanizedTitle),
                           );
                           if (displayAltTitles.length === 0) return null;
                           return (
