@@ -20,6 +20,12 @@ import {
 import { t } from "../../i18n";
 import { useAppStore, getCanonicalSourceSyncType } from "../store";
 import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
+import { countCacheSyncTypes, getDeduplicatedCacheEntries } from "../cacheStats";
+import {
+  getLegacyPrimaryPointerUpdates,
+  isLyricsCachePointer,
+  resolveLyricsCachePointer,
+} from "../lyricsCachePointer";
 
 const YouTubeIcon = ({ size = 16 }: { size?: number }) => (
   <svg
@@ -640,6 +646,16 @@ function normalizeCacheGroups(
   activeContext?: { videoId?: string | null; songKey?: string | null },
 ) {
   const grouped = new Map();
+  const primaryPointerBySourceKey = new Map<string, { sourceId: string; sizeBytes: number }>();
+
+  for (const [genericKey, value] of Object.entries(items)) {
+    if (!isLyricsCachePointer(value)) continue;
+    if (!resolveLyricsCachePointer(genericKey, value, items)) continue;
+    primaryPointerBySourceKey.set(value.sourceKey, {
+      sourceId: value.sourceId,
+      sizeBytes: estimateEntryBytes(value),
+    });
+  }
 
   const currentStoreSong = useAppStore.getState().songInfo;
   const storeSongKey = currentStoreSong
@@ -649,10 +665,12 @@ function normalizeCacheGroups(
 
   Object.entries(items).forEach(([key, value]: [string, any]) => {
     if (value?.missing === true) return;
+    if (isLyricsCachePointer(value)) return;
     const parsed = parseCacheKey(key);
     if (!parsed) return;
 
-    const sizeBytes = estimateEntryBytes(value);
+    const primaryPointer = primaryPointerBySourceKey.get(key);
+    const sizeBytes = estimateEntryBytes(value) + (primaryPointer?.sizeBytes || 0);
     const lyrics = Array.isArray(value?.lyrics) ? value.lyrics : [];
     const romanizedLyrics = Array.isArray(value?.romanizedLyrics)
       ? value.romanizedLyrics
@@ -690,9 +708,13 @@ function normalizeCacheGroups(
       translatedCount,
       romanizedLyrics,
       translatedLyrics,
+      isPrimaryCache: Boolean(primaryPointer),
+      primaryPointerBytes: primaryPointer?.sizeBytes || 0,
       value,
       sourceLabel:
-        parsed.type === "primary-cache"
+        primaryPointer
+          ? `${t("cacheEditor_primaryCache", undefined, "Primary Cache")} (${getSourceLabel(primaryPointer.sourceId)})`
+          : parsed.type === "primary-cache"
           ? resolvedSourceId
             ? `${t("cacheEditor_primaryCache", undefined, "Primary Cache")} (${getSourceLabel(resolvedSourceId)})`
             : t("cacheEditor_primaryCache", undefined, "Primary Cache")
@@ -821,6 +843,7 @@ function normalizeCacheGroups(
         } else {
           const existing = entryMap.get(dedupKey);
           const score = (e: any) =>
+            (e.isPrimaryCache ? 1_000_000 : 0) +
             (e.romanizedCount > 0 ? 1000 : 0) +
             (e.translatedCount > 0 ? 1000 : 0) +
             ((e.lineCount || 0) * 10) +
@@ -835,6 +858,7 @@ function normalizeCacheGroups(
             );
             entryMap.set(dedupKey, {
               ...entry,
+              isPrimaryCache: Boolean(existing.isPrimaryCache || entry.isPrimaryCache),
               aliasKeys,
               sizeBytes: existing.sizeBytes + entry.sizeBytes,
             });
@@ -842,6 +866,7 @@ function normalizeCacheGroups(
             existing.aliasKeys = Array.from(
               new Set([...(existing.aliasKeys || []), entry.key]),
             );
+            existing.isPrimaryCache = Boolean(existing.isPrimaryCache || entry.isPrimaryCache);
             existing.sizeBytes += entry.sizeBytes;
           }
         }
@@ -886,6 +911,9 @@ function normalizeCacheGroups(
           0,
         ),
         entries: deduplicatedEntries.sort((a: any, b: any) => {
+          if (a.isPrimaryCache !== b.isPrimaryCache) {
+            return a.isPrimaryCache ? -1 : 1;
+          }
           const priority: Record<string, number> = {
             "primary-cache": 0,
             "source-cache": 1,
@@ -919,30 +947,24 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
 
   const statsSummary = useMemo(() => {
     let totalBytes = 0;
-    const syncCounts: Record<string, number> = {
-      syllable: 0,
-      word: 0,
-      line: 0,
-      unsynced: 0,
-    };
+    const entries = (groups as any[]).flatMap((group) => group.entries || []);
+    const cacheItems = Object.fromEntries(
+      entries
+        .filter((entry: any) => entry?.key && entry?.value)
+        .map((entry: any) => [entry.key, entry.value]),
+    );
 
     for (const group of groups as any[]) {
       totalBytes += group.totalBytes || 0;
-      for (const entry of group.entries || []) {
-        const syncType =
-          entry.syncType || detectSyncType(entry.value, entry.key);
-        if (syncType in syncCounts) {
-          syncCounts[syncType]++;
-        } else {
-          syncCounts.unsynced++;
-        }
-      }
     }
 
     return {
       songCount: groups.length,
       totalBytes,
-      syncCounts,
+      syncCounts: countCacheSyncTypes(
+        getDeduplicatedCacheEntries(cacheItems),
+        detectSyncType,
+      ),
     };
   }, [groups]);
 
@@ -973,7 +995,25 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         activeTabSongKey = `${currentStoreSong.artist}_${currentStoreSong.title}`;
       }
 
-      const items = await chrome.storage.local.get(null);
+      let items = await chrome.storage.local.get(null);
+      const pointerUpdates = getLegacyPrimaryPointerUpdates(items);
+      const stalePointerKeys = Object.entries(items)
+        .filter(
+          ([key, value]) =>
+            isLyricsCachePointer(value) &&
+            !resolveLyricsCachePointer(key, value, items),
+        )
+        .map(([key]) => key);
+
+      if (Object.keys(pointerUpdates).length > 0) {
+        await chrome.storage.local.set(pointerUpdates);
+        items = { ...items, ...pointerUpdates };
+      }
+      if (stalePointerKeys.length > 0) {
+        await chrome.storage.local.remove(stalePointerKeys);
+        for (const key of stalePointerKeys) delete items[key];
+      }
+
       const normalized = normalizeCacheGroups(items, {
         videoId: activeTabVideoId,
         songKey: activeTabSongKey,
@@ -1286,7 +1326,22 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
       keysToRemove.push(...entryOrKey.aliasKeys);
     }
 
-    await chrome.storage.local.remove(keysToRemove);
+    const sourceKeysToRemove = [key, ...(entryOrKey?.aliasKeys || [])].filter(
+      (candidateKey) => candidateKey.includes("__"),
+    );
+    if (sourceKeysToRemove.length > 0) {
+      const allStorage = await chrome.storage.local.get(null);
+      for (const [candidateKey, candidateValue] of Object.entries(allStorage)) {
+        if (
+          isLyricsCachePointer(candidateValue) &&
+          sourceKeysToRemove.includes(candidateValue.sourceKey)
+        ) {
+          keysToRemove.push(candidateKey);
+        }
+      }
+    }
+
+    await chrome.storage.local.remove(Array.from(new Set(keysToRemove)));
 
     const entry = typeof entryOrKey === "object" ? entryOrKey : null;
     const vid =

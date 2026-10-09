@@ -32,6 +32,11 @@ import {
 } from "../modules/sync/autoSyncDetector";
 import { detectNonCaptionIntroOffset } from "../modules/sync/sponsorBlockSync";
 import { normalizeLyricsPipeline } from "../modules/lyrics/lyricsNormalizer";
+import {
+  createLyricsCachePointer,
+  isLyricsCachePointer,
+  resolveLyricsCachePointer,
+} from "./lyricsCachePointer";
 
 const SHADOW_HOST_STYLES = `
   :host {
@@ -2281,7 +2286,25 @@ async function resolveCaptionTrack(
       const keysToLookup = [sourceKey, genericKey].filter(Boolean) as string[];
       if (keysToLookup.length > 0) {
         const stored: any = await chrome.storage.local.get(keysToLookup);
-        const entry: any = stored?.[sourceKey] || stored?.[genericKey];
+        let entry: any = stored?.[sourceKey] || stored?.[genericKey];
+        if (isLyricsCachePointer(entry) && genericKey) {
+          let pointerItems = stored;
+          if (!pointerItems?.[entry.sourceKey]) {
+            pointerItems = {
+              ...stored,
+              ...(await chrome.storage.local.get([entry.sourceKey])),
+            };
+          }
+          const resolvedEntry = resolveLyricsCachePointer(
+            genericKey,
+            entry,
+            pointerItems,
+          );
+          if (!resolvedEntry) {
+            await chrome.storage.local.remove([genericKey]);
+          }
+          entry = resolvedEntry;
+        }
         if (entry && entry.tracks && typeof entry.tracks === "object") {
           const { vssId, kind, lang, label } = getTrackSignatureComponents(criteria);
           let cachedTrack: any = null;
@@ -5434,7 +5457,11 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
       [sourceKey]: entry,
     };
     if (!skipGeneric) {
-      updates[genericKey] = entry;
+      updates[genericKey] = createLyricsCachePointer(
+        genericKey,
+        sourceId,
+        entry,
+      );
     }
     await chrome.storage.local.set(updates);
   } catch (err) {
@@ -7882,7 +7909,13 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
         const stored: any = await chrome.storage.local.get([sourceKey]);
         const entry = stored?.[sourceKey];
         if (entry && genericKey) {
-          await chrome.storage.local.set({ [genericKey]: entry });
+          await chrome.storage.local.set({
+            [genericKey]: createLyricsCachePointer(
+              genericKey,
+              sourceId,
+              entry,
+            ),
+          });
           log("[Lyrical] Synced primary cache for user-selected source:", sourceId);
         }
       } catch (err) {

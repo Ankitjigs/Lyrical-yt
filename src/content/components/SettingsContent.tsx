@@ -53,44 +53,12 @@ import {
 } from "../../themes/customThemeUtils";
 import { t } from "../../i18n";
 import { SyncTypeIcon } from "../../components/ui/SyncTypeIcon";
-
-function extractVideoId(val: any): string | null {
-  if (!val) return null;
-  if (typeof val.videoId === "string" && val.videoId.trim()) {
-    return val.videoId.trim();
-  }
-  if (typeof val.tracks === "object" && val.tracks) {
-    for (const tr of Object.values(val.tracks)) {
-      if (typeof (tr as any)?.videoId === "string" && (tr as any).videoId.trim()) {
-        return (tr as any).videoId.trim();
-      }
-    }
-  }
-  if (typeof val === "object") {
-    for (const v of Object.values(val)) {
-      if (typeof (v as any)?.videoId === "string" && (v as any).videoId.trim()) {
-        return (v as any).videoId.trim();
-      }
-    }
-  }
-  return null;
-}
-
-function getCacheSongId(key) {
-  if (key.startsWith("lyrics_versions_")) {
-    return key.slice("lyrics_versions_".length);
-  }
-
-  if (key.startsWith("lyrics_")) {
-    const rest = key.slice("lyrics_".length);
-    const sourceSeparatorIndex = rest.lastIndexOf("__");
-    return sourceSeparatorIndex === -1
-      ? rest
-      : rest.slice(0, sourceSeparatorIndex);
-  }
-
-  return null;
-}
+import CacheStatsTooltip from "./CacheStatsTooltip";
+import {
+  countCacheSyncTypes,
+  countLyricsCacheSongs,
+  getDeduplicatedCacheEntries,
+} from "../cacheStats";
 
 const SYNC_CATEGORIES = [
   { key: "syllable", label: "Syllable", color: "#fcd34d" },
@@ -300,10 +268,14 @@ const SettingsContent = () => {
 
   const [cacheInfo, setCacheInfo] = useState<{
     bytes: number;
+    lyricsBytes: number;
+    themeBytes: number;
     songCount: number;
     syncCounts: Record<string, number>;
   }>({
     bytes: 0,
+    lyricsBytes: 0,
+    themeBytes: 0,
     songCount: 0,
     syncCounts: { syllable: 0, word: 0, line: 0, unsynced: 0 },
   });
@@ -383,41 +355,40 @@ const SettingsContent = () => {
           key.startsWith("lyrics_") || key.startsWith("lyrics_versions_"),
       );
 
-      const uniqueSongKeys = new Set<string>();
-      const syncCounts: Record<string, number> = {
-        syllable: 0,
-        word: 0,
-        line: 0,
-        unsynced: 0,
-      };
-      let totalBytes = 0;
+      let lyricsBytes = 0;
 
       for (const key of lyricsKeys) {
         const item = items[key] as any;
         if (item?.missing === true) continue;
 
-        if (typeof item === "string") totalBytes += item.length;
+        if (typeof item === "string") lyricsBytes += item.length;
         else {
           try {
-            totalBytes += JSON.stringify(item).length;
+            lyricsBytes += JSON.stringify(item).length;
+          } catch {}
+        }
+      }
+
+      const syncCounts = countCacheSyncTypes(
+        getDeduplicatedCacheEntries(items),
+        detectSyncType,
+      );
+      chrome.storage.sync.get([CUSTOM_THEMES_STORAGE_KEY], (themeItems: any) => {
+        const themeRecords = themeItems?.[CUSTOM_THEMES_STORAGE_KEY];
+        let themeBytes = 0;
+        if (Array.isArray(themeRecords) && themeRecords.length > 0) {
+          try {
+            themeBytes = JSON.stringify(themeRecords).length;
           } catch {}
         }
 
-        const songId = getCacheSongId(key);
-        if (!songId) continue;
-        const vid = extractVideoId(item);
-        const groupKey = vid ? `vid_${vid}` : `song_${songId}`;
-        uniqueSongKeys.add(groupKey);
-
-        const st = detectSyncType(item, key);
-        if (st in syncCounts) syncCounts[st]++;
-        else syncCounts.unsynced++;
-      }
-
-      setCacheInfo({
-        bytes: totalBytes,
-        songCount: uniqueSongKeys.size,
-        syncCounts,
+        setCacheInfo({
+          bytes: lyricsBytes + themeBytes,
+          lyricsBytes,
+          themeBytes,
+          songCount: countLyricsCacheSongs(items),
+          syncCounts,
+        });
       });
     });
   }, []);
@@ -1083,6 +1054,7 @@ const SettingsContent = () => {
                   <div
                     style={{
                       position: "relative",
+                      zIndex: 1,
                       display: "flex",
                       flexDirection: "column",
                       gap: "2px",
@@ -1134,7 +1106,7 @@ const SettingsContent = () => {
                         height: "6px",
                         borderRadius: "999px",
                         background: "rgba(255, 255, 255, 0.06)",
-                        overflow: "hidden",
+                        overflow: "visible",
                         width: "100%",
                         marginTop: "12px",
                       }}
@@ -1158,22 +1130,46 @@ const SettingsContent = () => {
                           );
                         }
 
-                        return SYNC_CATEGORIES.map((cat) => {
+                        const visibleCategories = SYNC_CATEGORIES.filter(
+                          (category) => (cacheInfo.syncCounts[category.key] || 0) > 0,
+                        );
+
+                        return visibleCategories.map((cat, index) => {
                           const count = cacheInfo.syncCounts[cat.key] || 0;
-                          if (count === 0) return null;
                           const pct = Math.round((count / totalSyncCount) * 100);
                           return (
-                            <div
+                            <CacheStatsTooltip
                               key={cat.key}
-                              title={`${cat.label}: ${count} (${pct}%)`}
-                              style={{
-                                flexGrow: count,
-                                minWidth: "6px",
-                                height: "100%",
-                                background: cat.color,
-                                borderRadius: "1px",
-                              }}
-                            />
+                              id={`cache-sync-${cat.key}-tooltip`}
+                              ariaLabel={`${cat.label}: ${count} (${pct}%)`}
+                              icon={<SyncTypeIcon type={cat.key} size={15} />}
+                              accentColor={cat.color}
+                              size="comfortable"
+                              align={
+                                index === 0
+                                  ? "start"
+                                  : index === visibleCategories.length - 1
+                                    ? "end"
+                                    : "center"
+                              }
+                              style={{ flexGrow: count, minWidth: "6px", height: "100%" }}
+                              content={(
+                                <>
+                                  <span>{cat.label}: {count}</span>
+                                  <span>{pct}%</span>
+                                </>
+                              )}
+                            >
+                              <span
+                                style={{
+                                  display: "block",
+                                  width: "100%",
+                                  height: "100%",
+                                  background: cat.color,
+                                  borderRadius: "2px",
+                                }}
+                              />
+                            </CacheStatsTooltip>
                           );
                         });
                       })()}
@@ -1184,6 +1180,7 @@ const SettingsContent = () => {
                   <div
                     style={{
                       position: "relative",
+                      zIndex: 1,
                       display: "flex",
                       flexDirection: "column",
                       gap: "2px",
@@ -1233,30 +1230,72 @@ const SettingsContent = () => {
                     </span>
 
                     {/* Storage Bar */}
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "2px",
-                        height: "6px",
-                        borderRadius: "999px",
-                        background: "rgba(255, 255, 255, 0.06)",
-                        overflow: "hidden",
-                        width: "100%",
-                        marginTop: "12px",
-                      }}
+                    <CacheStatsTooltip
+                      id="cache-storage-tooltip"
+                      ariaLabel={`Storage used: ${formatBytes(cacheInfo.bytes)}. Lyrics: ${formatBytes(cacheInfo.lyricsBytes)}${cacheInfo.themeBytes > 0 ? `, Themes: ${formatBytes(cacheInfo.themeBytes)}` : ""}`}
+                      icon={<Database size={14} />}
+                      style={{ display: "flex", width: "100%", height: "6px", marginTop: "12px" }}
+                      tooltipStyle={{ alignItems: "flex-start", gap: "10px", minWidth: 165 }}
+                      contentStyle={{ display: "grid", gap: "7px", width: "100%" }}
+                      content={(
+                        <>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: "16px" }}>
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                              <span style={{ width: 8, height: 8, borderRadius: 3, background: "var(--lyrical-text-muted, #94a3b8)" }} />
+                              {t("settings_cache_label", undefined, "Lyrics")}
+                            </span>
+                            <strong>{formatBytes(cacheInfo.lyricsBytes)}</strong>
+                          </div>
+                          {cacheInfo.themeBytes > 0 && (
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: "16px" }}>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+                                <span style={{ width: 8, height: 8, borderRadius: 3, background: "#93c5fd" }} />
+                                Themes
+                              </span>
+                              <strong>{formatBytes(cacheInfo.themeBytes)}</strong>
+                            </div>
+                          )}
+                        </>
+                      )}
                     >
-                      <div
+                      <span
                         style={{
-                          width: `${Math.min(100, Math.max(8, Math.round((cacheInfo.bytes / (5 * 1024 * 1024)) * 100)))}%`,
+                          display: "flex",
+                          width: "100%",
                           height: "100%",
-                          background: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.4))",
                           borderRadius: "999px",
-                          transition: "width 0.3s ease",
+                          background: "rgba(255, 255, 255, 0.06)",
+                          overflow: "hidden",
                         }}
-                        title={`Storage used: ${formatBytes(cacheInfo.bytes)}`}
-                      />
-                    </div>
+                      >
+                        <span
+                          style={{
+                            display: "flex",
+                            width: `${Math.min(100, Math.max(8, Math.round((cacheInfo.bytes / (5 * 1024 * 1024)) * 100)))}%`,
+                            height: "100%",
+                            overflow: "hidden",
+                            borderRadius: "999px",
+                          }}
+                        >
+                          <span
+                            style={{
+                              flexGrow: cacheInfo.lyricsBytes || 1,
+                              height: "100%",
+                              background: "var(--lyrical-text-muted, rgba(255, 255, 255, 0.4))",
+                            }}
+                          />
+                          {cacheInfo.themeBytes > 0 && (
+                            <span
+                              style={{
+                                flexGrow: cacheInfo.themeBytes,
+                                height: "100%",
+                                background: "#93c5fd",
+                              }}
+                            />
+                          )}
+                        </span>
+                      </span>
+                    </CacheStatsTooltip>
                   </div>
                 </div>
 
