@@ -2192,7 +2192,7 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                     <div
                       style={{
                         marginTop: "5px",
-                        fontSize: "11px",
+                        fontSize: "12px",
                         fontWeight: "550",
                         lineHeight: "1.3",
                         color: "var(--lyrical-romanized, #86efac)",
@@ -2218,9 +2218,9 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
                     <div
                       style={{
                         marginTop: "3px",
-                        fontSize: "11px",
-                        fontWeight: "500",
-                        lineHeight: "1.35",
+                        fontSize: "12px",
+                        fontWeight: "550",
+                        lineHeight: "1.4",
                         color:
                           "var(--lyrical-translated, rgba(255, 255, 255, 0.65))",
                         whiteSpace: "nowrap",

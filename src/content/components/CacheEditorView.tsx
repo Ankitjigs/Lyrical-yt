@@ -24,6 +24,8 @@ import { countCacheSyncTypes, getDeduplicatedCacheEntries } from "../cacheStats"
 import {
   getLegacyPrimaryPointerUpdates,
   isLyricsCachePointer,
+  isLyricsVideoPointer,
+  removeLyricsVideoPointerSources,
   resolveLyricsCachePointer,
 } from "../lyricsCachePointer";
 
@@ -665,7 +667,8 @@ function normalizeCacheGroups(
 
   Object.entries(items).forEach(([key, value]: [string, any]) => {
     if (value?.missing === true) return;
-    if (isLyricsCachePointer(value)) return;
+    // Video lookup indexes are metadata only, not lyric entries/cards.
+    if (key.startsWith("lyrics_vid_") || isLyricsCachePointer(value) || isLyricsVideoPointer(value)) return;
     const parsed = parseCacheKey(key);
     if (!parsed) return;
 
@@ -1005,6 +1008,45 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         )
         .map(([key]) => key);
 
+      const videoPointerUpdates: Record<string, any> = {};
+      const staleVideoPointerKeys: string[] = [];
+      for (const [key, value] of Object.entries(items)) {
+        if (key.startsWith("lyrics_vid_") && !isLyricsVideoPointer(value)) {
+          staleVideoPointerKeys.push(key);
+          continue;
+        }
+        if (!isLyricsVideoPointer(value)) continue;
+        const validSources = Object.fromEntries(
+          Object.entries(value.sources).filter(([sourceId, sourceKey]) => {
+            const sourceEntry: any = items[sourceKey as string];
+            return (
+              Array.isArray(sourceEntry?.lyrics) &&
+              sourceEntry.lyrics.length > 0 &&
+              (!sourceEntry.source || sourceEntry.source === sourceId) &&
+              (!sourceEntry.sourceId || sourceEntry.sourceId === sourceId) &&
+              sourceEntry.videoId === value.videoId
+            );
+          }),
+        );
+        const removedKeys = new Set(
+          Object.values(value.sources).filter((sourceKey) => !items[sourceKey as string]),
+        );
+        const cleaned = removeLyricsVideoPointerSources(value, removedKeys);
+        if (!cleaned || Object.keys(validSources).length === 0) {
+          staleVideoPointerKeys.push(key);
+          continue;
+        }
+        cleaned.sources = validSources;
+        if (!cleaned.sources[cleaned.primarySourceId]) {
+          const fallbackId = Object.keys(cleaned.sources)[0];
+          cleaned.primarySourceId = fallbackId;
+          cleaned.primarySourceKey = cleaned.sources[fallbackId];
+        }
+        if (JSON.stringify(cleaned) !== JSON.stringify(value)) {
+          videoPointerUpdates[key] = cleaned;
+        }
+      }
+
       if (Object.keys(pointerUpdates).length > 0) {
         await chrome.storage.local.set(pointerUpdates);
         items = { ...items, ...pointerUpdates };
@@ -1012,6 +1054,14 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
       if (stalePointerKeys.length > 0) {
         await chrome.storage.local.remove(stalePointerKeys);
         for (const key of stalePointerKeys) delete items[key];
+      }
+      if (staleVideoPointerKeys.length > 0) {
+        await chrome.storage.local.remove(staleVideoPointerKeys);
+        for (const key of staleVideoPointerKeys) delete items[key];
+      }
+      if (Object.keys(videoPointerUpdates).length > 0) {
+        await chrome.storage.local.set(videoPointerUpdates);
+        items = { ...items, ...videoPointerUpdates };
       }
 
       const normalized = normalizeCacheGroups(items, {
@@ -1331,6 +1381,9 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
     );
     if (sourceKeysToRemove.length > 0) {
       const allStorage = await chrome.storage.local.get(null);
+      const removedSourceKeys = new Set(sourceKeysToRemove);
+      const videoIndexUpdates: Record<string, any> = {};
+      const videoIndexRemovals: string[] = [];
       for (const [candidateKey, candidateValue] of Object.entries(allStorage)) {
         if (
           isLyricsCachePointer(candidateValue) &&
@@ -1338,7 +1391,13 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
         ) {
           keysToRemove.push(candidateKey);
         }
+        if (!isLyricsVideoPointer(candidateValue)) continue;
+        const updated = removeLyricsVideoPointerSources(candidateValue, removedSourceKeys);
+        if (!updated) videoIndexRemovals.push(candidateKey);
+        else videoIndexUpdates[candidateKey] = updated;
       }
+      if (Object.keys(videoIndexUpdates).length) await chrome.storage.local.set(videoIndexUpdates);
+      if (videoIndexRemovals.length) keysToRemove.push(...videoIndexRemovals);
     }
 
     await chrome.storage.local.remove(Array.from(new Set(keysToRemove)));
@@ -1368,6 +1427,17 @@ const CacheEditorView = ({ isOpen, onClose, onCacheChange }) => {
     const keysToRemove = Object.keys(allStorage).filter((key) =>
       targetIds.some((id) => key.includes(id)),
     );
+    const removedKeys = new Set(keysToRemove);
+    const videoIndexUpdates: Record<string, any> = {};
+    const videoIndexRemovals: string[] = [];
+    for (const [key, value] of Object.entries(allStorage)) {
+      if (!isLyricsVideoPointer(value)) continue;
+      const updated = removeLyricsVideoPointerSources(value, removedKeys);
+      if (!updated) videoIndexRemovals.push(key);
+      else if (JSON.stringify(updated) !== JSON.stringify(value)) videoIndexUpdates[key] = updated;
+    }
+    keysToRemove.push(...videoIndexRemovals);
+    if (Object.keys(videoIndexUpdates).length) await chrome.storage.local.set(videoIndexUpdates);
     await chrome.storage.local.remove(
       keysToRemove.length > 0
         ? keysToRemove

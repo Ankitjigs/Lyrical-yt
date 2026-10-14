@@ -80,3 +80,105 @@ export function getLegacyPrimaryPointerUpdates(
 
   return updates;
 }
+
+export const LYRICS_VIDEO_POINTER_VERSION = 1;
+
+export interface LyricsVideoCachePointer {
+  _lyricalVideoPointer: number;
+  videoId: string;
+  artist?: string;
+  title?: string;
+  primarySourceId: string;
+  primarySourceKey: string;
+  sources: Record<string, string>; // sourceId -> sourceKey
+  timestamp?: number;
+}
+
+export function isLyricsVideoPointer(
+  value: any,
+  expectedVideoId?: string,
+): value is LyricsVideoCachePointer {
+  if (!(
+    value?._lyricalVideoPointer === LYRICS_VIDEO_POINTER_VERSION &&
+    typeof value.videoId === "string" &&
+    value.videoId.length > 0 &&
+    typeof value.primarySourceId === "string" &&
+    value.primarySourceId.length > 0 &&
+    typeof value.primarySourceKey === "string" &&
+    value.primarySourceKey.length > 0 &&
+    typeof value.sources === "object" &&
+    value.sources !== null
+  )) return false;
+
+  if (expectedVideoId && value.videoId !== expectedVideoId) return false;
+  if (!Object.entries(value.sources).every(([id, key]) =>
+    typeof id === "string" && id.length > 0 &&
+    typeof key === "string" && key.endsWith(`__${id}`)
+  )) return false;
+
+  return value.sources[value.primarySourceId] === value.primarySourceKey;
+}
+
+export function createLyricsVideoPointer(
+  videoId: string,
+  sourceId: string,
+  sourceKey: string,
+  existingPointer?: any,
+  meta?: { artist?: string; title?: string },
+  options: { makePrimary?: boolean } = {},
+): LyricsVideoCachePointer {
+  const validExisting = isLyricsVideoPointer(existingPointer, videoId)
+    ? existingPointer
+    : null;
+  const sources = {
+    ...(validExisting?.sources || {}),
+    [sourceId]: sourceKey,
+  };
+  const keepExistingPrimary =
+    !options.makePrimary &&
+    validExisting &&
+    Boolean(sources[validExisting.primarySourceId]);
+  const primarySourceId = keepExistingPrimary
+    ? validExisting.primarySourceId
+    : sourceId;
+
+  return {
+    _lyricalVideoPointer: LYRICS_VIDEO_POINTER_VERSION,
+    videoId,
+    artist: meta?.artist || validExisting?.artist || "",
+    title: meta?.title || validExisting?.title || "",
+    primarySourceId,
+    primarySourceKey: sources[primarySourceId],
+    sources,
+    timestamp: Date.now(),
+  };
+}
+
+export function removeLyricsVideoPointerSources(
+  pointer: any,
+  removedSourceKeys: Set<string>,
+): LyricsVideoCachePointer | null {
+  if (!isLyricsVideoPointer(pointer)) return null;
+
+  const sources = Object.fromEntries(
+    Object.entries(pointer.sources).filter(([, sourceKey]) =>
+      !removedSourceKeys.has(sourceKey),
+    ),
+  );
+  const remainingSourceIds = Object.keys(sources);
+  if (remainingSourceIds.length === 0) return null;
+
+  const changed = remainingSourceIds.length !== Object.keys(pointer.sources).length;
+  const primarySourceId = sources[pointer.primarySourceId]
+    ? pointer.primarySourceId
+    : remainingSourceIds[0];
+  return {
+    ...pointer,
+    primarySourceId,
+    primarySourceKey: sources[primarySourceId],
+    sources,
+    timestamp: changed || primarySourceId !== pointer.primarySourceId
+      ? Date.now()
+      : pointer.timestamp,
+  };
+}

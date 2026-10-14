@@ -36,8 +36,9 @@ function getVideoId(value: any, seen = new Set<object>()): string | null {
 
 function getEntryType(key: string, value: any): CacheEntry["type"] | null {
   if (key.startsWith("lyrics_versions_")) return "versions";
+  if (key.startsWith("lyrics_vid_")) return null;
   if (!key.startsWith("lyrics_")) return null;
-  if (value?._lyricalCachePointer) return null;
+  if (value?._lyricalCachePointer || value?._lyricalVideoPointer) return null;
 
   const rest = key.slice("lyrics_".length);
   const sourceIndex = rest.lastIndexOf("__");

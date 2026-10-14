@@ -307,7 +307,7 @@
 
 /* Translated Sub-line */
 :host .lyrical-karaoke-translated {
-  font-size: clamp(14px, 1.5vw, 22px);
+  font-size: clamp(15px, 1.8vw, 24px);
   font-weight: 550;
   line-height: 1.35;
   margin-top: 5px;
@@ -425,7 +425,7 @@
   font-size: clamp(11px, 1.2vw, 18px);
 }
 :host [data-karaoke-font="small"] .lyrical-karaoke-translated {
-  font-size: clamp(10px, 1.1vw, 16px);
+  font-size: clamp(11px, 1.2vw, 18px);
 }
 
 /* medium is the default — no override needed */
@@ -437,7 +437,7 @@
   font-size: clamp(18px, 2.2vw, 32px);
 }
 :host [data-karaoke-font="large"] .lyrical-karaoke-translated {
-  font-size: clamp(17px, 2vw, 28px);
+  font-size: clamp(18px, 2.2vw, 32px);
 }
 
 :host [data-karaoke-font="xlarge"] .lyrical-karaoke-original {
@@ -447,5 +447,5 @@
   font-size: clamp(22px, 2.8vw, 40px);
 }
 :host [data-karaoke-font="xlarge"] .lyrical-karaoke-translated {
-  font-size: clamp(20px, 2.4vw, 34px);
+  font-size: clamp(22px, 2.8vw, 40px);
 }

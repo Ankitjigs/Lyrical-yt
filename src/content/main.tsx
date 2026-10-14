@@ -36,6 +36,8 @@ import {
   createLyricsCachePointer,
   isLyricsCachePointer,
   resolveLyricsCachePointer,
+  createLyricsVideoPointer,
+  isLyricsVideoPointer,
 } from "./lyricsCachePointer";
 
 const SHADOW_HOST_STYLES = `
@@ -818,6 +820,7 @@ let mainWorldCaptionTracksVideoId = null;
 let currentFetchVideoId = null;
 let captionSourceReachedForCurrentFetch = false;
 let currentFetchWinningSourceId = null;
+let pendingManualPrimarySourceId: string | null = null;
 let timedtextRateLimitedUntil = 0;
 let timedtextDirectBlockedUntil = 0;
 
@@ -5130,6 +5133,67 @@ async function persistLyricsVersions() {
   }
 }
 
+function getCandidateSongInfos(songInfo: any): any[] {
+  if (!songInfo) return [];
+
+  const rawArtist = (songInfo.artist || "").trim();
+  const rawOriginalArtist = (songInfo.originalArtist || "").trim();
+  const rawTitle = (songInfo.title || "").trim();
+  const rawOriginalTitle = (songInfo.originalTitle || "").trim();
+
+  const titles = new Set<string>();
+  if (rawTitle) titles.add(rawTitle);
+  if (rawOriginalTitle) titles.add(rawOriginalTitle);
+
+  const cleanTitle = rawTitle
+    .replace(/\s*[\(\[\{]?(Official\s+)?(Music\s+Video|Video|Audio|MV|Lyric\s+Video|Visualizer)[\)\]\}]?\s*$/i, "")
+    .replace(/\s*[\(\[\{]?(Full\s+Song|Full\s+Version|Teaser)[\)\]\}]?\s*$/i, "")
+    .trim();
+  if (cleanTitle) titles.add(cleanTitle);
+
+  const artists = new Set<string>();
+  if (rawArtist) artists.add(rawArtist);
+  if (rawOriginalArtist) artists.add(rawOriginalArtist);
+
+  const stripChannelNoise = (str: string) =>
+    str
+      .replace(/\s*-\s*Topic$/i, "")
+      .replace(/(?<=[a-zA-Z0-9])VEVO$/i, "")
+      .replace(/\s*and\s+.*Official.*Channel/gi, "")
+      .replace(/\s*Official\s*(YouTube\s*)?Channel/gi, "")
+      .replace(/\s*-\s*$/g, "")
+      .replace(/,\s*&\s*/g, ", ")
+      .trim();
+
+  for (const a of [rawArtist, rawOriginalArtist]) {
+    if (!a) continue;
+    const stripped = stripChannelNoise(a);
+    if (stripped) artists.add(stripped);
+
+    if (stripped.includes(" - ")) {
+      const parts = stripped.split(" - ").map((p) => p.trim()).filter(Boolean);
+      for (const part of parts) {
+        if (part) artists.add(part);
+      }
+    }
+  }
+
+  const candidates: any[] = [];
+  for (const t of titles) {
+    for (const a of artists) {
+      candidates.push({
+        ...songInfo,
+        artist: a,
+        title: t,
+        originalArtist: a,
+        originalTitle: t,
+      });
+    }
+  }
+
+  return candidates.length > 0 ? candidates : [songInfo];
+}
+
 function getLyricsCacheKey(songInfo, sourceId = null) {
   const artist = songInfo?.originalArtist || songInfo?.artist;
   const title = songInfo?.originalTitle || songInfo?.title;
@@ -5168,6 +5232,54 @@ function getCacheLookupIdsForSource(sourceId: string): string[] {
       return ["legato-synced"];
     default:
       return [sourceId];
+  }
+}
+
+function isFreshCachedLyricsEntry(entry: any, maxAgeMs: number): boolean {
+  const timestamp = Number(entry?.timestamp);
+  if (
+    !Array.isArray(entry?.lyrics) ||
+    entry.lyrics.length === 0 ||
+    !Number.isFinite(timestamp) ||
+    timestamp <= 0
+  ) return false;
+  const age = Date.now() - timestamp;
+  return age >= 0 && age < maxAgeMs;
+}
+
+const videoCachePointerWriteQueues = new Map<string, Promise<void>>();
+
+async function writeVideoCachePointer(
+  videoId: string,
+  sourceId: string,
+  sourceKey: string,
+  meta?: { artist?: string; title?: string },
+  options: { makePrimary?: boolean } = {},
+) {
+  if (!videoId || !sourceId || !sourceKey || !chrome?.storage?.local?.get || !chrome?.storage?.local?.set) return;
+
+  const previousWrite = videoCachePointerWriteQueues.get(videoId) || Promise.resolve();
+  const write = previousWrite.catch(() => {}).then(async () => {
+    const indexKey = `lyrics_vid_${videoId}`;
+    const result: any = await chrome.storage.local.get(indexKey);
+    const pointer = createLyricsVideoPointer(
+      videoId,
+      sourceId,
+      sourceKey,
+      result?.[indexKey],
+      meta,
+      options,
+    );
+    await chrome.storage.local.set({ [indexKey]: pointer });
+  });
+
+  videoCachePointerWriteQueues.set(videoId, write);
+  try {
+    await write;
+  } finally {
+    if (videoCachePointerWriteQueues.get(videoId) === write) {
+      videoCachePointerWriteQueues.delete(videoId);
+    }
   }
 }
 
@@ -5433,15 +5545,34 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
     extra?.videoId ||
     null;
 
-  const { skipGeneric = false, ...cleanedExtra } = extra || {};
+  const {
+    skipGeneric = false,
+    makePrimary: explicitlyMakePrimary = false,
+    ...cleanedExtra
+  } = extra || {};
+  const makePrimary =
+    explicitlyMakePrimary ||
+    Boolean(
+      pendingManualPrimarySourceId &&
+      (getCacheLookupIdsForSource(pendingManualPrimarySourceId).includes(sourceId) ||
+        (pendingManualPrimarySourceId === "better_lyrics" &&
+          sourceId === "musixmatch-synced")),
+    );
+
+  const resolvedArtist =
+    songInfo?.artist || songInfo?.originalArtist || extra?.artist || null;
+  const resolvedTitle =
+    songInfo?.title || songInfo?.originalTitle || extra?.title || null;
 
   const entry: any = {
     lyrics,
     source: sourceId,
     cacheSchemaVersion: LYRICS_CACHE_SCHEMA_VERSION,
     timestamp: Date.now(),
-    ...(currentVideoId ? { videoId: currentVideoId } : {}),
     ...cleanedExtra,
+    ...(currentVideoId ? { videoId: currentVideoId } : {}),
+    ...(resolvedArtist ? { artist: resolvedArtist } : {}),
+    ...(resolvedTitle ? { title: resolvedTitle } : {}),
   };
 
   if (tracksMap) {
@@ -5457,13 +5588,44 @@ async function persistLyricsCache(songInfo, sourceId, lyrics, extra: any = {}) {
       [sourceKey]: entry,
     };
     if (!skipGeneric) {
-      updates[genericKey] = createLyricsCachePointer(
-        genericKey,
+      const primaryRes: any = await chrome.storage.local.get(genericKey);
+      const existingPrimary = primaryRes?.[genericKey];
+      let shouldSetPrimary = makePrimary || !existingPrimary;
+
+      if (
+        isLyricsCachePointer(existingPrimary) &&
+        existingPrimary.sourceKey === `${genericKey}__${existingPrimary.sourceId}`
+      ) {
+        const pointedRes: any = await chrome.storage.local.get(
+          existingPrimary.sourceKey,
+        );
+        const pointedEntry = pointedRes?.[existingPrimary.sourceKey];
+        // Repair stale pointers, but otherwise preserve the selected primary source.
+        shouldSetPrimary = !Array.isArray(pointedEntry?.lyrics);
+      } else if (Array.isArray(existingPrimary?.lyrics)) {
+        // Convert only byte-for-byte duplicate legacy payloads; never discard a distinct cache.
+        shouldSetPrimary = JSON.stringify(existingPrimary) === JSON.stringify(entry);
+      }
+
+      if (shouldSetPrimary) {
+        updates[genericKey] = createLyricsCachePointer(
+          genericKey,
+          sourceId,
+          entry,
+        );
+      }
+    }
+
+    await chrome.storage.local.set(updates);
+    if (currentVideoId) {
+      await writeVideoCachePointer(
+        currentVideoId,
         sourceId,
-        entry,
+        sourceKey,
+        { artist: resolvedArtist || undefined, title: resolvedTitle || undefined },
+        { makePrimary },
       );
     }
-    await chrome.storage.local.set(updates);
   } catch (err) {
     if (err?.message?.includes("Extension context invalidated")) return;
     warn("[Lyrical Panel] Cache persist failed:", err);
@@ -5714,21 +5876,69 @@ async function tryRestoreCachedLyricsForSource(
   source,
   maxCacheAgeMs,
 ) {
-  const candidateSongInfos = [songInfo];
-  if (
-    songInfo?.originalTitle &&
-    songInfo?.title &&
-    songInfo.originalTitle !== songInfo.title
-  ) {
-    candidateSongInfos.push({
-      ...songInfo,
-      artist: songInfo.artist,
-      title: songInfo.title,
-      originalArtist: songInfo.artist,
-      originalTitle: songInfo.title,
-    });
+  if (typeof chrome === "undefined" || !chrome?.storage?.local?.get)
+    return false;
+
+  const currentVid =
+    songInfo?.videoId ||
+    (typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null);
+
+  // 1. TIER 1: Check videoId index pointer first
+  if (currentVid) {
+    try {
+      const vidKey = `lyrics_vid_${currentVid}`;
+      const vidRes: any = await chrome.storage.local.get(vidKey);
+      const vidPointer = vidRes?.[vidKey];
+      if (isLyricsVideoPointer(vidPointer, currentVid)) {
+        const lookupIds = getCacheLookupIdsForSource(source.id);
+        const indexedKeys = Array.from(
+          new Set(
+            lookupIds
+              .map((id) => vidPointer.sources[id])
+              .filter((key): key is string => typeof key === "string" && !!key),
+          ),
+        );
+        const indexedEntries = indexedKeys.length
+          ? await chrome.storage.local.get(indexedKeys)
+          : {};
+        for (const subId of lookupIds) {
+          const directSourceKey = vidPointer.sources[subId];
+          if (directSourceKey) {
+            const entry = indexedEntries?.[directSourceKey] as any;
+            if (
+              isFreshCachedLyricsEntry(entry, maxCacheAgeMs) &&
+              (!entry.source || entry.source === subId) &&
+              (!entry.sourceId || entry.sourceId === subId) &&
+              entry.videoId === currentVid
+            ) {
+              const cacheAge = Date.now() - entry.timestamp;
+              if (isFreshCachedLyricsEntry(entry, maxCacheAgeMs)) {
+                log(
+                  "[Lyrical Panel] Using video-indexed cache for",
+                  source.id,
+                  "(age:",
+                  Math.floor(cacheAge / 1000 / 60),
+                  "minutes)",
+                );
+                if (
+                  activeLyricsFetchVideoId &&
+                  activeLyricsFetchVideoId !== currentVid
+                ) return false;
+                return restoreLyricsFromCacheEntry(entry, source.id, source.label);
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      warn("[Lyrical Panel] Error checking video cache index:", e);
+    }
   }
 
+  // 2. TIER 2: Fallback to candidate keys (handles all artist aliases & clean title variants)
+  const candidateSongInfos = getCandidateSongInfos(songInfo);
   const sourceCacheKeys = Array.from(
     new Set(
       candidateSongInfos.flatMap((info) =>
@@ -5739,16 +5949,17 @@ async function tryRestoreCachedLyricsForSource(
     ),
   );
   if (sourceCacheKeys.length === 0) return false;
-  if (typeof chrome === "undefined" || !chrome?.storage?.local?.get)
-    return false;
 
   const cachedEntries = await chrome.storage.local.get(sourceCacheKeys);
   for (const cacheKeyForSource of sourceCacheKeys) {
     const entry = cachedEntries[cacheKeyForSource] as any;
-    if (!entry?.lyrics?.length) continue;
+    if (!isFreshCachedLyricsEntry(entry, maxCacheAgeMs)) continue;
 
     const cacheAge = Date.now() - entry.timestamp;
-    if (cacheAge >= maxCacheAgeMs) continue;
+    if (
+      activeLyricsFetchVideoId &&
+      activeLyricsFetchVideoId !== currentVid
+    ) return false;
 
     log(
       "[Lyrical Panel] Using source-priority cache for",
@@ -5762,6 +5973,206 @@ async function tryRestoreCachedLyricsForSource(
   }
 
   return false;
+}
+
+async function tryRestoreVideoPrimaryLyrics(
+  enabledSources: any[],
+  videoId: string,
+  maxCacheAgeMs: number,
+) {
+  if (!videoId || !chrome?.storage?.local?.get) return false;
+  try {
+    const indexKey = `lyrics_vid_${videoId}`;
+    const indexResult: any = await chrome.storage.local.get(indexKey);
+    const pointer = indexResult?.[indexKey];
+    if (!isLyricsVideoPointer(pointer, videoId)) return false;
+
+    const primarySource = enabledSources.find((source) =>
+      getCacheLookupIdsForSource(source.id).includes(pointer.primarySourceId),
+    );
+    const sourceKeys = Array.from(new Set(Object.values(pointer.sources)));
+    const entries: any = sourceKeys.length
+      ? await chrome.storage.local.get(sourceKeys)
+      : {};
+    if (activeLyricsFetchVideoId && activeLyricsFetchVideoId !== videoId) return false;
+
+    // Prefer the selected per-video primary, then any other exact-video cache,
+    // before falling back to song metadata.
+    const orderedSources = primarySource
+      ? [primarySource, ...enabledSources.filter((source) => source.id !== primarySource.id)]
+      : enabledSources;
+    for (const source of orderedSources) {
+      for (const sourceId of getCacheLookupIdsForSource(source.id)) {
+        const sourceKey = pointer.sources[sourceId];
+        const entry = sourceKey ? entries?.[sourceKey] : null;
+        if (
+          !isFreshCachedLyricsEntry(entry, maxCacheAgeMs) ||
+          entry.videoId !== videoId ||
+          (entry.source && entry.source !== sourceId) ||
+          (entry.sourceId && entry.sourceId !== sourceId)
+        ) continue;
+
+        log("[Lyrical] Restoring video-indexed cache:", {
+          videoId,
+          sourceId: source.id,
+          isPrimary: sourceId === pointer.primarySourceId,
+        });
+        const restored = restoreLyricsFromCacheEntry(entry, source.id, source.label);
+        if (restored) lockCurrentFetchWinner(source.id);
+        if (restored) return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    warn("[Lyrical] Failed to restore video-indexed primary source:", error);
+    return false;
+  }
+}
+
+async function tryRestoreSongPrimaryLyrics(
+  songInfo: any,
+  enabledSources: any[],
+  maxCacheAgeMs: number,
+) {
+  if (!chrome?.storage?.local?.get) return false;
+  const genericKeys = Array.from(
+    new Set(
+      getCandidateSongInfos(songInfo)
+        .map((candidate) => getLyricsCacheKey(candidate))
+        .filter(Boolean),
+    ),
+  );
+  if (!genericKeys.length) return false;
+
+  try {
+    const primaryItems: any = await chrome.storage.local.get(genericKeys);
+    const referencedKeys = genericKeys
+      .map((key) => primaryItems?.[key])
+      .filter(isLyricsCachePointer)
+      .map((pointer) => pointer.sourceKey);
+    const sourceItems: any = referencedKeys.length
+      ? await chrome.storage.local.get(Array.from(new Set(referencedKeys)))
+      : {};
+    const allItems = { ...primaryItems, ...sourceItems };
+
+    for (const genericKey of genericKeys) {
+      const primary = primaryItems?.[genericKey];
+      const entry = isLyricsCachePointer(primary)
+        ? resolveLyricsCachePointer(genericKey, primary, allItems)
+        : primary;
+      if (!isFreshCachedLyricsEntry(entry, maxCacheAgeMs)) continue;
+
+      const storedSourceId =
+        entry?.source || entry?.sourceId || primary?.sourceId || null;
+      const activeSource = enabledSources.find((source) =>
+        getCacheLookupIdsForSource(source.id).includes(storedSourceId),
+      );
+      if (!activeSource) continue;
+      if (
+        activeLyricsFetchVideoId &&
+        activeLyricsFetchVideoId !== getCurrentVideoId(songInfo)
+      ) return false;
+
+      log("[Lyrical] Restoring song-key primary cache:", {
+        sourceId: activeSource.id,
+        key: genericKey,
+      });
+      const restored = restoreLyricsFromCacheEntry(
+        entry,
+        activeSource.id,
+        activeSource.label,
+      );
+      if (restored) lockCurrentFetchWinner(activeSource.id);
+      return restored;
+    }
+  } catch (error) {
+    warn("[Lyrical] Failed to restore song-key primary cache:", error);
+  }
+  return false;
+}
+
+async function setCachedSourceAsPrimary(songInfo: any, sourceId: string) {
+  if (!songInfo || !sourceId || !chrome?.storage?.local?.get || !chrome?.storage?.local?.set) return;
+  const videoId = getCurrentVideoId(songInfo);
+  const lookupIds = sourceId === "better_lyrics"
+    ? ["better_lyrics", "musixmatch-synced"]
+    : getCacheLookupIdsForSource(sourceId);
+
+  try {
+    let selectedEntry: any = null;
+    let selectedSourceKey = "";
+    let selectedStorageSourceId = "";
+    let genericKey = "";
+
+    if (videoId) {
+      const indexKey = `lyrics_vid_${videoId}`;
+      const indexResult: any = await chrome.storage.local.get(indexKey);
+      const pointer = indexResult?.[indexKey];
+      if (isLyricsVideoPointer(pointer, videoId)) {
+        const sourceIdInIndex = lookupIds.find((id) => pointer.sources[id]);
+        if (sourceIdInIndex) {
+          selectedStorageSourceId = sourceIdInIndex;
+          selectedSourceKey = pointer.sources[sourceIdInIndex];
+        }
+      }
+    }
+
+    if (selectedSourceKey) {
+      const result: any = await chrome.storage.local.get(selectedSourceKey);
+      selectedEntry = result?.[selectedSourceKey];
+      const suffix = `__${selectedStorageSourceId}`;
+      genericKey = selectedSourceKey.endsWith(suffix)
+        ? selectedSourceKey.slice(0, -suffix.length)
+        : "";
+      if (!isFreshCachedLyricsEntry(selectedEntry, 1000 * 60 * 60 * 24 * 7)) {
+        selectedEntry = null;
+        selectedSourceKey = "";
+        selectedStorageSourceId = "";
+        genericKey = "";
+      }
+    }
+
+    if (!selectedEntry) {
+      for (const candidate of getCandidateSongInfos(songInfo)) {
+        for (const storageSourceId of lookupIds) {
+          const key = getLyricsCacheKey(candidate, storageSourceId);
+          if (!key) continue;
+          const result: any = await chrome.storage.local.get(key);
+          const entry = result?.[key];
+          if (isFreshCachedLyricsEntry(entry, 1000 * 60 * 60 * 24 * 7)) {
+            selectedEntry = entry;
+            selectedSourceKey = key;
+            selectedStorageSourceId = storageSourceId;
+            genericKey = getLyricsCacheKey(candidate);
+            break;
+          }
+        }
+        if (selectedEntry) break;
+      }
+    }
+
+    if (!selectedEntry || !selectedSourceKey || !selectedStorageSourceId) return;
+    const updates: Record<string, any> = {};
+    if (genericKey) {
+      updates[genericKey] = createLyricsCachePointer(
+        genericKey,
+        selectedStorageSourceId,
+        selectedEntry,
+      );
+    }
+    if (videoId && selectedEntry.videoId === videoId) {
+      await writeVideoCachePointer(
+        videoId,
+        selectedStorageSourceId,
+        selectedSourceKey,
+        { artist: selectedEntry.artist || songInfo.artist, title: selectedEntry.title || songInfo.title },
+        { makePrimary: true },
+      );
+    }
+    if (Object.keys(updates).length) await chrome.storage.local.set(updates);
+  } catch (error) {
+    warn("[Lyrical] Failed to update primary cache selection:", error);
+  }
 }
 
 // ========== END ADVANCED FEATURES ==========
@@ -6961,6 +7372,20 @@ async function tryFetchBoidu(songInfo, sourceId = "lyrical") {
 /**
  * Try to fetch from LRCLIB
  */
+async function fetchLRCLibSearchResults(query: string) {
+  const response = await chrome.runtime.sendMessage({
+    type: "FETCH_LRCLIB_SEARCH",
+    query,
+  });
+  if (!response?.success) {
+    throw new Error(
+      response?.error ||
+        `LRCLIB request failed (${response?.status ?? "unknown"})`,
+    );
+  }
+  return Array.isArray(response.results) ? response.results : [];
+}
+
 async function tryFetchLRCLib(songInfo, signal?: AbortSignal | null) {
   const activeSignal = signal || currentFetchAbortController?.signal;
   if (activeSignal?.aborted) return false;
@@ -6968,11 +7393,8 @@ async function tryFetchLRCLib(songInfo, signal?: AbortSignal | null) {
   log("Fetching lyrics from lrclib for:", query);
 
   try {
-    const response = await fetch(
-      `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`,
-      { signal: combineSignals(3500, activeSignal) },
-    );
-    const results = await response.json();
+    const results = await fetchLRCLibSearchResults(query);
+    if (activeSignal?.aborted) return false;
 
     if (Array.isArray(results) && results.length > 0) {
       const match = results.find((candidate) => {
@@ -7051,62 +7473,122 @@ async function preScanAvailableCachedSources(
   enabledSources: any[],
   maxCacheAgeMs: number,
 ) {
-  if (!songInfo?.artist || !songInfo?.title) return;
+  if (!songInfo) return;
   useAppStore.getState().clearAvailableLyricsSources();
 
-  const candidateSongInfos = [songInfo];
-  if (
-    songInfo?.originalTitle &&
-    songInfo?.title &&
-    songInfo.originalTitle !== songInfo.title
-  ) {
-    candidateSongInfos.push({
-      ...songInfo,
-      artist: songInfo.artist,
-      title: songInfo.title,
-      originalArtist: songInfo.artist,
-      originalTitle: songInfo.title,
-    });
-  }
+  const currentVid =
+    songInfo?.videoId ||
+    (typeof window !== "undefined" && window.location?.search
+      ? new URLSearchParams(window.location.search).get("v")
+      : null);
 
-  const allKeysMap = new Map<string, string>();
-  for (const info of candidateSongInfos) {
-    for (const source of enabledSources) {
-      const lookupIds = getCacheLookupIdsForSource(source.id);
-      for (const subId of lookupIds) {
-        const key = getLyricsCacheKey(info, subId);
-        if (key) allKeysMap.set(key, subId);
-      }
-    }
-  }
-
-  if (allKeysMap.size === 0) return;
   if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) return;
-  const keysArray = Array.from(allKeysMap.keys());
-  try {
-    const cachedEntries: any = await chrome.storage.local.get(keysArray);
-    for (const key of keysArray) {
-      const entry = cachedEntries[key];
-      if (entry?.lyrics?.length) {
-        const cacheAge = Date.now() - entry.timestamp;
-        if (cacheAge < maxCacheAgeMs) {
-          const actualSourceId = allKeysMap.get(key);
-          if (actualSourceId) {
-            useAppStore.getState().addAvailableLyricsSource(actualSourceId);
+
+  const indexedSources: Record<string, string> = {};
+  const enabledLookupIds = new Set(
+    enabledSources.flatMap((source) => getCacheLookupIdsForSource(source.id)),
+  );
+
+  // 1. TIER 1: Check videoId index
+  if (currentVid) {
+    try {
+      const vidKey = `lyrics_vid_${currentVid}`;
+      const vidRes: any = await chrome.storage.local.get(vidKey);
+      const vidPointer = vidRes?.[vidKey];
+      if (isLyricsVideoPointer(vidPointer, currentVid)) {
+        const indexedKeys = Array.from(new Set(Object.values(vidPointer.sources)));
+        const indexedEntries: any = indexedKeys.length
+          ? await chrome.storage.local.get(indexedKeys)
+          : {};
+        for (const [sId, sKey] of Object.entries(vidPointer.sources)) {
+          if (!enabledLookupIds.has(sId)) continue;
+          const entry = indexedEntries?.[sKey] as any;
+          if (
+            typeof sKey === "string" &&
+            isFreshCachedLyricsEntry(entry, maxCacheAgeMs) &&
+            (!entry.source || entry.source === sId) &&
+            (!entry.sourceId || entry.sourceId === sId) &&
+              entry.videoId === currentVid
+          ) {
+            indexedSources[sId] = sKey;
+            useAppStore.getState().addAvailableLyricsSource(sId);
           }
         }
       }
-    }
-  } catch (e) {
-    // ignore
+    } catch {}
   }
 
-  // If prefetched captions are already in memory for this video, ensure captions is marked available
+  // 2. TIER 2: Candidate song info lookup (checks all artist variants: e.g. Ayane, 彩音, raw channel name)
+  const candidateSongInfos = getCandidateSongInfos(songInfo);
+  if (candidateSongInfos.length > 0) {
+    const allKeysMap = new Map<string, { sourceId: string; lookupId: string }>();
+    for (const info of candidateSongInfos) {
+      for (const source of enabledSources) {
+        const lookupIds = getCacheLookupIdsForSource(source.id);
+        for (const subId of lookupIds) {
+          const key = getLyricsCacheKey(info, subId);
+          if (key) allKeysMap.set(key, { sourceId: source.id, lookupId: subId });
+        }
+      }
+    }
+
+    if (allKeysMap.size > 0) {
+      try {
+        const keysArray = Array.from(allKeysMap.keys());
+        const cachedEntries: any = await chrome.storage.local.get(keysArray);
+        const backfillSources: Record<string, string> = { ...indexedSources };
+
+        for (const key of keysArray) {
+          const entry = cachedEntries[key];
+          if (isFreshCachedLyricsEntry(entry, maxCacheAgeMs)) {
+            const sourceMatch = allKeysMap.get(key);
+            if (sourceMatch) {
+              const { sourceId, lookupId } = sourceMatch;
+              useAppStore.getState().addAvailableLyricsSource(sourceId);
+              // Do not promote a same-song cache from another upload into this
+              // video's exact-match index. It remains available via tier 2.
+              if (entry.videoId === currentVid) {
+                backfillSources[lookupId] = key;
+              }
+            }
+          }
+        }
+
+        // Auto-backfill into lyrics_vid_${currentVid} so subsequent lookups are O(1)
+        if (currentVid && Object.keys(backfillSources).length > 0) {
+          const vidKey = `lyrics_vid_${currentVid}`;
+          const existingVidRes = await chrome.storage.local.get(vidKey);
+          const existingVid = existingVidRes?.[vidKey];
+          const keepPrimary =
+            isLyricsVideoPointer(existingVid, currentVid) &&
+            Boolean(backfillSources[existingVid.primarySourceId]);
+          let isFirstBackfill = true;
+          for (const [sourceId, sourceKey] of Object.entries(backfillSources)) {
+            await writeVideoCachePointer(
+              currentVid,
+              sourceId,
+              sourceKey,
+              {
+                artist: songInfo?.artist || songInfo?.originalArtist || undefined,
+                title: songInfo?.title || songInfo?.originalTitle || undefined,
+              },
+              { makePrimary: !keepPrimary && isFirstBackfill },
+            );
+            isFirstBackfill = false;
+          }
+        }
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  // 3. If prefetched captions are already in memory for this video, ensure captions is marked available
   const hasPendingCaptions = Boolean(
     pendingMainWorldCaptionLyrics &&
-    pendingMainWorldCaptionLyrics.length > 0 &&
-    pendingMainWorldCaptionVideoId &&
-    pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo),
+      pendingMainWorldCaptionLyrics.length > 0 &&
+      pendingMainWorldCaptionVideoId &&
+      pendingMainWorldCaptionVideoId === getCurrentVideoId(songInfo),
   );
   if (hasPendingCaptions) {
     useAppStore.getState().addAvailableLyricsSource("captions");
@@ -7223,17 +7705,21 @@ async function runBackgroundPreScanAllSources(
       if (typeof chrome === "undefined" || !chrome?.storage?.local?.get) break;
       const lookupIds = getCacheLookupIdsForSource(source.id);
       let isCached = false;
-      for (const subId of lookupIds) {
-        const key = getLyricsCacheKey(songInfo, subId);
-        if (key) {
-          const res: any = await chrome.storage.local.get(key);
-          const entry = res?.[key];
-          if (entry?.lyrics?.length) {
-            const cacheAge = Date.now() - (entry.timestamp || 0);
-            if (cacheAge < 1000 * 60 * 60 * 24 * 7) {
-              isCached = true;
-              useAppStore.getState().addAvailableLyricsSource(source.id);
-              break;
+      const candidateSongInfos = getCandidateSongInfos(songInfo);
+      for (const info of candidateSongInfos) {
+        if (isCached) break;
+        for (const subId of lookupIds) {
+          const key = getLyricsCacheKey(info, subId);
+          if (key) {
+            const res: any = await chrome.storage.local.get(key);
+            const entry = res?.[key];
+            if (entry?.lyrics?.length) {
+              const cacheAge = Date.now() - (entry.timestamp || 0);
+              if (cacheAge < 1000 * 60 * 60 * 24 * 7) {
+                isCached = true;
+                useAppStore.getState().addAvailableLyricsSource(source.id);
+                break;
+              }
             }
           }
         }
@@ -7304,11 +7790,8 @@ async function runBackgroundPreScanAllSources(
       } else if (source.id === "lrclib") {
         if (isStale()) return;
         const query = `${songInfo.title} ${songInfo.artist}`.trim();
-        const response = await fetch(
-          `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`,
-          { signal: combineSignals(3500, currentFetchAbortController?.signal) },
-        );
-        const results = await response.json();
+        const results = await fetchLRCLibSearchResults(query);
+        if (isStale()) return;
         if (Array.isArray(results) && results.length > 0) {
           const match = results.find((c) => c?.syncedLyrics);
           if (match?.syncedLyrics) {
@@ -7661,9 +8144,28 @@ async function autoFetchLyrics(songInfo, options: any = {}) {
     let found = false;
     let captionsTried = false;
 
-    for (const source of enabledSources) {
+    // The per-video primary selection wins for this exact upload. If it is absent,
+    // stale, expired, or disabled, the normal configured source order remains the fallback.
+    if (options.reason !== "source changed" && !isStaleFetch()) {
+      found = await tryRestoreVideoPrimaryLyrics(
+        enabledSources,
+        videoId,
+        MAX_CACHE_AGE,
+      );
       if (isStaleFetch()) return;
+    }
+    if (!found && options.reason !== "source changed" && !isStaleFetch()) {
+      found = await tryRestoreSongPrimaryLyrics(
+        songInfo,
+        enabledSources,
+        MAX_CACHE_AGE,
+      );
+      if (isStaleFetch()) return;
+    }
+
+    for (const source of enabledSources) {
       if (found) break;
+      if (isStaleFetch()) return;
       log(`[Lyrical] Trying source: ${source.label}`);
 
       // Always try to restore from cache first to respect source priority
@@ -7895,40 +8397,16 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
   );
   if (restored) {
     log("[Lyrical] Successfully switched to cached source:", sourceId);
-    // Explicit user switch: keep the song's primary genericKey in sync with user's selected source
-    const genericKey = getLyricsCacheKey(currentSongInfo);
-    const sourceKey = getLyricsCacheKey(currentSongInfo, sourceId);
-    if (
-      genericKey &&
-      sourceKey &&
-      hasLocalStorageApi() &&
-      chrome?.storage?.local?.get &&
-      chrome?.storage?.local?.set
-    ) {
-      try {
-        const stored: any = await chrome.storage.local.get([sourceKey]);
-        const entry = stored?.[sourceKey];
-        if (entry && genericKey) {
-          await chrome.storage.local.set({
-            [genericKey]: createLyricsCachePointer(
-              genericKey,
-              sourceId,
-              entry,
-            ),
-          });
-          log("[Lyrical] Synced primary cache for user-selected source:", sourceId);
-        }
-      } catch (err) {
-        warn("[Lyrical] Failed to sync primary cache on source switch:", err);
-      }
-    }
+    await setCachedSourceAsPrimary(currentSongInfo, sourceId);
     return;
   }
 
   // If not in cache, try fetching from that source directly
   useAppStore.setState({ isLoading: true });
   let found = false;
-  switch (sourceId) {
+  pendingManualPrimarySourceId = sourceId;
+  try {
+    switch (sourceId) {
     case "lyrical":
       try {
         found = await tryFetchBoidu(currentSongInfo);
@@ -7936,7 +8414,7 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       break;
     case "better_lyrics":
     case "musixmatch":
-      found = await tryFetchCubey(currentSongInfo, "musixmatch");
+      found = await tryFetchCubey(currentSongInfo, sourceId);
       break;
     case "unison-richsynced":
     case "unison-wordsynced":
@@ -7964,8 +8442,12 @@ window.addEventListener("lyrical-select-source", async (event: any) => {
       currentFetchWinningSourceId = "captions";
       found = await tryDisplayCaptions(true);
       break;
+    }
+  } finally {
+    pendingManualPrimarySourceId = null;
+    useAppStore.setState({ isLoading: false });
   }
-  useAppStore.setState({ isLoading: false });
+  if (found) await setCachedSourceAsPrimary(currentSongInfo, sourceId);
 });
 
 window.addEventListener("lyrical-ensure-caption-tracks", () => {

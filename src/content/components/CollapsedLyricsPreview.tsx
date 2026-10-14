@@ -726,7 +726,7 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
             transition={{ duration: 0.18, delay: 0.04 }}
             style={
               lyricsAnimationStyle === "archivetune"
-                ? { paddingLeft: "2px", overflow: "visible" }
+                ? { overflow: "visible" }
                 : undefined
             }
           >

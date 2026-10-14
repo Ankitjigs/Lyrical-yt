@@ -56,35 +56,14 @@ export async function fetchSponsorBlockIntroOffset(
     return null;
   }
 
-  const controller = new AbortController();
-
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
-
-  const onAbort = () => controller.abort();
-  if (signal) {
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
-
   try {
-    const url =
-      `https://sponsor.ajay.app/api/skipSegments` +
-      `?videoID=${encodeURIComponent(videoId)}` +
-      `&categories=${encodeURIComponent(JSON.stringify(["music_offtopic"]))}`;
-
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        Accept: "application/json",
-      },
+    const response = await chrome.runtime.sendMessage({
+      type: "FETCH_SPONSORBLOCK_SEGMENTS",
+      videoId,
+      timeoutMs,
     });
-
-    if (res.status === 404 || !res.ok) {
-      return null;
-    }
-
-    const segments = await res.json();
+    if (signal?.aborted || !response?.success) return null;
+    const segments = response.segments;
 
     if (!Array.isArray(segments) || segments.length === 0) {
       return null;
@@ -184,15 +163,10 @@ export async function fetchSponsorBlockIntroOffset(
     };
   } catch (err: any) {
     if (err?.name !== "AbortError") {
-      console.debug("[Lyrical SponsorBlock] Fetch error:", err?.message || err);
+      console.debug("[Lyrical SponsorBlock] Request error:", err?.message || err);
     }
 
     return null;
-  } finally {
-    clearTimeout(timeoutId);
-    if (signal) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }
 

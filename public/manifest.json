@@ -15,6 +15,8 @@
         "https://lyrics.api.dacubeking.com/*",
         "https://lyrics-api.boidu.dev/*",
         "https://unison.boidu.dev/*",
+        "https://lrclib.net/*",
+        "https://sponsor.ajay.app/*",
         "*://*.youtube.com/*",
         "https://fonts.googleapis.com/*",
         "https://fonts.gstatic.com/*"

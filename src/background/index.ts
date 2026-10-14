@@ -136,6 +136,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.type === "FETCH_LRCLIB_SEARCH") {
+    fetchLrclibSearch(request.query)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (request.type === "FETCH_SPONSORBLOCK_SEGMENTS") {
+    fetchSponsorBlockSegments(request.videoId, request.timeoutMs)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   // --- Cubey Proxy Handlers ---
   if (request.type === "CUBEY_VERIFY_TURNSTILE") {
     handleCubeyVerify(request.token)
@@ -189,6 +203,65 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
+
+async function fetchLrclibSearch(query: unknown) {
+  if (typeof query !== "string" || !query.trim() || query.length > 500) {
+    return { success: false, error: "Invalid LRCLIB search query" };
+  }
+
+  const url = new URL("https://lrclib.net/api/search");
+  url.searchParams.set("q", query.trim());
+  const response = await fetchJsonWithTimeout(
+    url.toString(),
+    { headers: { Accept: "application/json" } },
+    3500,
+  );
+  if (!response.ok) {
+    return { success: false, status: response.status, results: [] };
+  }
+
+  const results = await response.json();
+  return {
+    success: true,
+    status: response.status,
+    results: Array.isArray(results) ? results : [],
+  };
+}
+
+async function fetchSponsorBlockSegments(
+  videoId: unknown,
+  requestedTimeoutMs: unknown,
+) {
+  if (typeof videoId !== "string" || !/^[\w-]{5,20}$/.test(videoId)) {
+    return { success: false, error: "Invalid SponsorBlock video ID" };
+  }
+
+  const url = new URL("https://sponsor.ajay.app/api/skipSegments");
+  url.searchParams.set("videoID", videoId);
+  url.searchParams.set("categories", JSON.stringify(["music_offtopic"]));
+  const timeoutMs =
+    typeof requestedTimeoutMs === "number" && Number.isFinite(requestedTimeoutMs)
+      ? Math.max(500, Math.min(requestedTimeoutMs, 8000))
+      : 3500;
+  const response = await fetchJsonWithTimeout(
+    url.toString(),
+    { headers: { Accept: "application/json" } },
+    timeoutMs,
+  );
+  if (response.status === 404) {
+    return { success: true, status: 404, segments: [] };
+  }
+  if (!response.ok) {
+    return { success: false, status: response.status, segments: [] };
+  }
+
+  const segments = await response.json();
+  return {
+    success: true,
+    status: response.status,
+    segments: Array.isArray(segments) ? segments : [],
+  };
+}
 
 async function handleCubeyVerify(token) {
   const res = await fetch(
