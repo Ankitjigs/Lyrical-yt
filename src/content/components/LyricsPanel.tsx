@@ -38,7 +38,6 @@ import { getThemeCssVariables } from "../../themes";
 import { useShallow } from "zustand/react/shallow";
 import { t } from "../../i18n";
 import LyricsDock from "./LyricsDock";
-import { log } from "../utils/logger";
 import {
   isMetadataLine,
   isInstrumentalLine,
@@ -1321,45 +1320,6 @@ const LyricsPanel = () => {
     ).romanizedLyrics;
     return addDerivedWordTimings(lyrics || [], aligned);
   }, [lyrics, rawRomanizedLyrics]);
-  useEffect(() => {
-    if (lyricsSource !== "portato-richsynced" || activeIndex < 0) return;
-
-    const line = lyrics?.[activeIndex];
-    const romanizedLine = alignedRomanizedLyrics?.[activeIndex];
-    if (!line || !romanizedLine?.romanized) return;
-
-    log("Portato romanization timing check", {
-      videoId: songInfo?.videoId,
-      lineIndex: activeIndex,
-      lyric: line.text,
-      romanized: romanizedLine.romanized,
-      sourceTimedParts: Array.isArray(line.parts)
-        ? line.parts.map((part) => ({
-            text: part.text,
-            time: part.time,
-            duration: part.duration,
-          }))
-        : [],
-      romanizedWordTimings: Array.isArray(romanizedLine.timedRomanization)
-        ? romanizedLine.timedRomanization.map((part) => ({
-            text: part.text,
-            time: part.time,
-            duration: part.duration,
-          }))
-        : [],
-      timingResult:
-        Array.isArray(romanizedLine.timedRomanization) &&
-        romanizedLine.timedRomanization.length > 0
-          ? "word-timed"
-          : "line-estimate-fallback",
-    });
-  }, [
-    lyricsSource,
-    activeIndex,
-    lyrics,
-    alignedRomanizedLyrics,
-    songInfo?.videoId,
-  ]);
   const alignedTranslatedLyrics = useMemo(
     () =>
       alignSecondaryLyrics(
