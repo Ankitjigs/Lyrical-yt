@@ -6,6 +6,7 @@ import {
   INSTRUMENTAL_NOTE_PATH,
 } from "../../modules/lyrics/lyricsNormalizer";
 import { useAppStore } from "../store";
+import { buildWordTimedRomanization } from "../../modules/lyrics/romanizationTiming";
 
 interface KaraokeLyricDisplayProps {
   lyrics: LyricalLyricLine[];
@@ -536,7 +537,10 @@ export default function KaraokeLyricDisplay({
       : Math.max(0.5, Number(activeLine?.duration) || 3.5);
 
     const romData = romanizedLyrics?.[activeLineIndex];
-    const timedRom = romData?.timedRomanization || activeLine?.timedRomanization;
+    const timedRom =
+      romData?.timedRomanization ||
+      activeLine?.timedRomanization ||
+      buildWordTimedRomanization(activeLine, activeRomanized, nextLine);
 
     let wordObjects: TimedKaraokeWord[];
 

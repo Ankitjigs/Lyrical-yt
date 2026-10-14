@@ -1,4 +1,11 @@
-import React, { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from "react";
+import React, {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+} from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { useAppStore } from "../store";
 import {
@@ -31,7 +38,12 @@ import { getThemeCssVariables } from "../../themes";
 import { useShallow } from "zustand/react/shallow";
 import { t } from "../../i18n";
 import LyricsDock from "./LyricsDock";
-import { isMetadataLine, isInstrumentalLine } from "../../modules/lyrics/lyricsNormalizer";
+import { log } from "../utils/logger";
+import {
+  isMetadataLine,
+  isInstrumentalLine,
+} from "../../modules/lyrics/lyricsNormalizer";
+import { addDerivedWordTimings } from "../../modules/lyrics/romanizationTiming";
 
 const GeniusIcon = ({ size = 14 }: { size?: number }) => (
   <svg
@@ -139,7 +151,9 @@ const KaraokeModeNotice = ({
   const vocalCutDepth = useAppStore((state) => state.vocalCutDepth);
   const vocalBassCutoff = useAppStore((state) => state.vocalBassCutoff);
   const vocalBalanceTrim = useAppStore((state) => state.vocalBalanceTrim);
-  const vocalReverbDampening = useAppStore((state) => state.vocalReverbDampening);
+  const vocalReverbDampening = useAppStore(
+    (state) => state.vocalReverbDampening,
+  );
   const setVocalRemoverSettings = useAppStore(
     (state) => state.setVocalRemoverSettings,
   );
@@ -255,8 +269,8 @@ const KaraokeModeNotice = ({
                       {vocalBalanceTrim === 0
                         ? "0% (Center)"
                         : vocalBalanceTrim > 0
-                        ? `+${vocalBalanceTrim}% R`
-                        : `${vocalBalanceTrim}% L`}
+                          ? `+${vocalBalanceTrim}% R`
+                          : `${vocalBalanceTrim}% L`}
                     </strong>
                   </div>
                   <input
@@ -686,7 +700,8 @@ function alignSecondaryLyrics(lyrics: any[] = [], sourceLines: any[] = []) {
 
   // Filter out any metadata/credit lines that may be lingering in sourceLines
   const cleanSourceLines = sourceLines.filter(
-    (item) => item && !isMetadataLine(item.text || "") && !isInstrumentalLine(item),
+    (item) =>
+      item && !isMetadataLine(item.text || "") && !isInstrumentalLine(item),
   );
 
   return lyrics.reduce(
@@ -752,8 +767,11 @@ function alignSecondaryLyrics(lyrics: any[] = [], sourceLines: any[] = []) {
       ) {
         const candidate = cleanSourceLines[index];
         const dirRom =
-          pickFirstTextValue(candidate, ["romanized", "romanization", "romaji"]) ||
-          timedRomanizationToText(candidate?.timedRomanization);
+          pickFirstTextValue(candidate, [
+            "romanized",
+            "romanization",
+            "romaji",
+          ]) || timedRomanizationToText(candidate?.timedRomanization);
         if (dirRom) {
           romanizedSource = candidate;
           usedRomanizedIndexes.add(index);
@@ -867,7 +885,12 @@ const getAlbumArtMotion = (
         initial: { x: "100%", y: "-100%", scale: 0.82, rotate: 6, opacity: 0 },
         animate: { x: 0, y: 0, scale: 1, rotate: 0, opacity: 1 },
         exit: { x: "-100%", y: "100%", scale: 0.82, rotate: -6, opacity: 0 },
-        transition: { type: "spring" as const, stiffness: 360, damping: 28, mass: 0.85 },
+        transition: {
+          type: "spring" as const,
+          stiffness: 360,
+          damping: 28,
+          mass: 0.85,
+        },
       };
     case "flip":
       return {
@@ -1105,14 +1128,25 @@ const MiniProgressBar: React.FC = () => {
 
     const update = () => {
       const video = getVideo();
-      if (video && video.duration && !isNaN(video.duration) && video.duration > 0 && barRef.current) {
-        const ratio = Math.min(1, Math.max(0, video.currentTime / video.duration));
+      if (
+        video &&
+        video.duration &&
+        !isNaN(video.duration) &&
+        video.duration > 0 &&
+        barRef.current
+      ) {
+        const ratio = Math.min(
+          1,
+          Math.max(0, video.currentTime / video.duration),
+        );
         barRef.current.style.width = `${(ratio * 100).toFixed(2)}%`;
       }
     };
 
     const isPlaying = (video: HTMLVideoElement | null) => {
-      return Boolean(video && !video.paused && !video.ended && video.readyState > 2);
+      return Boolean(
+        video && !video.paused && !video.ended && video.readyState > 2,
+      );
     };
 
     const loop = () => {
@@ -1280,14 +1314,52 @@ const LyricsPanel = () => {
     return getThemeCssVariables(themeId, customThemes);
   }, [themeId, customThemes, dynamicThemeTokens]);
   const lyricsTypography = getLyricsTypography(lyricsSizePreset, compactMode);
-  const alignedRomanizedLyrics = useMemo(
-    () =>
-      alignSecondaryLyrics(
-        lyrics || [],
-        (Array.isArray(rawRomanizedLyrics) ? rawRomanizedLyrics : []) as any[],
-      ).romanizedLyrics,
-    [lyrics, rawRomanizedLyrics],
-  );
+  const alignedRomanizedLyrics = useMemo(() => {
+    const aligned = alignSecondaryLyrics(
+      lyrics || [],
+      (Array.isArray(rawRomanizedLyrics) ? rawRomanizedLyrics : []) as any[],
+    ).romanizedLyrics;
+    return addDerivedWordTimings(lyrics || [], aligned);
+  }, [lyrics, rawRomanizedLyrics]);
+  useEffect(() => {
+    if (lyricsSource !== "portato-richsynced" || activeIndex < 0) return;
+
+    const line = lyrics?.[activeIndex];
+    const romanizedLine = alignedRomanizedLyrics?.[activeIndex];
+    if (!line || !romanizedLine?.romanized) return;
+
+    log("Portato romanization timing check", {
+      videoId: songInfo?.videoId,
+      lineIndex: activeIndex,
+      lyric: line.text,
+      romanized: romanizedLine.romanized,
+      sourceTimedParts: Array.isArray(line.parts)
+        ? line.parts.map((part) => ({
+            text: part.text,
+            time: part.time,
+            duration: part.duration,
+          }))
+        : [],
+      romanizedWordTimings: Array.isArray(romanizedLine.timedRomanization)
+        ? romanizedLine.timedRomanization.map((part) => ({
+            text: part.text,
+            time: part.time,
+            duration: part.duration,
+          }))
+        : [],
+      timingResult:
+        Array.isArray(romanizedLine.timedRomanization) &&
+        romanizedLine.timedRomanization.length > 0
+          ? "word-timed"
+          : "line-estimate-fallback",
+    });
+  }, [
+    lyricsSource,
+    activeIndex,
+    lyrics,
+    alignedRomanizedLyrics,
+    songInfo?.videoId,
+  ]);
   const alignedTranslatedLyrics = useMemo(
     () =>
       alignSecondaryLyrics(
@@ -1300,14 +1372,11 @@ const LyricsPanel = () => {
   );
 
   const canShowTranslatedLyrics = isTranslateEnabled && showTranslatedLyrics;
-  const canShowRomanizedLyrics =
-    isRomanizationEnabled && showRomanizedLyrics;
+  const canShowRomanizedLyrics = isRomanizationEnabled && showRomanizedLyrics;
   const translatedLyrics = canShowTranslatedLyrics
     ? alignedTranslatedLyrics
     : [];
-  const romanizedLyrics = canShowRomanizedLyrics
-    ? alignedRomanizedLyrics
-    : [];
+  const romanizedLyrics = canShowRomanizedLyrics ? alignedRomanizedLyrics : [];
 
   const hasRomanized = hasDisplayableSecondaryText(
     alignedRomanizedLyrics,
@@ -1613,14 +1682,20 @@ const LyricsPanel = () => {
         if (m.type === "childList") {
           for (let j = 0; j < m.addedNodes.length; j++) {
             const node = m.addedNodes[j] as HTMLElement;
-            if (node.nodeName === "VIDEO" || (node.querySelector && node.querySelector("video"))) {
+            if (
+              node.nodeName === "VIDEO" ||
+              (node.querySelector && node.querySelector("video"))
+            ) {
               scheduleSync();
               return;
             }
           }
           for (let j = 0; j < m.removedNodes.length; j++) {
             const node = m.removedNodes[j] as HTMLElement;
-            if (node.nodeName === "VIDEO" || (node.querySelector && node.querySelector("video"))) {
+            if (
+              node.nodeName === "VIDEO" ||
+              (node.querySelector && node.querySelector("video"))
+            ) {
               scheduleSync();
               return;
             }
@@ -1996,7 +2071,8 @@ const LyricsPanel = () => {
     strategy?.isImperative ? undefined : translatedLyrics,
   ]);
 
-  const hasCollapsedPreview = !isExpanded && !!lyrics && lyrics.length > 0 && !isKaraokeMode;
+  const hasCollapsedPreview =
+    !isExpanded && !!lyrics && lyrics.length > 0 && !isKaraokeMode;
   // Use global availability (hasRomanized/hasTranslated) to size the panel,
   // not current line content. This prevents height jumps on instrumental ↔ lyric transitions.
   const collapsedSecondaryCount =
@@ -2041,7 +2117,8 @@ const LyricsPanel = () => {
         height: isExpanded ? "auto" : collapsedPanelHeight,
         overflow: isExpanded ? "visible" : "hidden",
         position: "relative",
-        transition: "min-height 0.25s ease, height 0.25s ease, background 0.75s ease-in-out",
+        transition:
+          "min-height 0.25s ease, height 0.25s ease, background 0.75s ease-in-out",
       }}
     >
       {/* Header */}
@@ -2160,11 +2237,15 @@ const LyricsPanel = () => {
                     <motion.span
                       key={isAdPlaying ? "ad-header" : headerText}
                       initial={
-                        reduceAnimations ? { opacity: 0 } : { opacity: 0, y: 12 }
+                        reduceAnimations
+                          ? { opacity: 0 }
+                          : { opacity: 0, y: 12 }
                       }
                       animate={{ opacity: 1, y: 0 }}
                       exit={
-                        reduceAnimations ? { opacity: 0 } : { opacity: 0, y: -12 }
+                        reduceAnimations
+                          ? { opacity: 0 }
+                          : { opacity: 0, y: -12 }
                       }
                       transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
                       style={{ display: "inline-block" }}
@@ -2173,7 +2254,8 @@ const LyricsPanel = () => {
                         <span style={{ color: "#eab308", fontWeight: "600" }}>
                           Ad in progress...
                         </span>
-                      ) : headerText && headerText.toLowerCase().includes("search") ? (
+                      ) : headerText &&
+                        headerText.toLowerCase().includes("search") ? (
                         <ShinyText
                           text={headerText}
                           disabled={reduceAnimations}
@@ -2304,7 +2386,10 @@ const LyricsPanel = () => {
                       key={currentArtwork}
                       src={currentArtwork}
                       alt={t("lyricsPanel_albumArt")}
-                      {...getAlbumArtMotion(albumArtTransition, reduceAnimations)}
+                      {...getAlbumArtMotion(
+                        albumArtTransition,
+                        reduceAnimations,
+                      )}
                       style={{
                         position: "absolute",
                         inset: 0,
@@ -2367,7 +2452,9 @@ const LyricsPanel = () => {
                 <Tooltip
                   content={
                     songInfo?.artist ||
-                    (songInfo?.title ? "Playing on YouTube" : t("lyricsPanel_playSong"))
+                    (songInfo?.title
+                      ? "Playing on YouTube"
+                      : t("lyricsPanel_playSong"))
                   }
                 >
                   <div
@@ -2382,16 +2469,25 @@ const LyricsPanel = () => {
                       <motion.p
                         key={
                           songInfo?.artist ||
-                          (songInfo?.title ? "Playing on YouTube" : "empty-artist")
+                          (songInfo?.title
+                            ? "Playing on YouTube"
+                            : "empty-artist")
                         }
                         initial={
-                          reduceAnimations ? { opacity: 0 } : { opacity: 0, y: 6 }
+                          reduceAnimations
+                            ? { opacity: 0 }
+                            : { opacity: 0, y: 6 }
                         }
                         animate={{ opacity: 1, y: 0 }}
                         exit={
-                          reduceAnimations ? { opacity: 0 } : { opacity: 0, y: -6 }
+                          reduceAnimations
+                            ? { opacity: 0 }
+                            : { opacity: 0, y: -6 }
                         }
-                        transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                        transition={{
+                          duration: 0.22,
+                          ease: [0.22, 1, 0.36, 1],
+                        }}
                         className="songArtist"
                         style={{
                           fontSize: compactMode ? "12px" : "14px",
@@ -2406,7 +2502,9 @@ const LyricsPanel = () => {
                         }}
                       >
                         {songInfo?.artist ||
-                          (songInfo?.title ? "Playing on YouTube" : t("lyricsPanel_playSong"))}
+                          (songInfo?.title
+                            ? "Playing on YouTube"
+                            : t("lyricsPanel_playSong"))}
                       </motion.p>
                     </AnimatePresence>
                   </div>
@@ -2813,7 +2911,10 @@ const LyricsPanel = () => {
                                 alignItems: "center",
                                 justifyContent: "center",
                                 textAlign: "center",
-                                gap: searchingIndicatorStyle === "none" ? "0px" : "10px",
+                                gap:
+                                  searchingIndicatorStyle === "none"
+                                    ? "0px"
+                                    : "10px",
                               }}
                             >
                               {searchingIndicatorStyle !== "none" && (

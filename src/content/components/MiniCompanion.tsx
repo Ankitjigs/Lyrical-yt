@@ -17,6 +17,7 @@ import {
   isInstrumentalLine,
   INSTRUMENTAL_NOTE_PATH,
 } from "../../modules/lyrics/lyricsNormalizer";
+import { buildWordTimedRomanization } from "../../modules/lyrics/romanizationTiming";
 
 // Motion animations matching Lyrical's configuration
 const getAlbumArtMotion = (
@@ -889,7 +890,11 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
         if (Array.isArray(timed) && timed.length > 0) return timed;
       }
     }
-    return null;
+    return buildWordTimedRomanization(
+      activeLine,
+      activeRomanized,
+      lyrics?.[activeLineIndex + 1],
+    );
   }, [
     isRomanizationEnabled,
     showRomanizedLyrics,
@@ -897,6 +902,8 @@ export const MiniCompanion: React.FC<MiniCompanionProps> = ({ onDismiss }) => {
     activeLine,
     isInstrumental,
     rawRomanizedLyrics,
+    activeRomanized,
+    lyrics,
   ]);
 
   // Resolve translated text for the active line (same approach)

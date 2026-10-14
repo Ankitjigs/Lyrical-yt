@@ -8,6 +8,7 @@ import {
 } from "../../modules/lyrics/lyricsNormalizer";
 import { useAppStore } from "../store";
 import { getLineTransitionLead } from "./KaraokeLyricDisplay";
+import { buildWordTimedRomanization } from "../../modules/lyrics/romanizationTiming";
 
 interface CollapsedLyricsPreviewProps {
   lyrics: LyricalLyricLine[];
@@ -500,7 +501,9 @@ export const CollapsedLyricsPreview: React.FC<CollapsedLyricsPreviewProps> = ({
     }
 
     const romData = romanizedLyrics?.[collapsedLineIndex];
-    const timedRom = romData?.timedRomanization;
+    const timedRom =
+      romData?.timedRomanization ||
+      buildWordTimedRomanization(collapsedLine, collapsedRomanized, nextLine);
 
     let wordObjects: Array<{
       text: string;
