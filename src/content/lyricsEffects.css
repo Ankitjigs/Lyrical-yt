@@ -184,7 +184,6 @@
 :host .blyrics--translated,
 :host .blyrics--romanized {
   display: block;
-  font-size: var(--lyrical-secondary-lyric-size, 12px);
   font-weight: 500;
   white-space: normal;
   line-height: 1.45;
@@ -194,6 +193,14 @@
   overflow-wrap: break-word;
   text-align: center;
   text-wrap: pretty;
+}
+
+:host .blyrics--romanized {
+  font-size: var(--lyrical-secondary-lyric-size, 12px);
+}
+
+:host .blyrics--translated {
+  font-size: var(--lyrical-translated-lyric-size, 14px);
 }
 
 :host .blyrics--romanized > span {

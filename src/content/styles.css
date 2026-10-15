@@ -35,6 +35,7 @@
   --lyrical-active-lyric-size: 24px;
   --lyrical-inactive-lyric-size: 18px;
   --lyrical-secondary-lyric-size: 14px;
+  --lyrical-translated-lyric-size: 16px;
   --lyrical-romanized-padding: 4px 10px;
   font-family:
     system-ui,
@@ -88,6 +89,10 @@
 .blyrics--word,
 .blyrics--romanized,
 .blyrics--translated,
+.at-lyrics--line,
+.at-lyrics--word,
+.at-lyrics--romanized,
+.at-lyrics--translated,
 .blyrics-line,
 .blyrics-word {
   font-family: var(--lyrical-lyrics-font-stack);
@@ -136,7 +141,6 @@
 /* Secondary lyric lines use the same compact treatment across renderers. */
 .lyric-line .lyric-romanized,
 .lyric-line .lyric-translated {
-  font-size: var(--lyrical-secondary-lyric-size, 12px);
   font-weight: 500;
   line-height: 1.45;
   max-width: 100%;
@@ -145,6 +149,14 @@
   overflow-wrap: break-word;
   text-wrap: pretty;
   white-space: pre-wrap;
+}
+
+.lyric-line .lyric-romanized {
+  font-size: var(--lyrical-secondary-lyric-size, 12px);
+}
+
+.lyric-line .lyric-translated {
+  font-size: var(--lyrical-translated-lyric-size, 14px);
 }
 
 .lyric-romanized,

@@ -230,7 +230,6 @@
 :host .at-lyrics--translated,
 :host .at-lyrics--romanized {
   display: block;
-  font-size: var(--lyrical-secondary-lyric-size, 12px);
   font-weight: 500;
   white-space: normal;
   line-height: 1.45;
@@ -240,6 +239,14 @@
   overflow-wrap: break-word;
   text-align: center;
   text-wrap: pretty;
+}
+
+:host .at-lyrics--romanized {
+  font-size: var(--lyrical-secondary-lyric-size, 12px);
+}
+
+:host .at-lyrics--translated {
+  font-size: var(--lyrical-translated-lyric-size, 14px);
 }
 
 :host .at-lyrics--romanized > span {
